@@ -21,6 +21,19 @@ export const fetchAllSupabaseData = async () => {
       createdAt: item.created_at || new Date().toISOString(),
     }));
 
+    const getStartedAtFromItem = (item: any) => {
+      if (item.started_at) return item.started_at;
+      if (item.results) {
+        const timestamps = Object.values(item.results)
+          .map((r: any) => r.timestamp ? new Date(r.timestamp).getTime() : NaN)
+          .filter((t: number) => !isNaN(t));
+        if (timestamps.length > 0) {
+          return new Date(Math.min(...timestamps)).toISOString();
+        }
+      }
+      return item.created_at || undefined;
+    };
+
     const testRuns: TestRun[] = (runsRes.data || []).map(item => {
       const devIdFromId = item.id.includes('-dev-') ? 'dev-' + item.id.split('-dev-')[1] : undefined;
       return {
@@ -34,7 +47,7 @@ export const fetchAllSupabaseData = async () => {
         currentStepIndex: item.current_step_index || 0,
         results: item.results || {},
         bugLogs: item.bug_logs || [],
-        startedAt: item.started_at || new Date().toISOString(),
+        startedAt: getStartedAtFromItem(item) || new Date().toISOString(),
         completedAt: item.completed_at,
       };
     });
@@ -52,7 +65,7 @@ export const fetchAllSupabaseData = async () => {
         currentStepIndex: item.current_step_index || 0,
         results: item.results || {},
         bugLogs: item.bug_logs || [],
-        startedAt: item.started_at || new Date().toISOString(),
+        startedAt: getStartedAtFromItem(item) || new Date().toISOString(),
         completedAt: item.completed_at,
       };
     });

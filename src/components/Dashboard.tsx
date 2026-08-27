@@ -429,27 +429,25 @@ export const Dashboard: React.FC<DashboardProps> = ({
         const timeFormatted = runDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
         const resultsArray = Object.values(run.results || {});
-        
-        // Exact start and completion timestamps
-        const startMs = run.startedAt ? new Date(run.startedAt).getTime() : 0;
-        const endMs = (isCompleted && run.completedAt) ? new Date(run.completedAt).getTime() : Date.now();
+        const stepTimestamps = resultsArray
+          .map(r => r.timestamp ? new Date(r.timestamp).getTime() : NaN)
+          .filter(t => !isNaN(t));
 
-        let durationMs = 0;
-        if (startMs > 0 && endMs > startMs) {
-          durationMs = endMs - startMs;
-        } else if (resultsArray.length > 0) {
-          const timestamps = resultsArray
-            .map(r => r.timestamp ? new Date(r.timestamp).getTime() : NaN)
-            .filter(t => !isNaN(t));
-          if (timestamps.length > 0) {
-            const minTime = Math.min(...timestamps);
-            const maxTime = Math.max(...timestamps);
-            durationMs = Math.max(0, maxTime - minTime);
-          }
+        let startMs = run.startedAt ? new Date(run.startedAt).getTime() : 0;
+        let endMs = (isCompleted && run.completedAt) ? new Date(run.completedAt).getTime() : Date.now();
+
+        if (stepTimestamps.length > 0) {
+          const minStepTime = Math.min(...stepTimestamps);
+          const maxStepTime = Math.max(...stepTimestamps);
+          if (!startMs || startMs > minStepTime) startMs = minStepTime;
+          if (isCompleted && (!run.completedAt || endMs < maxStepTime)) endMs = maxStepTime;
         }
 
-        const mins = Math.floor(durationMs / 60000);
-        const secs = Math.floor((durationMs % 60000) / 1000);
+        let durationMs = (startMs > 0 && endMs >= startMs) ? (endMs - startMs) : 0;
+        const durationSecs = Math.max(1, Math.round(durationMs / 1000));
+
+        const mins = Math.floor(durationSecs / 60);
+        const secs = durationSecs % 60;
         const durationFormatted = mins > 0 
           ? `${mins}m ${secs < 10 ? '0' : ''}${secs}s` 
           : `${secs}s`;
