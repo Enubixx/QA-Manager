@@ -1145,12 +1145,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         </div>
                       </div>
 
-                      {/* All-time Badge & Delete Tester Profile Button */}
-                      <div className="flex items-center gap-2">
-                        <div className="text-right">
-                          <span className="text-[10px] font-mono uppercase text-slate-400 block">All-Time Finished</span>
-                          <span className="text-sm font-extrabold text-emerald-300 font-mono">{profile.allTimeCompletedCount} Plans</span>
-                        </div>
+                      {/* Delete Tester Profile Button */}
+                      <div>
                         {onDeleteTestRun && (
                           <button
                             type="button"
