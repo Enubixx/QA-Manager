@@ -509,9 +509,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           >
             <Bug className="w-3.5 h-3.5" />
             <span>Bug Logs</span>
-            {activeRun?.bugLogs && activeRun.bugLogs.length > 0 && (
+            {activeBugs.length > 0 && (
               <span className="px-1.5 py-0.2 bg-white/20 text-white text-[10px] font-black rounded-full ml-0.5">
-                {activeRun.bugLogs.length}
+                {activeBugs.length}
               </span>
             )}
           </button>
