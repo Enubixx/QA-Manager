@@ -2,7 +2,7 @@ import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog } from '../types';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer } from 'lucide-react';
-import { exportAllQADataToCSV, exportAllQADataToJSON } from '../utils/exportUtils';
+import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV } from '../utils/exportUtils';
 import { toBlob } from 'html-to-image';
 
 interface DashboardProps {
@@ -69,6 +69,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
     setExpandedTesters(prev => ({
       ...prev,
       [testerName]: !prev[testerName]
+    }));
+  };
+
+  const [expandedBugIds, setExpandedBugIds] = useState<Record<string, boolean>>({});
+
+  const toggleBugExpand = (bugId: string) => {
+    setExpandedBugIds(prev => ({
+      ...prev,
+      [bugId]: !prev[bugId]
     }));
   };
 
@@ -1835,6 +1844,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 )}
               </div>
 
+              {/* Export to CSV / Google Sheets Button */}
+              <button
+                type="button"
+                onClick={() => exportBugsToCSV(processedBugs)}
+                className="px-3.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-2xl text-xs font-bold transition flex items-center gap-1.5 shadow-lg border border-white/20 active:scale-95 cursor-pointer"
+                title="Export Bug Logs to CSV / Google Sheets"
+              >
+                <Download className="w-3.5 h-3.5 text-emerald-200" />
+                <span>Export to CSV / Sheets</span>
+              </button>
+
               {/* Single Condensed Filter & Sort Menu Button & Popover */}
               <div className="relative">
                 <button
@@ -2001,70 +2021,168 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60">
-                    {processedBugs.map(bug => (
-                      <tr key={bug.id} className="hover:bg-slate-850 transition group">
-                        <td className="py-3.5 px-4 font-mono text-indigo-300 font-semibold flex items-center gap-1.5">
-                          <Clock className="w-3.5 h-3.5 text-indigo-400" />
-                          {bug.formattedTime}
-                          <span className="text-[10px] text-slate-500 font-normal">({new Date(bug.timestamp).toLocaleDateString()})</span>
-                        </td>
-                        <td className="py-3.5 px-4">
-                          <span className="bg-purple-950 text-purple-300 font-mono text-[11px] px-2 py-0.5 rounded border border-purple-800/40 flex items-center gap-1 w-fit">
-                            <Tag className="w-3 h-3 text-purple-400" />
-                            {bug.feature || 'General'}
-                          </span>
-                        </td>
-                        <td className="py-3.5 px-4">
-                          <span className="bg-slate-950 text-slate-300 font-mono text-[11px] px-2 py-0.5 rounded border border-slate-800 flex items-center gap-1 w-fit">
-                            <Smartphone className="w-3 h-3 text-indigo-400" />
-                            {bug.deviceName || 'Unspecified'}
-                          </span>
-                        </td>
-                        <td className="py-3.5 px-4">
-                          <span className={`px-2.5 py-0.5 rounded-full font-bold uppercase text-[10px] ${
-                            bug.severity === 'critical' || bug.severity === 'high'
-                              ? 'bg-rose-950 text-rose-400 border border-rose-800'
-                              : 'bg-indigo-950 text-indigo-300 border border-indigo-800'
-                          }`}>
-                            {bug.severity}
-                          </span>
-                        </td>
-                        <td className="py-3.5 px-4 font-medium text-white">
-                          {bug.stepTitle}
-                        </td>
-                        <td className="py-3.5 px-4 text-slate-300">
-                          {bug.testerName}
-                        </td>
-                        <td className="py-3.5 px-4 text-slate-300 max-w-xs truncate">
-                          {bug.note}
-                        </td>
-                        <td className="py-3.5 px-4">
-                          {bug.imageUrl ? (
-                            <button
-                              onClick={() => setSelectedImagePreviewUrl(bug.imageUrl!)}
-                              className="group relative flex items-center gap-1 bg-slate-950 border border-slate-800 p-1 rounded-lg hover:border-purple-500 transition"
-                              title="Click to expand image"
-                            >
-                              <img src={bug.imageUrl} alt="Bug screenshot" className="w-7 h-7 object-cover rounded" />
-                              <span className="text-[10px] text-purple-300 font-mono pr-1 flex items-center gap-0.5">
-                                <ImageIcon className="w-3 h-3 text-purple-400" /> View
-                              </span>
-                            </button>
-                          ) : (
-                            <span className="text-slate-600 font-mono text-[10px]">None</span>
-                          )}
-                        </td>
-                        <td className="py-3.5 px-4 text-right">
-                          <button
-                            onClick={() => onDeleteBug(bug.id)}
-                            className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition"
-                            title="Delete Bug Log"
+                    {processedBugs.map(bug => {
+                      const isBugExpanded = !!expandedBugIds[bug.id];
+                      return (
+                        <React.Fragment key={bug.id}>
+                          <tr 
+                            onClick={() => toggleBugExpand(bug.id)}
+                            className="hover:bg-slate-850 transition group cursor-pointer border-b border-slate-800/60"
                           >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                            <td className="py-3.5 px-4 font-mono text-indigo-300 font-semibold flex items-center gap-2">
+                              <ChevronDown className={`w-3.5 h-3.5 text-indigo-400 transition-transform duration-300 ${isBugExpanded ? 'rotate-180 text-emerald-400' : ''}`} />
+                              <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                              <span>{bug.formattedTime}</span>
+                              <span className="text-[10px] text-slate-500 font-normal">({new Date(bug.timestamp).toLocaleDateString()})</span>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <span className="bg-purple-950 text-purple-300 font-mono text-[11px] px-2 py-0.5 rounded border border-purple-800/40 flex items-center gap-1 w-fit">
+                                <Tag className="w-3 h-3 text-purple-400" />
+                                {bug.feature || 'General'}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <span className="bg-slate-950 text-slate-300 font-mono text-[11px] px-2 py-0.5 rounded border border-slate-800 flex items-center gap-1 w-fit">
+                                <Smartphone className="w-3 h-3 text-indigo-400" />
+                                {bug.deviceName || 'Unspecified'}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <span className={`px-2.5 py-0.5 rounded-full font-bold uppercase text-[10px] ${
+                                bug.severity === 'critical' || bug.severity === 'high'
+                                  ? 'bg-rose-950 text-rose-400 border border-rose-800'
+                                  : 'bg-indigo-950 text-indigo-300 border border-indigo-800'
+                              }`}>
+                                {bug.severity}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4 font-medium text-white max-w-[180px] truncate">
+                              {bug.stepTitle}
+                            </td>
+                            <td className="py-3.5 px-4 text-slate-300">
+                              {bug.testerName}
+                            </td>
+                            <td className="py-3.5 px-4 text-slate-300 max-w-xs truncate">
+                              {bug.note}
+                            </td>
+                            <td className="py-3.5 px-4">
+                              {bug.imageUrl ? (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedImagePreviewUrl(bug.imageUrl!);
+                                  }}
+                                  className="group relative flex items-center gap-1 bg-slate-950 border border-slate-800 p-1 rounded-lg hover:border-purple-500 transition"
+                                  title="Click to expand image"
+                                >
+                                  <img src={bug.imageUrl} alt="Bug screenshot" className="w-7 h-7 object-cover rounded" />
+                                  <span className="text-[10px] text-purple-300 font-mono pr-1 flex items-center gap-0.5">
+                                    <ImageIcon className="w-3 h-3 text-purple-400" /> View
+                                  </span>
+                                </button>
+                              ) : (
+                                <span className="text-slate-600 font-mono text-[10px]">None</span>
+                              )}
+                            </td>
+                            <td className="py-3.5 px-4 text-right">
+                              <div className="flex items-center justify-end gap-1" onClick={e => e.stopPropagation()}>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleBugExpand(bug.id)}
+                                  className="px-2 py-1 bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg border border-slate-800 text-[10px] font-semibold transition"
+                                >
+                                  {isBugExpanded ? 'Close' : 'Expand'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => onDeleteBug(bug.id)}
+                                  className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition"
+                                  title="Delete Bug Log"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+
+                          {/* Expanded Full Bug Detail Log Card Sub-row */}
+                          {isBugExpanded && (
+                            <tr className="bg-slate-950/90 border-b border-purple-500/20">
+                              <td colSpan={9} className="p-4">
+                                <div className="liquid-glass-card rounded-2xl p-4 space-y-3 border-purple-500/30 text-left bg-slate-950/90 shadow-2xl">
+                                  
+                                  <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
+                                    <div className="flex items-center gap-2">
+                                      <span className="px-2.5 py-0.5 rounded-full font-bold uppercase text-[10px] bg-rose-500/20 text-rose-300 border border-rose-500/40">
+                                        {bug.severity} SEVERITY
+                                      </span>
+                                      <span className="text-xs font-bold text-white flex items-center gap-1 font-mono">
+                                        <Tag className="w-3.5 h-3.5 text-purple-400" />
+                                        {bug.feature || 'General'}
+                                      </span>
+                                    </div>
+                                    <span className="text-xs font-mono text-indigo-300 flex items-center gap-1">
+                                      <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                                      {new Date(bug.timestamp).toLocaleString()}
+                                    </span>
+                                  </div>
+
+                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                                    <div className="md:col-span-2 space-y-3">
+                                      <div>
+                                        <span className="text-[10px] uppercase font-mono text-slate-400 block font-bold mb-1">
+                                          Observation / Description Note:
+                                        </span>
+                                        <div className="bg-slate-900/90 p-3 rounded-xl border border-white/10 text-slate-200 text-xs leading-relaxed whitespace-pre-wrap font-medium">
+                                          {bug.note || 'No note attached.'}
+                                        </div>
+                                      </div>
+
+                                      <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
+                                        <div className="bg-slate-900/60 p-2.5 rounded-xl border border-white/10">
+                                          <span className="text-[9px] uppercase text-slate-400 block">Step Target</span>
+                                          <span className="text-white font-bold">{bug.stepTitle || 'N/A'}</span>
+                                        </div>
+                                        <div className="bg-slate-900/60 p-2.5 rounded-xl border border-white/10">
+                                          <span className="text-[9px] uppercase text-slate-400 block">Reporter & Device</span>
+                                          <span className="text-indigo-300 font-bold">{bug.testerName} ({bug.deviceName})</span>
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    {/* Evidence Image Preview Box */}
+                                    <div>
+                                      <span className="text-[10px] uppercase font-mono text-slate-400 block font-bold mb-1">
+                                        Evidence Attachment:
+                                      </span>
+                                      {bug.imageUrl ? (
+                                        <div 
+                                          onClick={() => setSelectedImagePreviewUrl(bug.imageUrl!)}
+                                          className="relative group rounded-xl overflow-hidden border border-white/15 cursor-pointer bg-slate-900 max-h-48 flex items-center justify-center shadow-lg"
+                                        >
+                                          <img src={bug.imageUrl} alt="Bug screenshot" className="w-full object-cover max-h-44 group-hover:scale-105 transition duration-300" />
+                                          <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center backdrop-blur-[2px]">
+                                            <span className="px-3 py-1 bg-slate-950/90 text-purple-200 border border-purple-400/40 rounded-xl text-xs font-bold font-mono flex items-center gap-1.5 shadow-xl">
+                                              <ImageIcon className="w-3.5 h-3.5 text-purple-400" /> Click to Expand
+                                            </span>
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <div className="h-28 rounded-xl border border-white/10 bg-slate-900/40 flex items-center justify-center text-xs text-slate-500 font-mono">
+                                          No Photo Attached
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

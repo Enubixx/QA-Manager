@@ -99,3 +99,20 @@ export function exportAllQADataToJSON(plans: TestPlan[], runs: TestRun[], bugLog
   downloadFile(jsonString, fileName, 'application/json;charset=utf-8;');
 }
 
+/**
+ * Export Bug Logs to CSV (compatible with Google Sheets & Excel)
+ */
+export function exportBugsToCSV(bugs: BugLog[]) {
+  const sanitize = (text: string) => `"${(text || '').replace(/"/g, '""')}"`;
+
+  let csvContent = 'Timestamp,Feature,Severity,Description / Note,Step Title,Tester Name,Device Model,Image URL\n';
+
+  bugs.forEach(bug => {
+    const formattedTs = bug.timestamp ? new Date(bug.timestamp).toLocaleString() : (bug.formattedTime || 'N/A');
+    csvContent += `${sanitize(formattedTs)},${sanitize(bug.feature || 'General')},${sanitize(bug.severity || 'medium')},${sanitize(bug.note || '')},${sanitize(bug.stepTitle || '')},${sanitize(bug.testerName || 'Anonymous')},${sanitize(bug.deviceName || 'Mobile Device')},${sanitize(bug.imageUrl || '')}\n`;
+  });
+
+  const fileName = `QA_Bug_Logs_${new Date().toISOString().slice(0, 10)}.csv`;
+  downloadFile(csvContent, fileName);
+}
+
