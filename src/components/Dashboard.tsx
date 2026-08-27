@@ -2056,20 +2056,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
       {selectedImagePreviewUrl && createPortal(
         <div
           onClick={() => setSelectedImagePreviewUrl(null)}
-          className="fixed inset-0 z-[9999] bg-slate-950/95 backdrop-blur-2xl flex items-center justify-center p-4 sm:p-8 animate-liquid-fade"
+          className="fixed inset-0 z-[99999] bg-slate-950/95 backdrop-blur-2xl flex items-center justify-center p-4 sm:p-8"
         >
           <div
             onClick={e => e.stopPropagation()}
-            className="relative max-w-4xl w-full max-h-[90vh] flex flex-col bg-slate-900/95 border border-white/20 rounded-3xl overflow-hidden shadow-2xl p-4 sm:p-6 liquid-glass-panel"
+            className="relative max-w-4xl w-full max-h-[85vh] flex flex-col bg-slate-900 border border-white/20 rounded-3xl overflow-hidden shadow-2xl p-4 sm:p-6"
           >
             {/* Top Bar with Back / Close Button */}
-            <div className="flex items-center justify-between pb-3.5 mb-3 border-b border-white/10 flex-shrink-0">
+            <div className="flex items-center justify-between pb-3.5 mb-3 border-b border-white/10 flex-shrink-0 w-full">
               <button
                 type="button"
                 onClick={() => setSelectedImagePreviewUrl(null)}
                 className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-extrabold transition flex items-center gap-1.5 cursor-pointer shadow-lg active:scale-95"
               >
-                <span>← Back</span>
+                <span>← Back to Dashboard</span>
               </button>
               <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
                 <ImageIcon className="w-4 h-4 text-purple-400" /> Screenshot Evidence Preview
@@ -2085,23 +2085,23 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </div>
 
             {/* Image Display */}
-            <div className="flex-1 min-h-0 overflow-hidden flex items-center justify-center bg-slate-950/90 rounded-2xl p-3 border border-white/10 shadow-inner">
+            <div className="flex-1 min-h-0 w-full overflow-hidden flex items-center justify-center bg-slate-950 rounded-2xl p-3 border border-white/10 shadow-inner">
               <img
                 src={selectedImagePreviewUrl}
                 alt="Evidence"
-                className="max-w-full max-h-full object-contain rounded-xl shadow-2xl"
+                className="max-w-full max-h-full w-auto h-auto object-contain rounded-xl shadow-2xl"
               />
             </div>
 
             {/* Bottom Bar with Back Button */}
-            <div className="flex justify-between items-center pt-3.5 mt-3 border-t border-white/10 flex-shrink-0">
+            <div className="flex justify-between items-center pt-3.5 mt-3 border-t border-white/10 flex-shrink-0 w-full">
               <span className="text-[11px] text-slate-400 font-mono hidden sm:inline">Press Esc or click outside to close</span>
               <button
                 type="button"
                 onClick={() => setSelectedImagePreviewUrl(null)}
                 className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-extrabold rounded-2xl shadow border border-white/10 transition cursor-pointer active:scale-95 ml-auto"
               >
-                ← Back to Dashboard
+                ← Back
               </button>
             </div>
           </div>
