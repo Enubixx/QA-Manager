@@ -21,6 +21,7 @@ interface DashboardProps {
   onAddFeature?: (featureName: string) => void;
   onDeleteFeature?: (featureName: string) => void;
   onDeleteTestRun?: (runId: string) => void;
+  onDeleteTester?: (testerName: string) => void;
   onResetActiveDay?: (dateStr: string) => void;
   archivedRuns?: TestRun[];
 }
@@ -54,6 +55,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onAddFeature,
   onDeleteFeature,
   onDeleteTestRun,
+  onDeleteTester,
   onResetActiveDay
 }) => {
   const defaultTodayStr = new Date().toISOString().split('T')[0];
@@ -1180,16 +1182,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-500 ease-out ${isExpanded ? 'rotate-180 text-emerald-400' : 'rotate-0'}`} />
                         </button>
 
-                        {onDeleteTestRun && (
+                        {(onDeleteTester || onDeleteTestRun) && (
                           <button
                             type="button"
                             onClick={() => {
                               if (confirm(`Delete all QA test performance data for tester "${profile.testerName}"?`)) {
-                                const runsToDelete = [...testRuns, ...archivedRuns].filter(r => r.testerName === profile.testerName);
-                                runsToDelete.forEach(r => onDeleteTestRun(r.id));
+                                if (onDeleteTester) {
+                                  onDeleteTester(profile.testerName);
+                                } else if (onDeleteTestRun) {
+                                  const runsToDelete = [...testRuns, ...archivedRuns].filter(r => r.testerName === profile.testerName);
+                                  runsToDelete.forEach(r => onDeleteTestRun(r.id));
+                                }
                               }
                             }}
-                            className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 border border-slate-800 hover:border-rose-500/30 rounded-xl transition-all active:scale-95"
+                            className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 border border-slate-800 hover:border-rose-500/30 rounded-xl transition-all active:scale-95 cursor-pointer"
                             title={`Delete all QA performance data for ${profile.testerName}`}
                           >
                             <Trash2 className="w-3.5 h-3.5" />

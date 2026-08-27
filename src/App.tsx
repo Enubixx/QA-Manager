@@ -11,6 +11,7 @@ import {
   syncTestRunToSupabase,
   syncArchivedRunToSupabase,
   deleteTestRunFromSupabase,
+  deleteArchivedRunFromSupabase,
   syncBugLogToSupabase,
   deleteBugLogFromSupabase,
   syncPopulatedFeatureToSupabase,
@@ -305,32 +306,33 @@ export function App() {
   };
 
   const handleDeleteTestRun = (runId: string) => {
-    const runToDelete = testRuns.find(r => r.id === runId);
-
-    if (runToDelete) {
-      const plan = testPlans.find(p => p.id === runToDelete.planId);
-      const totalSteps = plan?.steps.length || 0;
-      const completedSteps = Object.keys(runToDelete.results || {}).length;
-      const isDone = runToDelete.status === 'completed' || (totalSteps > 0 && completedSteps >= totalSteps);
-
-      if (isDone) {
-        setArchivedRuns(prev => {
-          const exists = prev.some(r => r.id === runToDelete.id);
-          if (exists) {
-            return prev.map(r => r.id === runToDelete.id ? runToDelete : r);
-          }
-          return [runToDelete, ...prev];
-        });
-        syncArchivedRunToSupabase(runToDelete);
-      }
-    }
+    const runToDelete = testRuns.find(r => r.id === runId) || archivedRuns.find(r => r.id === runId);
 
     setTestRuns(prev => prev.filter(r => r.id !== runId));
+    setArchivedRuns(prev => prev.filter(r => r.id !== runId));
+
     deleteTestRunFromSupabase(runId);
+    deleteArchivedRunFromSupabase(runId);
 
     if (currentView === 'mobile' && runToDelete && runToDelete.planId === selectedPlanId) {
       setCurrentView('dashboard');
     }
+  };
+
+  const handleDeleteTester = (testerName: string) => {
+    const runsToDelete = [...testRuns, ...archivedRuns].filter(
+      r => (r.testerName?.trim() || 'Unassigned Tester').toLowerCase() === testerName.toLowerCase().trim()
+    );
+
+    const idsToDelete = new Set(runsToDelete.map(r => r.id));
+
+    setTestRuns(prev => prev.filter(r => !idsToDelete.has(r.id)));
+    setArchivedRuns(prev => prev.filter(r => !idsToDelete.has(r.id)));
+
+    runsToDelete.forEach(r => {
+      deleteTestRunFromSupabase(r.id);
+      deleteArchivedRunFromSupabase(r.id);
+    });
   };
 
   const handleResetActiveDay = (dateStr: string) => {
@@ -524,6 +526,7 @@ export function App() {
               onAddFeature={handleAddPopulatedFeature}
               onDeleteFeature={handleDeleteFeature}
               onDeleteTestRun={handleDeleteTestRun}
+              onDeleteTester={handleDeleteTester}
               onResetActiveDay={handleResetActiveDay}
               archivedRuns={archivedRuns}
             />

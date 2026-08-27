@@ -135,6 +135,11 @@ export const deleteTestRunFromSupabase = async (runId: string) => {
   await supabase.from('test_runs').delete().eq('id', runId);
 };
 
+export const deleteArchivedRunFromSupabase = async (runId: string) => {
+  if (!supabase || !isSupabaseConfigured) return;
+  await supabase.from('archived_runs').delete().eq('id', runId);
+};
+
 export const syncBugLogToSupabase = async (bug: BugLog) => {
   if (!supabase || !isSupabaseConfigured) return;
   await supabase.from('bug_logs').upsert({
