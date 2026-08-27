@@ -9,6 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/cli": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
     "@supabase/supabase-js": "^2.112.4",
     "html-to-image": "^1.11.13",
     "html2canvas": "^1.4.1",
@@ -17,6 +20,7 @@
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
+    "@bubblewrap/cli": "^1.25.0",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
     "@vitejs/plugin-react": "^4.2.1",

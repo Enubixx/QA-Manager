@@ -20,7 +20,20 @@ import {
 import { isSupabaseConfigured } from './lib/supabase';
 
 export function App() {
-  const [currentView, setCurrentView] = useState<'dashboard' | 'mobile' | 'plan-builder'>('dashboard');
+  const [currentView, setCurrentView] = useState<'dashboard' | 'mobile' | 'plan-builder'>(() => {
+    try {
+      const searchParams = new URLSearchParams(window.location.search);
+      if (
+        searchParams.get('mode') === 'mobile' ||
+        window.location.pathname.includes('/mobile') ||
+        (window as any).Capacitor?.isNativePlatform?.() ||
+        /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+      ) {
+        return 'mobile';
+      }
+    } catch (e) {}
+    return 'dashboard';
+  });
   const [selectedPlanId, setSelectedPlanId] = useState<string>('');
 
   // App State with LocalStorage persistence (starts empty by default)
@@ -199,7 +212,7 @@ export function App() {
     });
 
     setEditingPlan(null);
-    setCurrentView('mobile');
+    setCurrentView('dashboard');
   };
 
   const handleClonePlan = (planId: string) => {
@@ -545,11 +558,6 @@ export function App() {
           />
         )}
       </main>
-
-      {/* Footer */}
-      <footer className="border-t border-slate-900 bg-slate-950 py-4 text-center text-xs text-slate-500">
-        QA Flow Studio • Sequential Field Execution & Bug Manager
-      </footer>
 
     </div>
   );

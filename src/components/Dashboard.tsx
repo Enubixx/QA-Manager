@@ -765,17 +765,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <div>
                   <h4 className="text-base font-bold text-white">No Test Plans Found</h4>
                   <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-                    Click "Create Plan" or "Load Sample Data" to get started with sequential test steps.
+                    Click "Create Test Plan" to get started with test steps.
                   </p>
                 </div>
                 <div className="flex items-center justify-center gap-3">
-                  <button
-                    onClick={onLoadSampleData}
-                    className="px-4 py-2 bg-purple-950 border border-purple-800 text-purple-300 text-xs font-semibold rounded-xl inline-flex items-center gap-1.5"
-                  >
-                    <Sparkles className="w-4 h-4 text-purple-400" />
-                    Load Sample Data
-                  </button>
                   <button
                     onClick={onSelectPlanToBuild}
                     className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl shadow inline-flex items-center gap-1.5"
@@ -828,7 +821,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     {/* Step Count & Action Buttons */}
                     <div className="flex items-center justify-between pt-3.5 border-t border-white/10 text-xs text-slate-400 font-medium">
                       <div className="flex items-center gap-3">
-                        <span className="font-bold text-slate-200">{plan.steps.length} Sequential Steps</span>
+                        <span className="font-bold text-slate-200">{plan.steps.length} Steps</span>
                         <span>•</span>
                         <span className="font-mono text-[11px]">Created {new Date(plan.createdAt).toLocaleDateString()}</span>
                       </div>
@@ -972,7 +965,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 >
                   {recordedDailySessions.map(session => (
                     <option key={session.dateStr} value={session.dateStr} className="bg-slate-900 text-slate-200">
-                      📅 {session.label} {session.dateStr === todayStr ? '(Today - Fresh Reset)' : `(${session.stepCount} steps)`}
+                      📅 {session.label} {session.dateStr === todayStr ? '' : `(${session.stepCount} steps)`}
                     </option>
                   ))}
                   <option value="all" className="bg-slate-900 text-purple-300 font-bold">

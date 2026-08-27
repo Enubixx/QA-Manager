@@ -129,11 +129,11 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
     <div className="max-w-5xl mx-auto px-4 py-8">
       
       {/* Header (Apple Liquid Glass Header) */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8 pb-6 border-b border-white/10 glass-panel rounded-3xl p-6 shadow-2xl">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8 pb-6 border-b border-white/10 liquid-glass-panel rounded-3xl p-6 shadow-2xl bg-slate-950/90 border-slate-800">
         <div>
-          <span className="text-[10px] font-bold text-indigo-300 uppercase tracking-widest bg-indigo-500/10 px-2.5 py-1 rounded-full border border-indigo-500/20 backdrop-blur-md">QA Plan Studio</span>
+          <span className="text-[10px] font-bold text-indigo-300 uppercase tracking-widest bg-indigo-500/10 px-2.5 py-1 rounded-full border border-indigo-500/20 backdrop-blur-md">Plan Builder</span>
           <h2 className="text-2xl font-extrabold text-white mt-2 tracking-tight">
-            {initialPlan ? `Edit Test Plan: ${initialPlan.name}` : 'Design Sequential Test Plan'}
+            {initialPlan ? `Edit Test Plan: ${initialPlan.name}` : 'Design Test Plan'}
           </h2>
           <p className="text-xs text-slate-400 font-medium mt-1">Build step-by-step test templates with Feature tagging sent directly to field QA testers on mobile phones.</p>
         </div>
@@ -141,7 +141,7 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
           <button
             type="button"
             onClick={onCancel}
-            className="px-4 py-2 glass-button hover:bg-white/10 text-slate-300 text-xs font-semibold rounded-2xl transition-all duration-300"
+            className="px-4 py-2 liquid-glass-button hover:bg-white/10 text-slate-300 text-xs font-semibold rounded-2xl transition-all duration-300"
           >
             Cancel
           </button>
@@ -158,7 +158,7 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
       <form onSubmit={handleSavePlanSubmit} className="space-y-8">
         
         {/* Basic Metadata */}
-        <div className="glass-panel rounded-3xl p-6 space-y-4 shadow-2xl">
+        <div className="liquid-glass-panel rounded-3xl p-6 space-y-4 shadow-2xl bg-slate-950/90 border border-slate-800">
           <h3 className="text-lg font-bold text-white flex items-center gap-2 tracking-tight">
             <FileText className="w-5 h-5 text-indigo-400" />
             1. Test Plan Overview
@@ -171,7 +171,7 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
               placeholder="e.g. Mobile App Authentication & Checkout QA"
               value={planName}
               onChange={e => setPlanName(e.target.value)}
-              className="w-full glass-input rounded-2xl px-4 py-2.5 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-purple-400/60 font-medium"
+              className="w-full liquid-glass-input bg-slate-900 border border-slate-800 rounded-2xl px-4 py-2.5 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-purple-400/60 font-medium"
               required
             />
           </div>
@@ -183,18 +183,18 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
               placeholder="Explain the goal for the QA tester walking through this on their phone..."
               value={planDescription}
               onChange={e => setPlanDescription(e.target.value)}
-              className="w-full glass-input rounded-2xl px-4 py-2.5 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-purple-400/60 font-medium"
+              className="w-full liquid-glass-input bg-slate-900 border border-slate-800 rounded-2xl px-4 py-2.5 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-purple-400/60 font-medium"
             />
           </div>
         </div>
 
-        {/* Sequential Step Builder with Feature Tagging */}
-        <div className="glass-panel rounded-3xl p-6 space-y-6 shadow-2xl">
+        {/* Step Builder with Feature Tagging */}
+        <div className="liquid-glass-panel rounded-3xl p-6 space-y-6 shadow-2xl bg-slate-950/90 border border-slate-800">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-lg font-bold text-white flex items-center gap-2 tracking-tight">
                 <ListOrdered className="w-5 h-5 text-indigo-400" />
-                2. Sequential Mobile Steps & Feature Metrics
+                2. Mobile Test Steps & Feature Metrics
               </h3>
               <p className="text-xs text-slate-400 font-medium mt-0.5">Tag each step with the Feature identifier it evaluates to track individual feature health.</p>
             </div>
@@ -212,7 +212,7 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
             {steps.map((step, idx) => (
               <div
                 key={step.id}
-                className="glass-card rounded-2xl p-5 space-y-4 relative group transition-all duration-300 hover:border-white/20 shadow-lg"
+                className="liquid-glass-card bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-4 relative group transition-all duration-300 hover:border-white/20 shadow-lg"
               >
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5">

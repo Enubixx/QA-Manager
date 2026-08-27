@@ -151,3 +151,18 @@
     0 0 40px 0 rgba(99, 102, 241, 0.2),
     inset 0 1.5px 1px rgba(255, 255, 255, 0.3);
 }
+
+/* Force dark background for form select inputs across WebKit and Android WebView */
+select.dark-select-input {
+  background-color: #0b101d !important;
+  color: #e0e7ff !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  appearance: none !important;
+}
+
+select.dark-select-input option {
+  background-color: #090d16 !important;
+  color: #f1f5f9 !important;
+}

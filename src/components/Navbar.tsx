@@ -19,10 +19,10 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate }) => {
           </div>
           <div>
             <h1 className="font-bold text-base text-white flex items-center gap-2 tracking-tight">
-              QA Flow Studio
+              QA Manager
               <span className="text-[10px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold uppercase tracking-wider backdrop-blur-md">Live Sync</span>
             </h1>
-            <p className="text-xs text-slate-400 font-medium">Dataset & Sequential Mobile QA Tester</p>
+            <p className="text-xs text-slate-400 font-medium">Field QA Management & Execution System</p>
           </div>
         </div>
 
