@@ -1482,17 +1482,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <button
                       type="button"
                       onClick={() => setIsFeatureReportExpanded(!isFeatureReportExpanded)}
-                      className="px-2.5 py-1 bg-purple-950/80 hover:bg-purple-900 border border-purple-700/60 rounded-lg text-xs font-semibold text-purple-200 flex items-center gap-1 transition shadow-sm"
+                      className="px-3 py-1.5 bg-purple-500/15 hover:bg-purple-500/25 border border-purple-400/30 text-purple-300 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer shadow-md"
                     >
-                      {isFeatureReportExpanded ? (
-                        <>
-                          <ChevronUp className="w-3.5 h-3.5 text-purple-400" /> Hide Breakdown Report
-                        </>
-                      ) : (
-                        <>
-                          <ChevronDown className="w-3.5 h-3.5 text-purple-400" /> Expand Report Breakdown
-                        </>
-                      )}
+                      <ChevronDown className={`w-3.5 h-3.5 text-purple-400 transition-transform duration-500 ease-out ${isFeatureReportExpanded ? 'rotate-180' : 'rotate-0'}`} />
+                      <span>{isFeatureReportExpanded ? 'Hide Report Breakdown' : 'Expand Report Breakdown'}</span>
                     </button>
                   </div>
                 </div>
@@ -1539,62 +1532,64 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </div>
               </div>
 
-              {/* Expandable Feature Breakdown Report Table */}
-              {isFeatureReportExpanded && (
-                <div className="pt-4 pb-4 border-t border-slate-800 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
-                      <Tag className="w-3.5 h-3.5 text-purple-400" />
-                      Feature Health Breakdown Report ({featureMetricsList.length} Features)
-                    </h4>
-                    <span className="text-[10px] font-mono text-slate-400">Live Snapshot Table</span>
-                  </div>
+              {/* Fluid Liquid Glass Expandable Feature Breakdown Report Table */}
+              <div className={`liquid-accordion-wrapper ${isFeatureReportExpanded ? 'expanded' : ''}`}>
+                <div className="liquid-accordion-inner">
+                  <div className="pt-4 pb-4 border-t border-slate-800 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                        <Tag className="w-3.5 h-3.5 text-purple-400" />
+                        Feature Health Breakdown Report ({featureMetricsList.length} Features)
+                      </h4>
+                      <span className="text-[10px] font-mono text-slate-400">Live Snapshot Table</span>
+                    </div>
 
-                  <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/90 shadow-inner">
-                    <table className="w-full text-left text-xs font-sans">
-                      <thead className="bg-slate-900/90 border-b border-slate-800 text-[11px] text-slate-400 uppercase font-semibold">
-                        <tr>
-                          <th className="py-3 px-4">Feature Name</th>
-                          <th className="py-3 px-4">Status</th>
-                          <th className="py-3 px-4">Health Score</th>
-                          <th className="py-3 px-4">Execution Total</th>
-                          <th className="py-3 px-4">Passed (Green)</th>
-                          <th className="py-3 px-4">Warning (Yellow)</th>
-                          <th className="py-3 px-4">Failed (Red)</th>
-                          <th className="py-3 px-4">Bugs Logged</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800/60 text-slate-300">
-                        {featureMetricsList.map(metric => (
-                          <tr key={metric.featureName} className="hover:bg-slate-900/50 transition">
-                            <td className="py-2.5 px-4 font-bold text-white">{metric.featureName}</td>
-                            <td className="py-2.5 px-4">
-                              <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase border ${
-                                metric.status === 'healthy'
-                                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                                  : metric.status === 'warning'
-                                  ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
-                                  : 'bg-rose-500/15 text-rose-300 border-rose-500/30'
-                              }`}>
-                                <span className={`w-1.5 h-1.5 rounded-full ${
-                                  metric.status === 'healthy' ? 'bg-emerald-400' : metric.status === 'warning' ? 'bg-amber-400' : 'bg-rose-400'
-                                }`}></span>
-                                {metric.status === 'healthy' ? 'Healthy' : metric.status === 'warning' ? 'Degraded' : 'Critical'}
-                              </span>
-                            </td>
-                            <td className="py-2.5 px-4 font-bold text-purple-300 font-mono">{metric.healthScorePct}%</td>
-                            <td className="py-2.5 px-4 font-mono font-semibold">{metric.totalStepsExecuted}</td>
-                            <td className="py-2.5 px-4 text-emerald-400 font-bold font-mono">{metric.greenCount}</td>
-                            <td className="py-2.5 px-4 text-amber-400 font-bold font-mono">{metric.yellowCount}</td>
-                            <td className="py-2.5 px-4 text-rose-400 font-bold font-mono">{metric.redCount}</td>
-                            <td className="py-2.5 px-4 text-rose-400 font-bold font-mono">{metric.bugCount}</td>
+                    <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/90 shadow-inner">
+                      <table className="w-full text-left text-xs font-sans">
+                        <thead className="bg-slate-900/90 border-b border-slate-800 text-[11px] text-slate-400 uppercase font-semibold">
+                          <tr>
+                            <th className="py-3 px-4">Feature Name</th>
+                            <th className="py-3 px-4">Status</th>
+                            <th className="py-3 px-4">Health Score</th>
+                            <th className="py-3 px-4">Execution Total</th>
+                            <th className="py-3 px-4">Passed (Green)</th>
+                            <th className="py-3 px-4">Warning (Yellow)</th>
+                            <th className="py-3 px-4">Failed (Red)</th>
+                            <th className="py-3 px-4">Bugs Logged</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                          {featureMetricsList.map(metric => (
+                            <tr key={metric.featureName} className="hover:bg-slate-900/50 transition">
+                              <td className="py-2.5 px-4 font-bold text-white">{metric.featureName}</td>
+                              <td className="py-2.5 px-4">
+                                <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase border ${
+                                  metric.status === 'healthy'
+                                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                    : metric.status === 'warning'
+                                    ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                    : 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                                }`}>
+                                  <span className={`w-1.5 h-1.5 rounded-full ${
+                                    metric.status === 'healthy' ? 'bg-emerald-400' : metric.status === 'warning' ? 'bg-amber-400' : 'bg-rose-400'
+                                  }`}></span>
+                                  {metric.status === 'healthy' ? 'Healthy' : metric.status === 'warning' ? 'Degraded' : 'Critical'}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-4 font-bold text-purple-300 font-mono">{metric.healthScorePct}%</td>
+                              <td className="py-2.5 px-4 font-mono font-semibold">{metric.totalStepsExecuted}</td>
+                              <td className="py-2.5 px-4 text-emerald-400 font-bold font-mono">{metric.greenCount}</td>
+                              <td className="py-2.5 px-4 text-amber-400 font-bold font-mono">{metric.yellowCount}</td>
+                              <td className="py-2.5 px-4 text-rose-400 font-bold font-mono">{metric.redCount}</td>
+                              <td className="py-2.5 px-4 text-rose-400 font-bold font-mono">{metric.bugCount}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </div>
-              )}
+              </div>
 
             </div>
           )}
