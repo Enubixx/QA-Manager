@@ -48,16 +48,24 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   const deviceId = getDeviceId();
 
-  // Find active run specifically for THIS device & plan (must NOT be already completed)
+  // Find active run specifically for THIS device & plan
   let activeRun = testRuns.find(r => 
     r.planId === currentPlan?.id && 
     r.status !== 'completed' &&
     (r.deviceId === deviceId || r.id.includes(deviceId))
   );
 
-  // Fallback: check if an unassigned active run matching legacy ID exists
+  // Fallback 1: check if an unassigned active run matching legacy ID exists
   if (!activeRun && currentPlan) {
     activeRun = testRuns.find(r => r.id === 'run-' + currentPlan.id && r.status !== 'completed');
+  }
+
+  // Fallback 2: check if there is a recently completed run for this plan & device
+  if (!activeRun && currentPlan) {
+    activeRun = archivedRuns.find(r => 
+      r.planId === currentPlan.id && 
+      (r.deviceId === deviceId || r.id.includes(deviceId))
+    );
   }
 
   if (!activeRun && currentPlan) {
@@ -255,34 +263,28 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   }, [showSetupModal, isCompleted, showBugModal, selectedStatus, currentStep, activeRun]);
 
   // Real-Time Admin Boot Detection (kicks tester out in real time if session deleted on Desktop)
-  const [wasExecuting, setWasExecuting] = useState(false);
+  const [activeRunIdBeingTested, setActiveRunIdBeingTested] = useState<string | null>(null);
   const [bootMessage, setBootMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!showSetupModal && activeRun && activeRun.testerName && activeRun.status !== 'completed' && !isCompleted) {
-      setWasExecuting(true);
+    if (!showSetupModal && activeRun && activeRun.status === 'in_progress' && !isCompleted) {
+      setActiveRunIdBeingTested(activeRun.id);
     }
   }, [showSetupModal, activeRun, isCompleted]);
 
   useEffect(() => {
-    if (!wasExecuting || !activeRun) return;
+    if (!activeRunIdBeingTested) return;
 
-    // If the run has completed or is in archived list, NEVER trigger termination popup
-    if (activeRun.status === 'completed' || isCompleted) {
-      setWasExecuting(false);
-      setBootMessage(null);
-      return;
-    }
+    const runStillActive = testRuns.some(r => r.id === activeRunIdBeingTested);
+    const runArchived = archivedRuns.some(r => r.id === activeRunIdBeingTested);
 
-    const existsInActive = testRuns.some(r => r.id === activeRun.id);
-    const existsInArchived = archivedRuns.some(r => r.id === activeRun.id);
-
-    if (!existsInActive && !existsInArchived) {
+    // If the run being actively tested was removed from testRuns AND NOT moved to archivedRuns, admin booted it!
+    if (!runStillActive && !runArchived) {
       setBootMessage(`⚠️ Session Terminated: An administrator has booted your QA session from the manager dashboard.`);
       setShowSetupModal(true);
-      setWasExecuting(false);
+      setActiveRunIdBeingTested(null);
     }
-  }, [testRuns, archivedRuns, activeRun, wasExecuting, isCompleted]);
+  }, [testRuns, archivedRuns, activeRunIdBeingTested]);
 
   // Auto-kick user to setup screen if active run or plan gets deleted
   useEffect(() => {
