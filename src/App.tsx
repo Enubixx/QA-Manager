@@ -506,56 +506,62 @@ export function App() {
       {/* Main View Router */}
       <main className="flex-1 relative z-10">
         {currentView === 'dashboard' && (
-          <Dashboard
-            testPlans={testPlans}
-            testRuns={testRuns}
-            bugLogs={bugLogs}
-            populatedFeatures={populatedFeatures}
-            onSelectPlanToBuild={handleCreatePlanClick}
-            onOpenMobileView={handleOpenMobileView}
-            onDeletePlan={handleDeletePlan}
-            onDeleteBug={handleDeleteBug}
-            onClonePlan={handleClonePlan}
-            onEditPlan={handleEditPlan}
-            onLoadSampleData={handleLoadSampleData}
-            onClearAllData={handleClearAllData}
-            onImportJSONData={handleImportJSONData}
-            onAddFeature={handleAddPopulatedFeature}
-            onDeleteFeature={handleDeleteFeature}
-            onDeleteTestRun={handleDeleteTestRun}
-            onResetActiveDay={handleResetActiveDay}
-            archivedRuns={archivedRuns}
-          />
+          <div key="dashboard-view" className="animate-liquid-fade">
+            <Dashboard
+              testPlans={testPlans}
+              testRuns={testRuns}
+              bugLogs={bugLogs}
+              populatedFeatures={populatedFeatures}
+              onSelectPlanToBuild={handleCreatePlanClick}
+              onOpenMobileView={handleOpenMobileView}
+              onDeletePlan={handleDeletePlan}
+              onDeleteBug={handleDeleteBug}
+              onClonePlan={handleClonePlan}
+              onEditPlan={handleEditPlan}
+              onLoadSampleData={handleLoadSampleData}
+              onClearAllData={handleClearAllData}
+              onImportJSONData={handleImportJSONData}
+              onAddFeature={handleAddPopulatedFeature}
+              onDeleteFeature={handleDeleteFeature}
+              onDeleteTestRun={handleDeleteTestRun}
+              onResetActiveDay={handleResetActiveDay}
+              archivedRuns={archivedRuns}
+            />
+          </div>
         )}
 
         {currentView === 'plan-builder' && (
-          <PlanBuilder
-            initialPlan={editingPlan}
-            populatedFeatures={populatedFeatures}
-            onAddPopulatedFeature={handleAddPopulatedFeature}
-            onDeleteFeature={handleDeleteFeature}
-            onSavePlan={handleSavePlan}
-            onCancel={() => {
-              setEditingPlan(null);
-              setCurrentView('dashboard');
-            }}
-          />
+          <div key="plan-builder-view" className="animate-liquid-fade">
+            <PlanBuilder
+              initialPlan={editingPlan}
+              populatedFeatures={populatedFeatures}
+              onAddPopulatedFeature={handleAddPopulatedFeature}
+              onDeleteFeature={handleDeleteFeature}
+              onSavePlan={handleSavePlan}
+              onCancel={() => {
+                setEditingPlan(null);
+                setCurrentView('dashboard');
+              }}
+            />
+          </div>
         )}
 
         {currentView === 'mobile' && (
-          <MobileTester
-            testPlans={testPlans}
-            testRuns={testRuns}
-            selectedPlanId={selectedPlanId}
-            populatedDevices={populatedDevices}
-            onAddPopulatedDevice={handleAddPopulatedDevice}
-            onSelectPlan={setSelectedPlanId}
-            onUpdateRun={handleUpdateRun}
-            onLogBug={handleLogBug}
-            onDeleteBug={handleDeleteBug}
-            onRestartRun={handleRestartRun}
-            onNavigateToDashboard={() => setCurrentView('dashboard')}
-          />
+          <div key="mobile-view" className="animate-liquid-fade">
+            <MobileTester
+              testPlans={testPlans}
+              testRuns={testRuns}
+              selectedPlanId={selectedPlanId}
+              populatedDevices={populatedDevices}
+              onAddPopulatedDevice={handleAddPopulatedDevice}
+              onSelectPlan={setSelectedPlanId}
+              onUpdateRun={handleUpdateRun}
+              onLogBug={handleLogBug}
+              onDeleteBug={handleDeleteBug}
+              onRestartRun={handleRestartRun}
+              onNavigateToDashboard={() => setCurrentView('dashboard')}
+            />
+          </div>
         )}
       </main>
 

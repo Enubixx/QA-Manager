@@ -1282,7 +1282,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       {/* Tab 2: Feature Health Metrics */}
       {activeTab === 'features' && (
-        <div className="space-y-6">
+        <div className="space-y-6 animate-liquid-fade">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 liquid-glass-panel rounded-3xl px-5 py-3.5 shadow-2xl">
             <h3 className="text-base font-extrabold text-white flex items-center gap-2 tracking-tight flex-shrink-0">
               <Tag className="w-4 h-4 text-purple-400" />
@@ -1756,7 +1756,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       {/* Tab 3: Bugs Feed */}
       {activeTab === 'bugs' && (
-        <div className="space-y-6">
+        <div className="space-y-6 animate-liquid-fade">
           
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
