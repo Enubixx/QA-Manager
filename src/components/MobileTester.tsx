@@ -257,21 +257,22 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   const [bootMessage, setBootMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!showSetupModal && activeRun && activeRun.testerName) {
+    if (!showSetupModal && activeRun && activeRun.testerName && activeRun.status !== 'completed' && !isCompleted) {
       setWasExecuting(true);
     }
-  }, [showSetupModal, activeRun]);
+  }, [showSetupModal, activeRun, isCompleted]);
 
   useEffect(() => {
-    if (wasExecuting && activeRun) {
-      const existsInState = testRuns.some(r => r.id === activeRun.id || r.id === `run-${currentPlan?.id}-${deviceId}`);
+    // Only check for admin boot if the run was in progress and NOT completed naturally
+    if (wasExecuting && activeRun && activeRun.status !== 'completed' && !isCompleted) {
+      const existsInState = testRuns.some(r => r.id === activeRun.id || r.id.includes(deviceId));
       if (!existsInState) {
         setBootMessage(`⚠️ Session Terminated: An administrator has booted your QA session from the manager dashboard.`);
         setShowSetupModal(true);
         setWasExecuting(false);
       }
     }
-  }, [testRuns, activeRun, wasExecuting, currentPlan, deviceId]);
+  }, [testRuns, activeRun, wasExecuting, isCompleted, deviceId]);
 
   // Auto-kick user to setup screen if active run or plan gets deleted
   useEffect(() => {
@@ -816,8 +817,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 type="button"
                 onClick={() => {
                   setSelectedStatus(null);
-                  setInputReporterName('');
-                  setInputDeviceName('');
+                  const savedName = localStorage.getItem('qa_tester_name') || activeRun?.testerName || '';
+                  const savedDevice = localStorage.getItem('qa_device_name') || activeRun?.deviceName || '';
+                  if (savedName) setInputReporterName(savedName);
+                  if (savedDevice) setInputDeviceName(savedDevice);
                   if (currentPlan) {
                     onRestartRun(currentPlan.id);
                   }

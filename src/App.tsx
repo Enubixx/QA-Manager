@@ -421,14 +421,34 @@ export function App() {
     const isDone = updatedRun.status === 'completed' || (totalSteps > 0 && completedSteps >= totalSteps);
 
     if (isDone) {
+      const completedRun: TestRun = {
+        ...updatedRun,
+        status: 'completed',
+        completedAt: updatedRun.completedAt || new Date().toISOString()
+      };
+
+      // Remove from active testRuns, add to archivedRuns
+      setTestRuns(prev => prev.filter(r => r.id !== completedRun.id));
       setArchivedRuns(prev => {
+        const exists = prev.some(r => r.id === completedRun.id);
+        if (exists) {
+          return prev.map(r => r.id === completedRun.id ? completedRun : r);
+        }
+        return [completedRun, ...prev];
+      });
+
+      deleteTestRunFromSupabase(completedRun.id);
+      syncArchivedRunToSupabase(completedRun);
+    } else {
+      setTestRuns(prev => {
         const exists = prev.some(r => r.id === updatedRun.id);
         if (exists) {
           return prev.map(r => r.id === updatedRun.id ? updatedRun : r);
         }
-          return [updatedRun, ...prev];
+        return [updatedRun, ...prev];
       });
-      syncArchivedRunToSupabase(updatedRun);
+
+      syncTestRunToSupabase(updatedRun);
     }
   };
 
