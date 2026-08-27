@@ -1,6 +1,6 @@
 import React, { useState, useRef, useMemo } from 'react';
 import { TestPlan, TestRun, BugLog } from '../types';
-import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
+import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON } from '../utils/exportUtils';
 import { toBlob } from 'html-to-image';
 
@@ -56,8 +56,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onDeleteTestRun,
   onResetActiveDay
 }) => {
-  const [activeTab, setActiveTab] = useState<'overview' | 'features' | 'bugs'>('overview');
+  const defaultTodayStr = new Date().toISOString().split('T')[0];
+  const [activeTab, setActiveTab] = useState<'overview' | 'qa-status' | 'features' | 'bugs'>('overview');
   const [activeKpiCard, setActiveKpiCard] = useState<'plans' | 'features' | 'runs' | 'bugs'>('plans');
+  const [selectedQaDate, setSelectedQaDate] = useState<string>(defaultTodayStr);
 
   // Search & Filter State
   const [searchBugQuery, setSearchBugQuery] = useState<string>('');
@@ -347,6 +349,111 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
     return metric;
   });
+
+  // Compute QA Status metrics for individual tester profiles & daily tracking
+  const testerProfilesMap = useMemo(() => {
+    const combinedRuns = [...archivedRuns, ...testRuns];
+    const map = new Map<string, {
+      testerName: string;
+      devicesUsed: Set<string>;
+      allTimeCompletedCount: number;
+      dailyStats: Record<string, {
+        dateStr: string;
+        completedCount: number;
+        totalDurationMs: number;
+        completedRuns: {
+          runId: string;
+          planName: string;
+          deviceName: string;
+          completedAtFormatted: string;
+          durationMs: number;
+          durationFormatted: string;
+          greenCount: number;
+          yellowCount: number;
+          redCount: number;
+        }[];
+      }>;
+    }>();
+
+    combinedRuns.forEach(run => {
+      const tester = run.testerName?.trim() || 'Unassigned Tester';
+      if (!map.has(tester)) {
+        map.set(tester, {
+          testerName: tester,
+          devicesUsed: new Set<string>(),
+          allTimeCompletedCount: 0,
+          dailyStats: {}
+        });
+      }
+      const profile = map.get(tester)!;
+      if (run.deviceName) profile.devicesUsed.add(run.deviceName);
+
+      const effectiveStatus = getEffectiveRunStatus(run);
+      if (effectiveStatus === 'completed') {
+        profile.allTimeCompletedCount++;
+
+        const completedDate = run.completedAt ? new Date(run.completedAt) : new Date();
+        const dateStr = completedDate.toISOString().split('T')[0];
+        const timeFormatted = completedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        const resultsArray = Object.values(run.results || {});
+        let durationMs = 0;
+        if (resultsArray.length > 0) {
+          const timestamps = resultsArray
+            .map(r => r.timestamp ? new Date(r.timestamp).getTime() : NaN)
+            .filter(t => !isNaN(t));
+          if (timestamps.length > 0) {
+            const minTime = Math.min(...timestamps);
+            const maxTime = Math.max(...timestamps, completedDate.getTime());
+            durationMs = Math.max(15000, maxTime - minTime);
+          }
+        }
+        if (!durationMs) durationMs = 300000;
+
+        const mins = Math.floor(durationMs / 60000);
+        const secs = Math.floor((durationMs % 60000) / 1000);
+        const durationFormatted = `${mins}m ${secs < 10 ? '0' : ''}${secs}s`;
+
+        const greenCount = resultsArray.filter(r => r.status === 'green').length;
+        const yellowCount = resultsArray.filter(r => r.status === 'yellow').length;
+        const redCount = resultsArray.filter(r => r.status === 'red').length;
+
+        if (!profile.dailyStats[dateStr]) {
+          profile.dailyStats[dateStr] = {
+            dateStr,
+            completedCount: 0,
+            totalDurationMs: 0,
+            completedRuns: []
+          };
+        }
+
+        profile.dailyStats[dateStr].completedCount++;
+        profile.dailyStats[dateStr].totalDurationMs += durationMs;
+        profile.dailyStats[dateStr].completedRuns.push({
+          runId: run.id,
+          planName: run.planName,
+          deviceName: run.deviceName || 'Mobile Device',
+          completedAtFormatted: timeFormatted,
+          durationMs,
+          durationFormatted,
+          greenCount,
+          yellowCount,
+          redCount
+        });
+      }
+    });
+
+    return Array.from(map.values());
+  }, [testRuns, archivedRuns]);
+
+  // Extract all unique dates for QA Status dropdown
+  const allQaDatesList = useMemo(() => {
+    const set = new Set<string>();
+    testerProfilesMap.forEach(p => {
+      Object.keys(p.dailyStats).forEach(d => set.add(d));
+    });
+    return Array.from(set).sort().reverse();
+  }, [testerProfilesMap]);
 
   // Sort Feature Metrics: Critical (Red) first -> Warning (Yellow) -> Healthy (Green)
   const statusPriority: Record<string, number> = { critical: 1, warning: 2, healthy: 3 };
@@ -661,34 +768,32 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
         </div>
 
-        {/* Card 3: Mobile Field Runs View Switcher */}
+        {/* Card 3: QA Status View Switcher */}
         <div
           onClick={() => {
             setActiveKpiCard('runs');
-            setActiveTab('overview');
-            const el = document.getElementById('field-qa-progress-section');
-            if (el) el.scrollIntoView({ behavior: 'smooth' });
+            setActiveTab('qa-status');
           }}
           className={`liquid-glass-card rounded-3xl p-5 flex items-center justify-between cursor-pointer transition-all duration-300 ${
             activeKpiCard === 'runs'
               ? 'bg-emerald-500/25 border-emerald-400/80 ring-2 ring-emerald-400/60 shadow-[0_0_30px_rgba(16,185,129,0.3)] scale-[1.02]'
               : 'opacity-75 hover:opacity-100 hover:scale-[1.01] hover:border-white/30'
           }`}
-          title="Click to view Live Field Progress & Active Runs"
+          title="Click to view QA Status & Tester Daily Metrics"
         >
           <div>
             <div className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-              <span>Mobile Field Runs</span>
+              <span>QA Status</span>
               {activeKpiCard === 'runs' && <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>}
             </div>
-            <div className="text-2xl font-black text-emerald-300 mt-1 font-mono tracking-tight">{activeRuns} Active</div>
+            <div className="text-2xl font-black text-emerald-300 mt-1 font-mono tracking-tight">{testerProfilesMap.length} Testers</div>
           </div>
           <div className={`p-3 rounded-2xl border transition-all ${
             activeKpiCard === 'runs'
               ? 'bg-emerald-500 text-white border-emerald-300 shadow-lg shadow-emerald-500/50'
               : 'bg-emerald-500/20 text-emerald-300 border-emerald-400/30 backdrop-blur-md'
           }`}>
-            <Clock className="w-5 h-5" />
+            <UserCheck className="w-5 h-5" />
           </div>
         </div>
 
@@ -721,6 +826,61 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
         </div>
 
+      </div>
+
+      {/* Secondary Glass Tab Bar Navigation */}
+      <div className="flex items-center gap-2 border-b border-white/10 pb-4 overflow-x-auto">
+        <button
+          type="button"
+          onClick={() => { setActiveTab('overview'); setActiveKpiCard('plans'); }}
+          className={`px-4 py-2.5 rounded-2xl text-xs font-extrabold transition-all flex items-center gap-2 ${
+            activeTab === 'overview'
+              ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30 border border-indigo-400/40 scale-105'
+              : 'text-slate-400 hover:text-white hover:bg-white/5 border border-transparent'
+          }`}
+        >
+          <ListChecks className="w-4 h-4" />
+          <span>Configured Test Plans</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => { setActiveTab('qa-status'); setActiveKpiCard('runs'); }}
+          className={`px-4 py-2.5 rounded-2xl text-xs font-extrabold transition-all flex items-center gap-2 ${
+            activeTab === 'qa-status'
+              ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/30 border border-emerald-400/40 scale-105'
+              : 'text-slate-400 hover:text-white hover:bg-white/5 border border-transparent'
+          }`}
+        >
+          <UserCheck className="w-4 h-4 text-emerald-300" />
+          <span>QA Status</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => { setActiveTab('features'); setActiveKpiCard('features'); }}
+          className={`px-4 py-2.5 rounded-2xl text-xs font-extrabold transition-all flex items-center gap-2 ${
+            activeTab === 'features'
+              ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/30 border border-purple-400/40 scale-105'
+              : 'text-slate-400 hover:text-white hover:bg-white/5 border border-transparent'
+          }`}
+        >
+          <Tag className="w-4 h-4" />
+          <span>Feature Metrics</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => { setActiveTab('bugs'); setActiveKpiCard('bugs'); }}
+          className={`px-4 py-2.5 rounded-2xl text-xs font-extrabold transition-all flex items-center gap-2 ${
+            activeTab === 'bugs'
+              ? 'bg-rose-600 text-white shadow-lg shadow-rose-500/30 border border-rose-400/40 scale-105'
+              : 'text-slate-400 hover:text-white hover:bg-white/5 border border-transparent'
+          }`}
+        >
+          <Bug className="w-4 h-4" />
+          <span>Bug Logs ({bugLogs.length})</span>
+        </button>
       </div>
 
       {/* Tab 1: Overview - Test Plans & Active Runs */}
@@ -940,6 +1100,183 @@ export const Dashboard: React.FC<DashboardProps> = ({
               )}
             </div>
           </div>
+
+        </div>
+      )}
+
+      {/* Tab: QA Status - Tester Profiles & Daily Time Tracking */}
+      {activeTab === 'qa-status' && (
+        <div className="space-y-6">
+          
+          {/* Header & Date Filter Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 liquid-glass-panel rounded-3xl p-6 shadow-2xl">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold text-emerald-300 uppercase tracking-widest bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20 backdrop-blur-md">Tester Performance</span>
+                <span className="text-xs text-emerald-400 font-mono font-bold">Daily Tracking Log</span>
+              </div>
+              <h3 className="text-2xl font-extrabold text-white mt-1.5 tracking-tight flex items-center gap-2">
+                <UserCheck className="w-6 h-6 text-emerald-400" />
+                <span>QA Status & Daily Execution Metrics</span>
+              </h3>
+              <p className="text-xs text-slate-400 mt-1 font-medium">
+                Profiles of individual QA testers, test plan completion counts, and time taken per test run. Resets daily while preserving historical logs.
+              </p>
+            </div>
+
+            {/* Date Selector */}
+            <div className="flex items-center gap-3 bg-slate-900/90 border border-slate-800 p-2.5 rounded-2xl">
+              <Calendar className="w-4 h-4 text-emerald-400 ml-1" />
+              <span className="text-xs font-bold text-slate-300">Log Date:</span>
+              <select
+                value={selectedQaDate}
+                onChange={e => setSelectedQaDate(e.target.value)}
+                style={{ backgroundColor: '#0b101d', color: '#e0e7ff', WebkitAppearance: 'none' }}
+                className="bg-slate-950 text-indigo-200 border border-slate-800 rounded-xl px-3 py-1.5 text-xs font-bold focus:outline-none cursor-pointer"
+              >
+                <option value={todayStr}>Today ({todayStr})</option>
+                {allQaDatesList.filter(d => d !== todayStr).map(dateStr => (
+                  <option key={dateStr} value={dateStr}>
+                    {dateStr}
+                  </option>
+                ))}
+                <option value="all">All-Time Combined</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Tester Profiles List */}
+          {testerProfilesMap.length === 0 ? (
+            <div className="liquid-glass-panel rounded-3xl p-12 text-center space-y-3">
+              <div className="p-3 bg-slate-950 rounded-full border border-slate-800 text-slate-500 w-fit mx-auto">
+                <UserCheck className="w-6 h-6" />
+              </div>
+              <h4 className="text-base font-bold text-white">No Tester Activity Recorded</h4>
+              <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                Deploy a test plan to a mobile device and complete a walkthrough to populate QA tester status profiles.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {testerProfilesMap.map(profile => {
+                const dayData = selectedQaDate === 'all'
+                  ? {
+                      completedCount: profile.allTimeCompletedCount,
+                      totalDurationMs: Object.values(profile.dailyStats).reduce((acc, d) => acc + d.totalDurationMs, 0),
+                      completedRuns: Object.values(profile.dailyStats).flatMap(d => d.completedRuns)
+                    }
+                  : profile.dailyStats[selectedQaDate] || {
+                      completedCount: 0,
+                      totalDurationMs: 0,
+                      completedRuns: []
+                    };
+
+                const completedRunsList = dayData.completedRuns;
+                const avgMs = dayData.completedCount > 0 ? Math.round(dayData.totalDurationMs / dayData.completedCount) : 0;
+                const avgMins = Math.floor(avgMs / 60000);
+                const avgSecs = Math.floor((avgMs % 60000) / 1000);
+                const avgFormatted = avgMs > 0 ? `${avgMins}m ${avgSecs < 10 ? '0' : ''}${avgSecs}s` : 'N/A';
+
+                return (
+                  <div key={profile.testerName} className="liquid-glass-panel rounded-3xl p-6 space-y-5 shadow-2xl border-white/10 relative overflow-hidden">
+                    
+                    {/* Profile Header */}
+                    <div className="flex items-start justify-between gap-4 pb-4 border-b border-white/10">
+                      <div className="flex items-center gap-3">
+                        <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white font-extrabold flex items-center justify-center text-lg shadow-lg shadow-emerald-500/25 border border-white/20">
+                          {profile.testerName.charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <h4 className="text-base font-bold text-white flex items-center gap-2">
+                            <span>{profile.testerName}</span>
+                            <span className="text-[10px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold">QA Tester</span>
+                          </h4>
+                          <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-400">
+                            <span className="flex items-center gap-1 font-mono">
+                              <Smartphone className="w-3 h-3 text-purple-400" />
+                              {Array.from(profile.devicesUsed).join(', ') || 'Mobile Device'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* All-time Badge */}
+                      <div className="text-right">
+                        <span className="text-[10px] font-mono uppercase text-slate-400 block">All-Time Finished</span>
+                        <span className="text-sm font-extrabold text-emerald-300 font-mono">{profile.allTimeCompletedCount} Plans</span>
+                      </div>
+                    </div>
+
+                    {/* Today / Selected Day Key Stats */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-white/10 space-y-1">
+                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                          Plans Finished ({selectedQaDate === todayStr ? 'Today' : selectedQaDate})
+                        </div>
+                        <div className="text-xl font-black text-white font-mono">{dayData.completedCount}</div>
+                      </div>
+
+                      <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-white/10 space-y-1">
+                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                          <Timer className="w-3 h-3 text-indigo-400" />
+                          Avg Completion Time
+                        </div>
+                        <div className="text-xl font-black text-indigo-300 font-mono">{avgFormatted}</div>
+                      </div>
+                    </div>
+
+                    {/* Completed Plans Breakdown Table for this Tester */}
+                    <div className="space-y-2 pt-1">
+                      <div className="text-xs font-bold text-slate-300 flex items-center justify-between">
+                        <span>Completed Test Plans Breakdown:</span>
+                        <span className="text-[10px] text-slate-400 font-mono">{completedRunsList.length} executed</span>
+                      </div>
+
+                      {completedRunsList.length === 0 ? (
+                        <div className="bg-slate-950/40 p-4 rounded-2xl text-center text-xs text-slate-500 font-medium">
+                          No test plans completed on {selectedQaDate === todayStr ? 'today' : selectedQaDate}.
+                        </div>
+                      ) : (
+                        <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                          {completedRunsList.map((runItem, idx) => (
+                            <div key={runItem.runId + idx} className="bg-slate-950/80 p-3 rounded-2xl border border-white/10 flex items-center justify-between text-xs space-x-2">
+                              <div className="truncate flex-1">
+                                <div className="font-bold text-slate-200 truncate">{runItem.planName}</div>
+                                <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
+                                  <span className="text-purple-300 font-mono flex items-center gap-1">
+                                    <Smartphone className="w-2.5 h-2.5" /> {runItem.deviceName}
+                                  </span>
+                                  <span>•</span>
+                                  <span className="font-mono text-slate-400">{runItem.completedAtFormatted}</span>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-3">
+                                {/* Duration Badge */}
+                                <div className="bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 px-2.5 py-1 rounded-xl font-mono text-[11px] font-extrabold flex items-center gap-1">
+                                  <Clock className="w-3 h-3 text-indigo-400" />
+                                  <span>{runItem.durationFormatted}</span>
+                                </div>
+
+                                {/* Results pill */}
+                                <div className="flex items-center gap-1 text-[10px] font-mono">
+                                  <span className="text-emerald-400 font-bold">✓{runItem.greenCount}</span>
+                                  {runItem.yellowCount > 0 && <span className="text-amber-400 font-bold">!{runItem.yellowCount}</span>}
+                                  {runItem.redCount > 0 && <span className="text-rose-400 font-bold">✗{runItem.redCount}</span>}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
         </div>
       )}

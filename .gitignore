@@ -28,3 +28,8 @@ dist-ssr
 .env.local
 .env.*.local
 .vercel
+
+# Native build artifacts & local JDKs
+jdk17/
+android/
+twa-manifest.json
