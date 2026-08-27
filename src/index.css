@@ -4,7 +4,7 @@
 
 @layer base {
   body {
-    @apply bg-slate-950 text-slate-100 min-h-screen font-sans antialiased selection:bg-indigo-500/40 selection:text-indigo-100 relative overflow-x-hidden;
+    @apply bg-slate-950 text-slate-100 min-h-screen font-sans antialiased selection:bg-indigo-500/40 selection:text-indigo-100 overflow-x-hidden;
     background-color: #030712;
   }
 }

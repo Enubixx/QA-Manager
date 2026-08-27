@@ -2052,7 +2052,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
 
-      {/* Image Lightbox Preview Modal via Portal */}
+      {/* Image Lightbox Preview Modal via Dedicated Portal */}
       {selectedImagePreviewUrl && createPortal(
         <div
           onClick={() => setSelectedImagePreviewUrl(null)}
@@ -2060,105 +2060,125 @@ export const Dashboard: React.FC<DashboardProps> = ({
             position: 'fixed',
             top: 0,
             left: 0,
-            right: 0,
-            bottom: 0,
             width: '100vw',
             height: '100vh',
-            zIndex: 999999,
-            backgroundColor: 'rgba(3, 7, 18, 0.95)',
+            zIndex: 9999999,
+            backgroundColor: 'rgba(2, 6, 23, 0.96)',
             backdropFilter: 'blur(24px)',
             WebkitBackdropFilter: 'blur(24px)',
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
-            justifyContent: 'center',
-            padding: '1.5rem',
-            margin: 0,
+            justifyContent: 'between',
+            padding: '1.25rem',
             boxSizing: 'border-box'
           }}
         >
+          {/* Top Bar - ALWAYS Visible at Top of Screen Viewport */}
           <div
             onClick={e => e.stopPropagation()}
             style={{
-              maxHeight: '85vh',
-              maxWidth: '900px',
               width: '100%',
+              maxWidth: '1000px',
               display: 'flex',
-              flexDirection: 'column',
-              backgroundColor: '#0f172a',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              backgroundColor: 'rgba(15, 23, 42, 0.95)',
               border: '1px solid rgba(255, 255, 255, 0.2)',
-              borderRadius: '1.5rem',
-              overflow: 'hidden',
-              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.9)',
-              padding: '1.25rem'
+              borderRadius: '1rem',
+              padding: '0.75rem 1.25rem',
+              marginBottom: '1rem',
+              flexShrink: 0,
+              boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)'
             }}
           >
-            {/* Top Bar with Back / Close Button */}
-            <div className="flex items-center justify-between pb-3.5 mb-3 border-b border-white/10 flex-shrink-0 w-full">
-              <button
-                type="button"
-                onClick={() => setSelectedImagePreviewUrl(null)}
-                className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-extrabold transition flex items-center gap-1.5 cursor-pointer shadow-lg active:scale-95"
-              >
-                <span>← Back to Dashboard</span>
-              </button>
-              <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-                <ImageIcon className="w-4 h-4 text-purple-400" /> Screenshot Evidence Preview
-              </span>
-              <button
-                type="button"
-                onClick={() => setSelectedImagePreviewUrl(null)}
-                className="p-2 text-slate-400 hover:text-white rounded-xl bg-slate-800 hover:bg-slate-700 transition cursor-pointer"
-                title="Close Modal"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Image Display Container */}
-            <div
-              style={{
-                flex: '1 1 0%',
-                minHeight: 0,
-                width: '100%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: '#030712',
-                borderRadius: '1rem',
-                padding: '0.75rem',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                overflow: 'hidden'
-              }}
+            <button
+              type="button"
+              onClick={() => setSelectedImagePreviewUrl(null)}
+              className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-extrabold flex items-center gap-1.5 cursor-pointer shadow-lg active:scale-95 transition-all"
             >
-              <img
-                src={selectedImagePreviewUrl}
-                alt="Evidence"
-                style={{
-                  maxWidth: '100%',
-                  maxHeight: '100%',
-                  width: 'auto',
-                  height: 'auto',
-                  objectFit: 'contain',
-                  borderRadius: '0.75rem',
-                  boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)'
-                }}
-              />
-            </div>
+              <span>← Back to Dashboard</span>
+            </button>
 
-            {/* Bottom Bar with Back Button */}
-            <div className="flex justify-between items-center pt-3.5 mt-3 border-t border-white/10 flex-shrink-0 w-full">
-              <span className="text-[11px] text-slate-400 font-mono hidden sm:inline">Press Esc or click outside to close</span>
-              <button
-                type="button"
-                onClick={() => setSelectedImagePreviewUrl(null)}
-                className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-extrabold rounded-2xl shadow border border-white/10 transition cursor-pointer active:scale-95 ml-auto"
-              >
-                ← Back
-              </button>
-            </div>
+            <span className="text-xs font-bold text-slate-200 flex items-center gap-2">
+              <ImageIcon className="w-4 h-4 text-purple-400" /> Bug Screenshot Preview
+            </span>
+
+            <button
+              type="button"
+              onClick={() => setSelectedImagePreviewUrl(null)}
+              className="p-2 text-slate-400 hover:text-white rounded-xl bg-slate-800 hover:bg-slate-700 transition cursor-pointer"
+              title="Close Preview (Esc)"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Center Image Container - Automatically Fills Available Space */}
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              flex: '1 1 0%',
+              minHeight: 0,
+              width: '100%',
+              maxWidth: '1000px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: '#030712',
+              borderRadius: '1.25rem',
+              border: '1px solid rgba(255, 255, 255, 0.15)',
+              padding: '0.75rem',
+              overflow: 'hidden',
+              boxShadow: '0 20px 40px -10px rgba(0,0,0,0.9)'
+            }}
+          >
+            <img
+              src={selectedImagePreviewUrl}
+              alt="Evidence Screenshot"
+              style={{
+                maxWidth: '100%',
+                maxHeight: '100%',
+                width: 'auto',
+                height: 'auto',
+                objectFit: 'contain',
+                borderRadius: '0.75rem',
+                boxShadow: '0 10px 30px rgba(0,0,0,0.9)'
+              }}
+            />
+          </div>
+
+          {/* Bottom Bar - Pinned at Bottom of Screen Viewport */}
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: '1000px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              backgroundColor: 'rgba(15, 23, 42, 0.95)',
+              border: '1px solid rgba(255, 255, 255, 0.2)',
+              borderRadius: '1rem',
+              padding: '0.75rem 1.25rem',
+              marginTop: '1rem',
+              flexShrink: 0,
+              boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)'
+            }}
+          >
+            <span className="text-xs text-slate-400 font-mono hidden sm:inline">
+              Tap anywhere outside image or press Esc to close
+            </span>
+            <button
+              type="button"
+              onClick={() => setSelectedImagePreviewUrl(null)}
+              className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-extrabold rounded-xl border border-white/15 cursor-pointer transition active:scale-95 ml-auto"
+            >
+              ← Back
+            </button>
           </div>
         </div>,
-        document.body
+        document.getElementById('modal-portal') || document.body
       )}
 
     </div>
