@@ -162,6 +162,26 @@ select.dark-select-input {
   appearance: none !important;
 }
 
+/* Fluid Liquid Glass Accordion Animation */
+.liquid-accordion-wrapper {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.45s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.35s ease, transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+.liquid-accordion-wrapper.expanded {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.liquid-accordion-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
 select.dark-select-input option {
   background-color: #090d16 !important;
   color: #f1f5f9 !important;

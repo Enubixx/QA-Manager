@@ -1171,10 +1171,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         <button
                           type="button"
                           onClick={() => toggleTesterExpand(profile.testerName)}
-                          className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl border border-slate-700 text-xs font-semibold transition-all flex items-center gap-1"
+                          className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl border border-slate-700 text-xs font-semibold transition-all duration-300 flex items-center gap-1.5 shadow-md active:scale-95 cursor-pointer"
                         >
                           <span>{isExpanded ? 'Hide' : 'Details'}</span>
-                          {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                          <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-500 ease-out ${isExpanded ? 'rotate-180 text-emerald-400' : 'rotate-0'}`} />
                         </button>
 
                         {onDeleteTestRun && (
@@ -1186,7 +1186,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 runsToDelete.forEach(r => onDeleteTestRun(r.id));
                               }
                             }}
-                            className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 border border-slate-800 hover:border-rose-500/30 rounded-xl transition-all"
+                            className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 border border-slate-800 hover:border-rose-500/30 rounded-xl transition-all active:scale-95"
                             title={`Delete all QA performance data for ${profile.testerName}`}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -1196,78 +1196,80 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                     </div>
 
-                    {/* Accordion Expandable Details Section */}
-                    {isExpanded && (
-                      <div className="mt-4 pt-3 border-t border-white/10 space-y-3">
-                        {/* Day Key Stats Summary for Mobile */}
-                        <div className="grid grid-cols-2 gap-2 sm:hidden text-xs">
-                          <div className="bg-slate-950/60 p-2.5 rounded-xl border border-white/10">
-                            <span className="text-[10px] text-slate-400 block font-bold uppercase">Finished</span>
-                            <span className="text-base font-extrabold text-emerald-300 font-mono">{dayData.completedCount} Plans</span>
+                    {/* Fluid Liquid Glass Accordion Expandable Details Section */}
+                    <div className={`liquid-accordion-wrapper ${isExpanded ? 'expanded' : ''}`}>
+                      <div className="liquid-accordion-inner">
+                        <div className="mt-4 pt-3 border-t border-white/10 space-y-3">
+                          {/* Day Key Stats Summary for Mobile */}
+                          <div className="grid grid-cols-2 gap-2 sm:hidden text-xs">
+                            <div className="bg-slate-950/60 p-2.5 rounded-xl border border-white/10">
+                              <span className="text-[10px] text-slate-400 block font-bold uppercase">Finished</span>
+                              <span className="text-base font-extrabold text-emerald-300 font-mono">{dayData.completedCount} Plans</span>
+                            </div>
+                            <div className="bg-slate-950/60 p-2.5 rounded-xl border border-white/10">
+                              <span className="text-[10px] text-slate-400 block font-bold uppercase">Avg Time</span>
+                              <span className="text-base font-extrabold text-indigo-300 font-mono">{avgFormatted}</span>
+                            </div>
                           </div>
-                          <div className="bg-slate-950/60 p-2.5 rounded-xl border border-white/10">
-                            <span className="text-[10px] text-slate-400 block font-bold uppercase">Avg Time</span>
-                            <span className="text-base font-extrabold text-indigo-300 font-mono">{avgFormatted}</span>
-                          </div>
-                        </div>
 
-                        <div className="text-xs font-bold text-slate-300 flex items-center justify-between">
-                          <span>Completed Test Plans Breakdown ({selectedQaDate === todayStr ? 'Today' : selectedQaDate}):</span>
-                          <span className="text-[10px] text-slate-400 font-mono">{completedRunsList.length} executed</span>
-                        </div>
-
-                        {completedRunsList.length === 0 ? (
-                          <div className="bg-slate-950/40 p-3 rounded-xl text-center text-xs text-slate-500 font-medium">
-                            No test plans completed on {selectedQaDate === todayStr ? 'today' : selectedQaDate}.
+                          <div className="text-xs font-bold text-slate-300 flex items-center justify-between">
+                            <span>Completed Test Plans Breakdown ({selectedQaDate === todayStr ? 'Today' : selectedQaDate}):</span>
+                            <span className="text-[10px] text-slate-400 font-mono">{completedRunsList.length} executed</span>
                           </div>
-                        ) : (
-                          <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                            {completedRunsList.map((runItem, idx) => (
-                              <div key={runItem.runId + idx} className="bg-slate-950/80 p-2.5 rounded-xl border border-white/10 flex items-center justify-between text-xs space-x-2">
-                                <div className="truncate flex-1">
-                                  <div className="font-bold text-slate-200 truncate">{runItem.planName}</div>
-                                  <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
-                                    <span className="text-purple-300 font-mono flex items-center gap-1">
-                                      <Smartphone className="w-2.5 h-2.5" /> {runItem.deviceName}
-                                    </span>
-                                    <span>•</span>
-                                    <span className="font-mono text-slate-400">{runItem.completedAtFormatted}</span>
+
+                          {completedRunsList.length === 0 ? (
+                            <div className="bg-slate-950/40 p-3 rounded-xl text-center text-xs text-slate-500 font-medium">
+                              No test plans completed on {selectedQaDate === todayStr ? 'today' : selectedQaDate}.
+                            </div>
+                          ) : (
+                            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                              {completedRunsList.map((runItem, idx) => (
+                                <div key={runItem.runId + idx} className="bg-slate-950/80 p-2.5 rounded-xl border border-white/10 flex items-center justify-between text-xs space-x-2">
+                                  <div className="truncate flex-1">
+                                    <div className="font-bold text-slate-200 truncate">{runItem.planName}</div>
+                                    <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
+                                      <span className="text-purple-300 font-mono flex items-center gap-1">
+                                        <Smartphone className="w-2.5 h-2.5" /> {runItem.deviceName}
+                                      </span>
+                                      <span>•</span>
+                                      <span className="font-mono text-slate-400">{runItem.completedAtFormatted}</span>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-2">
+                                    <div className="bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-lg font-mono text-[10px] font-extrabold flex items-center gap-1">
+                                      <Clock className="w-3 h-3 text-indigo-400" />
+                                      <span>{runItem.durationFormatted}</span>
+                                    </div>
+
+                                    <div className="flex items-center gap-1 text-[10px] font-mono">
+                                      <span className="text-emerald-400 font-bold">✓{runItem.greenCount}</span>
+                                      {runItem.yellowCount > 0 && <span className="text-amber-400 font-bold">!{runItem.yellowCount}</span>}
+                                      {runItem.redCount > 0 && <span className="text-rose-400 font-bold">✗{runItem.redCount}</span>}
+                                    </div>
+
+                                    {onDeleteTestRun && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (confirm(`Delete run record for "${runItem.planName}"?`)) {
+                                            onDeleteTestRun(runItem.runId);
+                                          }
+                                        }}
+                                        className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors ml-1"
+                                        title="Delete this test run record"
+                                      >
+                                        <Trash2 className="w-3 h-3" />
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
-
-                                <div className="flex items-center gap-2">
-                                  <div className="bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-lg font-mono text-[10px] font-extrabold flex items-center gap-1">
-                                    <Clock className="w-3 h-3 text-indigo-400" />
-                                    <span>{runItem.durationFormatted}</span>
-                                  </div>
-
-                                  <div className="flex items-center gap-1 text-[10px] font-mono">
-                                    <span className="text-emerald-400 font-bold">✓{runItem.greenCount}</span>
-                                    {runItem.yellowCount > 0 && <span className="text-amber-400 font-bold">!{runItem.yellowCount}</span>}
-                                    {runItem.redCount > 0 && <span className="text-rose-400 font-bold">✗{runItem.redCount}</span>}
-                                  </div>
-
-                                  {onDeleteTestRun && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        if (confirm(`Delete run record for "${runItem.planName}"?`)) {
-                                          onDeleteTestRun(runItem.runId);
-                                        }
-                                      }}
-                                      className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors ml-1"
-                                      title="Delete this test run record"
-                                    >
-                                      <Trash2 className="w-3 h-3" />
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    )}
+                    </div>
 
                   </div>
                 );
