@@ -21,35 +21,41 @@ export const fetchAllSupabaseData = async () => {
       createdAt: item.created_at || new Date().toISOString(),
     }));
 
-    const testRuns: TestRun[] = (runsRes.data || []).map(item => ({
-      id: item.id,
-      planId: item.plan_id,
-      planName: item.plan_name || '',
-      testerName: item.tester_name || '',
-      deviceName: item.device_name || '',
-      deviceId: item.device_id || (item.id.includes('-dev-') ? item.id.substring(item.id.indexOf('-dev-') + 1) : undefined),
-      status: item.status || 'not_started',
-      currentStepIndex: item.current_step_index || 0,
-      results: item.results || {},
-      bugLogs: item.bug_logs || [],
-      startedAt: item.started_at || new Date().toISOString(),
-      completedAt: item.completed_at,
-    }));
+    const testRuns: TestRun[] = (runsRes.data || []).map(item => {
+      const devIdFromId = item.id.includes('-dev-') ? 'dev-' + item.id.split('-dev-')[1] : undefined;
+      return {
+        id: item.id,
+        planId: item.plan_id,
+        planName: item.plan_name || '',
+        testerName: item.tester_name || '',
+        deviceName: item.device_name || '',
+        deviceId: item.device_id || devIdFromId,
+        status: item.status || 'not_started',
+        currentStepIndex: item.current_step_index || 0,
+        results: item.results || {},
+        bugLogs: item.bug_logs || [],
+        startedAt: item.started_at || new Date().toISOString(),
+        completedAt: item.completed_at,
+      };
+    });
 
-    const archivedRuns: TestRun[] = (archivedRes.data || []).map(item => ({
-      id: item.id,
-      planId: item.plan_id,
-      planName: item.plan_name || '',
-      testerName: item.tester_name || '',
-      deviceName: item.device_name || '',
-      deviceId: item.device_id || (item.id.includes('-dev-') ? item.id.substring(item.id.indexOf('-dev-') + 1) : undefined),
-      status: item.status || 'completed',
-      currentStepIndex: item.current_step_index || 0,
-      results: item.results || {},
-      bugLogs: item.bug_logs || [],
-      startedAt: item.started_at || new Date().toISOString(),
-      completedAt: item.completed_at,
-    }));
+    const archivedRuns: TestRun[] = (archivedRes.data || []).map(item => {
+      const devIdFromId = item.id.includes('-dev-') ? 'dev-' + item.id.split('-dev-')[1] : undefined;
+      return {
+        id: item.id,
+        planId: item.plan_id,
+        planName: item.plan_name || '',
+        testerName: item.tester_name || '',
+        deviceName: item.device_name || '',
+        deviceId: item.device_id || devIdFromId,
+        status: item.status || 'completed',
+        currentStepIndex: item.current_step_index || 0,
+        results: item.results || {},
+        bugLogs: item.bug_logs || [],
+        startedAt: item.started_at || new Date().toISOString(),
+        completedAt: item.completed_at,
+      };
+    });
 
     const bugLogs: BugLog[] = (bugsRes.data || []).map(item => ({
       id: item.id,
@@ -84,54 +90,72 @@ export const fetchAllSupabaseData = async () => {
 
 export const syncTestPlanToSupabase = async (plan: TestPlan) => {
   if (!supabase || !isSupabaseConfigured) return;
-  await supabase.from('test_plans').upsert({
-    id: plan.id,
-    name: plan.name,
-    description: plan.description,
-    steps: plan.steps,
-    created_at: plan.createdAt,
-  });
+  try {
+    await supabase.from('test_plans').upsert({
+      id: plan.id,
+      name: plan.name,
+      description: plan.description,
+      steps: plan.steps,
+      created_at: plan.createdAt,
+    });
+  } catch (err) {
+    console.error('syncTestPlanToSupabase error:', err);
+  }
 };
 
 export const deleteTestPlanFromSupabase = async (planId: string) => {
   if (!supabase || !isSupabaseConfigured) return;
-  await supabase.from('test_plans').delete().eq('id', planId);
+  try {
+    await supabase.from('test_plans').delete().eq('id', planId);
+  } catch (err) {
+    console.error('deleteTestPlanFromSupabase error:', err);
+  }
 };
 
 export const syncTestRunToSupabase = async (run: TestRun) => {
   if (!supabase || !isSupabaseConfigured) return;
-  await supabase.from('test_runs').upsert({
-    id: run.id,
-    plan_id: run.planId,
-    plan_name: run.planName,
-    tester_name: run.testerName,
-    device_name: run.deviceName,
-    device_id: run.deviceId,
-    status: run.status,
-    current_step_index: run.currentStepIndex,
-    results: run.results,
-    bug_logs: run.bugLogs,
-    started_at: run.startedAt,
-    completed_at: run.completedAt,
-  });
+  try {
+    const payload: any = {
+      id: run.id,
+      plan_id: run.planId,
+      plan_name: run.planName,
+      tester_name: run.testerName,
+      device_name: run.deviceName,
+      status: run.status,
+      current_step_index: run.currentStepIndex,
+      results: run.results,
+      bug_logs: run.bugLogs,
+      started_at: run.startedAt,
+      completed_at: run.completedAt,
+    };
+    const { error } = await supabase.from('test_runs').upsert(payload);
+    if (error) console.error('syncTestRunToSupabase error:', error);
+  } catch (err) {
+    console.error('syncTestRunToSupabase exception:', err);
+  }
 };
 
 export const syncArchivedRunToSupabase = async (run: TestRun) => {
   if (!supabase || !isSupabaseConfigured) return;
-  await supabase.from('archived_runs').upsert({
-    id: run.id,
-    plan_id: run.planId,
-    plan_name: run.planName,
-    tester_name: run.testerName,
-    device_name: run.deviceName,
-    device_id: run.deviceId,
-    status: run.status,
-    current_step_index: run.currentStepIndex,
-    results: run.results,
-    bug_logs: run.bugLogs,
-    started_at: run.startedAt,
-    completed_at: run.completedAt,
-  });
+  try {
+    const payload: any = {
+      id: run.id,
+      plan_id: run.planId,
+      plan_name: run.planName,
+      tester_name: run.testerName,
+      device_name: run.deviceName,
+      status: run.status,
+      current_step_index: run.currentStepIndex,
+      results: run.results,
+      bug_logs: run.bugLogs,
+      started_at: run.startedAt,
+      completed_at: run.completedAt,
+    };
+    const { error } = await supabase.from('archived_runs').upsert(payload);
+    if (error) console.error('syncArchivedRunToSupabase error:', error);
+  } catch (err) {
+    console.error('syncArchivedRunToSupabase exception:', err);
+  }
 };
 
 export const deleteTestRunFromSupabase = async (runId: string) => {
