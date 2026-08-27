@@ -369,6 +369,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         dateStr: string;
         completedCount: number;
         totalDurationMs: number;
+        devicesUsedOnDay: Set<string>;
         completedRuns: {
           runId: string;
           planName: string;
@@ -425,22 +426,25 @@ export const Dashboard: React.FC<DashboardProps> = ({
         const greenCount = resultsArray.filter(r => r.status === 'green').length;
         const yellowCount = resultsArray.filter(r => r.status === 'yellow').length;
         const redCount = resultsArray.filter(r => r.status === 'red').length;
+        const deviceNameStr = run.deviceName?.trim() || 'Mobile Device';
 
         if (!profile.dailyStats[dateStr]) {
           profile.dailyStats[dateStr] = {
             dateStr,
             completedCount: 0,
             totalDurationMs: 0,
+            devicesUsedOnDay: new Set<string>(),
             completedRuns: []
           };
         }
 
         profile.dailyStats[dateStr].completedCount++;
         profile.dailyStats[dateStr].totalDurationMs += durationMs;
+        profile.dailyStats[dateStr].devicesUsedOnDay.add(deviceNameStr);
         profile.dailyStats[dateStr].completedRuns.push({
           runId: run.id,
           planName: run.planName,
-          deviceName: run.deviceName || 'Mobile Device',
+          deviceName: deviceNameStr,
           completedAtFormatted: timeFormatted,
           durationMs,
           durationFormatted,
@@ -1130,6 +1134,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 const avgSecs = Math.floor((avgMs % 60000) / 1000);
                 const avgFormatted = avgMs > 0 ? `${avgMins}m ${avgSecs < 10 ? '0' : ''}${avgSecs}s` : 'N/A';
 
+                const dayDevices = selectedQaDate === 'all'
+                  ? Array.from(profile.devicesUsed)
+                  : Array.from(('devicesUsedOnDay' in dayData && dayData.devicesUsedOnDay instanceof Set) ? dayData.devicesUsedOnDay : []);
+                const devicesStr = dayDevices.join(', ') || 'Mobile Device';
+
                 const isExpanded = !!expandedTesters[profile.testerName];
 
                 return (
@@ -1138,7 +1147,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     {/* Compact Tester Header Row */}
                     <div className="flex items-center justify-between gap-3">
                       
-                      {/* Left: Avatar + Name + Device */}
+                      {/* Left: Avatar + Name */}
                       <div className="flex items-center gap-3 min-w-0">
                         <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white font-extrabold flex items-center justify-center text-sm shadow-md border border-white/20 flex-shrink-0">
                           {profile.testerName.charAt(0).toUpperCase()}
@@ -1146,16 +1155,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         <div className="truncate">
                           <h4 className="text-sm font-bold text-white truncate flex items-center gap-1.5">
                             <span>{profile.testerName}</span>
-                            <span className="text-[10px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.2 rounded-full font-semibold">QA</span>
+                            <span className="text-[10px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.2 rounded-full font-semibold">QA Tester</span>
                           </h4>
-                          <div className="text-[10px] text-slate-400 font-mono truncate">
-                            {Array.from(profile.devicesUsed).join(', ') || 'Mobile Device'}
-                          </div>
                         </div>
                       </div>
 
-                      {/* Middle: Compact Day Stats */}
-                      <div className="flex items-center gap-3 text-xs font-mono">
+                      {/* Middle: Compact Day Stats (Device Name(s), Plans Finished & Avg Time) */}
+                      <div className="flex items-center gap-4 text-xs font-mono">
+                        <div className="text-right hidden md:block max-w-[140px] truncate">
+                          <span className="text-[9px] uppercase text-slate-400 block">Device(s) Tested</span>
+                          <span className="font-bold text-purple-300 truncate block" title={devicesStr}>{devicesStr}</span>
+                        </div>
                         <div className="text-right hidden sm:block">
                           <span className="text-[9px] uppercase text-slate-400 block">Finished</span>
                           <span className="font-extrabold text-emerald-300">{dayData.completedCount} Plans</span>
