@@ -2114,12 +2114,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </button>
           </div>
 
-          {/* Center Image Container - Automatically Fills Available Space */}
+          {/* Center Image Container - Explicit 70vh Viewport Constraint */}
           <div
             onClick={e => e.stopPropagation()}
             style={{
-              flex: '1 1 0%',
-              minHeight: 0,
+              height: '70vh',
+              maxHeight: '70vh',
               width: '100%',
               maxWidth: '1000px',
               display: 'flex',
