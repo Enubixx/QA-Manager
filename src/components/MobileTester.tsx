@@ -972,10 +972,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               backgroundColor: 'rgba(2, 6, 23, 0.96)',
               backdropFilter: 'blur(24px)',
               WebkitBackdropFilter: 'blur(24px)',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'space-between',
+              display: 'grid',
+              gridTemplateRows: 'auto minmax(0, 1fr) auto',
+              gap: '1rem',
+              justifyItems: 'center',
               padding: '1rem',
               boxSizing: 'border-box'
             }}
@@ -993,8 +993,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 border: '1px solid rgba(255, 255, 255, 0.2)',
                 borderRadius: '1rem',
                 padding: '0.75rem 1rem',
-                marginBottom: '0.75rem',
-                flexShrink: 0,
                 boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)'
               }}
             >
@@ -1020,14 +1018,13 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               </button>
             </div>
 
-            {/* Center Image Container - Explicit 70vh Constraint */}
+            {/* Center Image Container - Grid minmax(0, 1fr) enforces absolute constraint */}
             <div
               onClick={e => e.stopPropagation()}
               style={{
-                height: '70vh',
-                maxHeight: '70vh',
                 width: '100%',
                 maxWidth: '800px',
+                height: '100%',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -1067,8 +1064,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 border: '1px solid rgba(255, 255, 255, 0.2)',
                 borderRadius: '1rem',
                 padding: '0.75rem 1rem',
-                marginTop: '0.75rem',
-                flexShrink: 0,
                 boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)'
               }}
             >
