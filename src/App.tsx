@@ -421,10 +421,16 @@ export function App() {
     const isDone = updatedRun.status === 'completed' || (totalSteps > 0 && completedSteps >= totalSteps);
 
     if (isDone) {
+      const finishTimeIso = updatedRun.completedAt || new Date().toISOString();
+      const startMs = updatedRun.startedAt ? new Date(updatedRun.startedAt).getTime() : 0;
+      const endMs = new Date(finishTimeIso).getTime();
+      const calcDurationMs = (startMs > 0 && endMs > startMs) ? (endMs - startMs) : updatedRun.durationMs;
+
       const completedRun: TestRun = {
         ...updatedRun,
         status: 'completed',
-        completedAt: updatedRun.completedAt || new Date().toISOString()
+        completedAt: finishTimeIso,
+        durationMs: calcDurationMs
       };
 
       // Remove from active testRuns, add to archivedRuns

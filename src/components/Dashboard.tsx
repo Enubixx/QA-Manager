@@ -435,17 +435,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
         let durationMs = run.durationMs || 0;
         if (!durationMs) {
-          let startMs = run.startedAt ? new Date(run.startedAt).getTime() : 0;
-          let endMs = (isCompleted && run.completedAt) ? new Date(run.completedAt).getTime() : Date.now();
+          const startMs = run.startedAt ? new Date(run.startedAt).getTime() : 0;
+          const endMs = (isCompleted && run.completedAt) ? new Date(run.completedAt).getTime() : Date.now();
 
-          if (stepTimestamps.length > 0) {
+          if (startMs > 0 && endMs > startMs) {
+            durationMs = endMs - startMs;
+          } else if (stepTimestamps.length > 0) {
             const minStepTime = Math.min(...stepTimestamps);
             const maxStepTime = Math.max(...stepTimestamps);
-            if (!startMs || startMs > minStepTime) startMs = minStepTime;
-            if (isCompleted && (!run.completedAt || endMs < maxStepTime)) endMs = maxStepTime;
+            if (maxStepTime > minStepTime) {
+              durationMs = maxStepTime - minStepTime;
+            }
           }
-
-          durationMs = (startMs > 0 && endMs >= startMs) ? (endMs - startMs) : 0;
         }
 
         const durationSecs = Math.max(1, Math.round(durationMs / 1000));
