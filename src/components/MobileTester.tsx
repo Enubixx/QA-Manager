@@ -46,22 +46,24 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   const deviceId = getDeviceId();
 
-  // Find active run specifically for THIS device & plan
+  // Find active run specifically for THIS device & plan (must NOT be already completed)
   let activeRun = testRuns.find(r => 
     r.planId === currentPlan?.id && 
-    (r.deviceId === deviceId || r.id.endsWith(deviceId) || r.id === `run-${currentPlan?.id}-${deviceId}`)
+    r.status !== 'completed' &&
+    (r.deviceId === deviceId || r.id.includes(deviceId))
   );
 
-  // Fallback: check if an unassigned run matching legacy ID exists
+  // Fallback: check if an unassigned active run matching legacy ID exists
   if (!activeRun && currentPlan) {
-    activeRun = testRuns.find(r => r.id === 'run-' + currentPlan.id);
+    activeRun = testRuns.find(r => r.id === 'run-' + currentPlan.id && r.status !== 'completed');
   }
 
   if (!activeRun && currentPlan) {
     const savedName = localStorage.getItem('qa_tester_name') || '';
     const savedDevice = localStorage.getItem('qa_device_name') || '';
+    const uniqueSuffix = Date.now().toString(36);
     activeRun = {
-      id: `run-${currentPlan.id}-${deviceId}`,
+      id: `run-${currentPlan.id}-${deviceId}-${uniqueSuffix}`,
       planId: currentPlan.id,
       planName: currentPlan.name,
       deviceId: deviceId,

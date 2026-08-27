@@ -374,7 +374,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   // Compute QA Status metrics for individual tester profiles & daily tracking
   const testerProfilesMap = useMemo(() => {
-    const combinedRuns = [...archivedRuns, ...testRuns];
+    const runsMap = new Map<string, TestRun>();
+    [...archivedRuns, ...testRuns].forEach(r => {
+      if (r && r.id) runsMap.set(r.id, r);
+    });
+    const combinedRuns = Array.from(runsMap.values());
     const map = new Map<string, {
       testerName: string;
       devicesUsed: Set<string>;

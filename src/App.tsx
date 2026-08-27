@@ -444,18 +444,40 @@ export function App() {
   };
 
   const handleRestartRun = (runIdOrPlanId: string) => {
-    setTestRuns(prev => prev.map(r => {
-      if (r.id === runIdOrPlanId || r.planId === runIdOrPlanId) {
-        return {
-          ...r,
-          currentStepIndex: 0,
+    setTestRuns(prev => {
+      const targetRun = prev.find(r => r.id === runIdOrPlanId || (r.planId === runIdOrPlanId && r.status !== 'completed'));
+      if (!targetRun) return prev;
+
+      if (targetRun.status === 'completed') {
+        const newRun: TestRun = {
+          ...targetRun,
+          id: `run-${targetRun.planId}-${targetRun.deviceId || 'dev'}-${Date.now().toString(36)}`,
           status: 'in_progress',
+          currentStepIndex: 0,
           results: {},
+          completedAt: undefined,
           startedAt: new Date().toISOString()
         };
+        syncTestRunToSupabase(newRun);
+        return [newRun, ...prev];
       }
-      return r;
-    }));
+
+      const updated = prev.map(r => {
+        if (r.id === targetRun.id) {
+          const resetRun = {
+            ...r,
+            currentStepIndex: 0,
+            status: 'in_progress' as const,
+            results: {},
+            startedAt: new Date().toISOString()
+          };
+          syncTestRunToSupabase(resetRun);
+          return resetRun;
+        }
+        return r;
+      });
+      return updated;
+    });
   };
 
   const handleOpenMobileView = (planId?: string) => {
