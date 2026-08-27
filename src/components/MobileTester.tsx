@@ -221,9 +221,17 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       }
     }
 
+    const finalResults = {
+      ...updatedResults,
+      _meta: {
+        startedAt: activeRun.startedAt || isoTimestamp,
+        durationMs: isDone ? computedDurationMs : activeRun.durationMs
+      }
+    };
+
     const updatedRun: TestRun = {
       ...activeRun,
-      results: updatedResults,
+      results: finalResults as any,
       currentStepIndex: nextIndex,
       status: isDone ? 'completed' : 'in_progress',
       completedAt: isDone ? isoTimestamp : undefined,

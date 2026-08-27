@@ -426,8 +426,17 @@ export function App() {
       const endMs = new Date(finishTimeIso).getTime();
       const calcDurationMs = (startMs > 0 && endMs > startMs) ? (endMs - startMs) : updatedRun.durationMs;
 
+      const finalResults = {
+        ...(updatedRun.results || {}),
+        _meta: {
+          startedAt: updatedRun.startedAt || new Date().toISOString(),
+          durationMs: calcDurationMs
+        }
+      };
+
       const completedRun: TestRun = {
         ...updatedRun,
+        results: finalResults as any,
         status: 'completed',
         completedAt: finishTimeIso,
         durationMs: calcDurationMs
