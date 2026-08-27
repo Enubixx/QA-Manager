@@ -55,17 +55,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     (r.deviceId === deviceId || r.id.includes(deviceId))
   );
 
-  // Fallback 1: check if an unassigned active run matching legacy ID exists
+  // Fallback: check if an unassigned active run matching legacy ID exists
   if (!activeRun && currentPlan) {
     activeRun = testRuns.find(r => r.id === 'run-' + currentPlan.id && r.status !== 'completed');
-  }
-
-  // Fallback 2: check if there is a recently completed run for this plan & device
-  if (!activeRun && currentPlan) {
-    activeRun = archivedRuns.find(r => 
-      r.planId === currentPlan.id && 
-      (r.deviceId === deviceId || r.id.includes(deviceId))
-    );
   }
 
   if (!activeRun && currentPlan) {
@@ -102,7 +94,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   const currentStepIndex = activeRun?.currentStepIndex || 0;
   const currentStep = steps[currentStepIndex];
   const totalSteps = steps.length;
-  const isCompleted = (activeRun?.status === 'completed' || currentStepIndex >= totalSteps) && totalSteps > 0;
+  
+  // Explicit state for completion summary view
+  const [completedRunSummary, setCompletedRunSummary] = useState<TestRun | null>(null);
+  const isCompleted = completedRunSummary !== null || ((activeRun?.status === 'completed' || currentStepIndex >= totalSteps) && totalSteps > 0 && activeRun?.status !== 'not_started');
 
   // Selected Status for current step
   const [selectedStatus, setSelectedStatus] = useState<'green' | 'yellow' | 'red' | null>(null);
@@ -216,6 +211,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       status: isDone ? 'completed' : 'in_progress',
       completedAt: isDone ? isoTimestamp : undefined
     };
+
+    if (isDone) {
+      setCompletedRunSummary(updatedRun);
+    }
 
     onUpdateRun(updatedRun);
     setSelectedStatus(null);
@@ -462,6 +461,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 <select
                   value={currentPlan?.id || ''}
                   onChange={e => {
+                    setCompletedRunSummary(null);
                     setSelectedStatus(null);
                     onSelectPlan(e.target.value);
                     setShowSetupModal(true);
@@ -828,6 +828,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               <button
                 type="button"
                 onClick={() => {
+                  setCompletedRunSummary(null);
                   setSelectedStatus(null);
                   const savedName = localStorage.getItem('qa_tester_name') || activeRun?.testerName || '';
                   const savedDevice = localStorage.getItem('qa_device_name') || activeRun?.deviceName || '';
