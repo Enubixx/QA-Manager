@@ -433,19 +433,22 @@ export const Dashboard: React.FC<DashboardProps> = ({
           .map(r => r.timestamp ? new Date(r.timestamp).getTime() : NaN)
           .filter(t => !isNaN(t));
 
-        let startMs = run.startedAt ? new Date(run.startedAt).getTime() : 0;
-        let endMs = (isCompleted && run.completedAt) ? new Date(run.completedAt).getTime() : Date.now();
+        let durationMs = run.durationMs || 0;
+        if (!durationMs) {
+          let startMs = run.startedAt ? new Date(run.startedAt).getTime() : 0;
+          let endMs = (isCompleted && run.completedAt) ? new Date(run.completedAt).getTime() : Date.now();
 
-        if (stepTimestamps.length > 0) {
-          const minStepTime = Math.min(...stepTimestamps);
-          const maxStepTime = Math.max(...stepTimestamps);
-          if (!startMs || startMs > minStepTime) startMs = minStepTime;
-          if (isCompleted && (!run.completedAt || endMs < maxStepTime)) endMs = maxStepTime;
+          if (stepTimestamps.length > 0) {
+            const minStepTime = Math.min(...stepTimestamps);
+            const maxStepTime = Math.max(...stepTimestamps);
+            if (!startMs || startMs > minStepTime) startMs = minStepTime;
+            if (isCompleted && (!run.completedAt || endMs < maxStepTime)) endMs = maxStepTime;
+          }
+
+          durationMs = (startMs > 0 && endMs >= startMs) ? (endMs - startMs) : 0;
         }
 
-        let durationMs = (startMs > 0 && endMs >= startMs) ? (endMs - startMs) : 0;
         const durationSecs = Math.max(1, Math.round(durationMs / 1000));
-
         const mins = Math.floor(durationSecs / 60);
         const secs = durationSecs % 60;
         const durationFormatted = mins > 0 

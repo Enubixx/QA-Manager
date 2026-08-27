@@ -49,6 +49,7 @@ export const fetchAllSupabaseData = async () => {
         bugLogs: item.bug_logs || [],
         startedAt: getStartedAtFromItem(item) || new Date().toISOString(),
         completedAt: item.completed_at,
+        durationMs: item.duration_ms || item.durationMs,
       };
     });
 
@@ -67,6 +68,7 @@ export const fetchAllSupabaseData = async () => {
         bugLogs: item.bug_logs || [],
         startedAt: getStartedAtFromItem(item) || new Date().toISOString(),
         completedAt: item.completed_at,
+        durationMs: item.duration_ms || item.durationMs,
       };
     });
 

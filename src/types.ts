@@ -51,4 +51,5 @@ export interface TestRun {
   bugLogs: BugLog[];
   startedAt: string;
   completedAt?: string;
+  durationMs?: number;
 }

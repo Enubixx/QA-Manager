@@ -205,12 +205,29 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     const nextIndex = currentStepIndex + 1;
     const isDone = nextIndex >= totalSteps;
 
+    let computedDurationMs: number | undefined = undefined;
+    if (isDone) {
+      const startMs = activeRun.startedAt ? new Date(activeRun.startedAt).getTime() : 0;
+      const endMs = new Date(isoTimestamp).getTime();
+      if (startMs > 0 && endMs > startMs) {
+        computedDurationMs = endMs - startMs;
+      } else {
+        const stepTs = Object.values(updatedResults)
+          .map(r => r.timestamp ? new Date(r.timestamp).getTime() : NaN)
+          .filter(t => !isNaN(t));
+        if (stepTs.length > 0) {
+          computedDurationMs = Math.max(1000, Math.max(...stepTs) - Math.min(...stepTs));
+        }
+      }
+    }
+
     const updatedRun: TestRun = {
       ...activeRun,
       results: updatedResults,
       currentStepIndex: nextIndex,
       status: isDone ? 'completed' : 'in_progress',
-      completedAt: isDone ? isoTimestamp : undefined
+      completedAt: isDone ? isoTimestamp : undefined,
+      durationMs: isDone ? computedDurationMs : activeRun.durationMs
     };
 
     if (isDone) {
