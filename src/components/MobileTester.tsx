@@ -274,14 +274,36 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   const isDesktop = typeof window !== 'undefined' && window.innerWidth >= 768;
 
+  // Capacitor Android Hardware Back Button listener
+  useEffect(() => {
+    let sub: any = null;
+    import('@capacitor/app').then(({ App: CapApp }) => {
+      CapApp.addListener('backButton', () => {
+        if (showBugModal) {
+          setShowBugModal(false);
+        } else if (showSetupModal) {
+          if (onNavigateToDashboard) onNavigateToDashboard();
+        } else if (onNavigateToDashboard) {
+          onNavigateToDashboard();
+        }
+      }).then(s => { sub = s; });
+    }).catch(err => {
+      console.log('Capacitor App plugin not running in web preview context', err);
+    });
+
+    return () => {
+      if (sub && typeof sub.remove === 'function') sub.remove();
+    };
+  }, [showBugModal, showSetupModal, onNavigateToDashboard]);
+
   return (
-    <div className={isDesktop ? "py-6 px-4 max-w-md mx-auto" : "w-full min-h-screen bg-slate-950 flex flex-col"}>
+    <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 p-0 sm:p-6 select-none font-sans relative">
       
-      {/* Top Computer Navigation Bar (ONLY rendered when viewing on desktop/computer) */}
+      {/* Back to Dashboard Navigation Button (Desktop mode top banner) */}
       {isDesktop && onNavigateToDashboard && (
-        <div className="w-full mb-4 flex justify-between items-center bg-slate-900/90 border border-slate-800 px-4 py-2.5 rounded-2xl shadow-xl backdrop-blur-md">
-          <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-            📱 Mobile Tester Mode
+        <div className="w-full max-w-sm flex items-center justify-between mb-4 px-2">
+          <span className="text-xs text-slate-400 font-mono flex items-center gap-1.5">
+            <Smartphone className="w-3.5 h-3.5 text-indigo-400" /> Mobile Tester Simulator
           </span>
           <button
             type="button"
@@ -302,6 +324,16 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         {/* Top Phone Status Bar */}
         <div className="bg-slate-950/90 backdrop-blur-md px-4 py-3 flex items-center justify-between border-b border-white/10 text-[11px] text-slate-400 font-mono">
           <div className="flex items-center gap-2">
+            {onNavigateToDashboard && (
+              <button
+                type="button"
+                onClick={onNavigateToDashboard}
+                className="px-2.5 py-1 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-400/40 rounded-xl text-xs font-extrabold flex items-center gap-1 transition shadow-sm active:scale-95 cursor-pointer mr-1"
+                title="Exit Field QA session and return to Manager Dashboard"
+              >
+                <span>← Dashboard</span>
+              </button>
+            )}
             <span className="flex items-center gap-1.5 font-sans font-extrabold text-white text-xs">
               <Smartphone className="w-4 h-4 text-indigo-400" />
               Field QA Tester
