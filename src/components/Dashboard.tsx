@@ -60,6 +60,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [activeTab, setActiveTab] = useState<'overview' | 'qa-status' | 'features' | 'bugs'>('overview');
   const [activeKpiCard, setActiveKpiCard] = useState<'plans' | 'features' | 'runs' | 'bugs'>('plans');
   const [selectedQaDate, setSelectedQaDate] = useState<string>(defaultTodayStr);
+  const [expandedTesters, setExpandedTesters] = useState<Record<string, boolean>>({});
+
+  const toggleTesterExpand = (testerName: string) => {
+    setExpandedTesters(prev => ({
+      ...prev,
+      [testerName]: !prev[testerName]
+    }));
+  };
 
   // Search & Filter State
   const [searchBugQuery, setSearchBugQuery] = useState<string>('');
@@ -1122,31 +1130,53 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 const avgSecs = Math.floor((avgMs % 60000) / 1000);
                 const avgFormatted = avgMs > 0 ? `${avgMins}m ${avgSecs < 10 ? '0' : ''}${avgSecs}s` : 'N/A';
 
+                const isExpanded = !!expandedTesters[profile.testerName];
+
                 return (
-                  <div key={profile.testerName} className="liquid-glass-panel rounded-3xl p-6 space-y-5 shadow-2xl border-white/10 relative overflow-hidden">
+                  <div key={profile.testerName} className="liquid-glass-panel rounded-2xl p-4 shadow-xl border-white/10 transition-all duration-300">
                     
-                    {/* Profile Header */}
-                    <div className="flex items-start justify-between gap-4 pb-4 border-b border-white/10">
-                      <div className="flex items-center gap-3">
-                        <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white font-extrabold flex items-center justify-center text-lg shadow-lg shadow-emerald-500/25 border border-white/20">
+                    {/* Compact Tester Header Row */}
+                    <div className="flex items-center justify-between gap-3">
+                      
+                      {/* Left: Avatar + Name + Device */}
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white font-extrabold flex items-center justify-center text-sm shadow-md border border-white/20 flex-shrink-0">
                           {profile.testerName.charAt(0).toUpperCase()}
                         </div>
-                        <div>
-                          <h4 className="text-base font-bold text-white flex items-center gap-2">
+                        <div className="truncate">
+                          <h4 className="text-sm font-bold text-white truncate flex items-center gap-1.5">
                             <span>{profile.testerName}</span>
-                            <span className="text-[10px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold">QA Tester</span>
+                            <span className="text-[10px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.2 rounded-full font-semibold">QA</span>
                           </h4>
-                          <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-400">
-                            <span className="flex items-center gap-1 font-mono">
-                              <Smartphone className="w-3 h-3 text-purple-400" />
-                              {Array.from(profile.devicesUsed).join(', ') || 'Mobile Device'}
-                            </span>
+                          <div className="text-[10px] text-slate-400 font-mono truncate">
+                            {Array.from(profile.devicesUsed).join(', ') || 'Mobile Device'}
                           </div>
                         </div>
                       </div>
 
-                      {/* Delete Tester Profile Button */}
-                      <div>
+                      {/* Middle: Compact Day Stats */}
+                      <div className="flex items-center gap-3 text-xs font-mono">
+                        <div className="text-right hidden sm:block">
+                          <span className="text-[9px] uppercase text-slate-400 block">Finished</span>
+                          <span className="font-extrabold text-emerald-300">{dayData.completedCount} Plans</span>
+                        </div>
+                        <div className="text-right hidden sm:block">
+                          <span className="text-[9px] uppercase text-slate-400 block">Avg Time</span>
+                          <span className="font-extrabold text-indigo-300">{avgFormatted}</span>
+                        </div>
+                      </div>
+
+                      {/* Right: Expand Accordion Chevron & Delete Actions */}
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => toggleTesterExpand(profile.testerName)}
+                          className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl border border-slate-700 text-xs font-semibold transition-all flex items-center gap-1"
+                        >
+                          <span>{isExpanded ? 'Hide' : 'Details'}</span>
+                          {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                        </button>
+
                         {onDeleteTestRun && (
                           <button
                             type="button"
@@ -1156,95 +1186,88 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 runsToDelete.forEach(r => onDeleteTestRun(r.id));
                               }
                             }}
-                            className="p-2 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 border border-slate-800 hover:border-rose-500/30 rounded-xl transition-all"
+                            className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 border border-slate-800 hover:border-rose-500/30 rounded-xl transition-all"
                             title={`Delete all QA performance data for ${profile.testerName}`}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         )}
                       </div>
+
                     </div>
 
-                    {/* Today / Selected Day Key Stats */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-white/10 space-y-1">
-                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                          Plans Finished ({selectedQaDate === todayStr ? 'Today' : selectedQaDate})
+                    {/* Accordion Expandable Details Section */}
+                    {isExpanded && (
+                      <div className="mt-4 pt-3 border-t border-white/10 space-y-3">
+                        {/* Day Key Stats Summary for Mobile */}
+                        <div className="grid grid-cols-2 gap-2 sm:hidden text-xs">
+                          <div className="bg-slate-950/60 p-2.5 rounded-xl border border-white/10">
+                            <span className="text-[10px] text-slate-400 block font-bold uppercase">Finished</span>
+                            <span className="text-base font-extrabold text-emerald-300 font-mono">{dayData.completedCount} Plans</span>
+                          </div>
+                          <div className="bg-slate-950/60 p-2.5 rounded-xl border border-white/10">
+                            <span className="text-[10px] text-slate-400 block font-bold uppercase">Avg Time</span>
+                            <span className="text-base font-extrabold text-indigo-300 font-mono">{avgFormatted}</span>
+                          </div>
                         </div>
-                        <div className="text-xl font-black text-white font-mono">{dayData.completedCount}</div>
-                      </div>
 
-                      <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-white/10 space-y-1">
-                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
-                          <Timer className="w-3 h-3 text-indigo-400" />
-                          Avg Completion Time
+                        <div className="text-xs font-bold text-slate-300 flex items-center justify-between">
+                          <span>Completed Test Plans Breakdown ({selectedQaDate === todayStr ? 'Today' : selectedQaDate}):</span>
+                          <span className="text-[10px] text-slate-400 font-mono">{completedRunsList.length} executed</span>
                         </div>
-                        <div className="text-xl font-black text-indigo-300 font-mono">{avgFormatted}</div>
-                      </div>
-                    </div>
 
-                    {/* Completed Plans Breakdown Table for this Tester */}
-                    <div className="space-y-2 pt-1">
-                      <div className="text-xs font-bold text-slate-300 flex items-center justify-between">
-                        <span>Completed Test Plans Breakdown:</span>
-                        <span className="text-[10px] text-slate-400 font-mono">{completedRunsList.length} executed</span>
-                      </div>
+                        {completedRunsList.length === 0 ? (
+                          <div className="bg-slate-950/40 p-3 rounded-xl text-center text-xs text-slate-500 font-medium">
+                            No test plans completed on {selectedQaDate === todayStr ? 'today' : selectedQaDate}.
+                          </div>
+                        ) : (
+                          <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                            {completedRunsList.map((runItem, idx) => (
+                              <div key={runItem.runId + idx} className="bg-slate-950/80 p-2.5 rounded-xl border border-white/10 flex items-center justify-between text-xs space-x-2">
+                                <div className="truncate flex-1">
+                                  <div className="font-bold text-slate-200 truncate">{runItem.planName}</div>
+                                  <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
+                                    <span className="text-purple-300 font-mono flex items-center gap-1">
+                                      <Smartphone className="w-2.5 h-2.5" /> {runItem.deviceName}
+                                    </span>
+                                    <span>•</span>
+                                    <span className="font-mono text-slate-400">{runItem.completedAtFormatted}</span>
+                                  </div>
+                                </div>
 
-                      {completedRunsList.length === 0 ? (
-                        <div className="bg-slate-950/40 p-4 rounded-2xl text-center text-xs text-slate-500 font-medium">
-                          No test plans completed on {selectedQaDate === todayStr ? 'today' : selectedQaDate}.
-                        </div>
-                      ) : (
-                        <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                          {completedRunsList.map((runItem, idx) => (
-                            <div key={runItem.runId + idx} className="bg-slate-950/80 p-3 rounded-2xl border border-white/10 flex items-center justify-between text-xs space-x-2">
-                              <div className="truncate flex-1">
-                                <div className="font-bold text-slate-200 truncate">{runItem.planName}</div>
-                                <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
-                                  <span className="text-purple-300 font-mono flex items-center gap-1">
-                                    <Smartphone className="w-2.5 h-2.5" /> {runItem.deviceName}
-                                  </span>
-                                  <span>•</span>
-                                  <span className="font-mono text-slate-400">{runItem.completedAtFormatted}</span>
+                                <div className="flex items-center gap-2">
+                                  <div className="bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-lg font-mono text-[10px] font-extrabold flex items-center gap-1">
+                                    <Clock className="w-3 h-3 text-indigo-400" />
+                                    <span>{runItem.durationFormatted}</span>
+                                  </div>
+
+                                  <div className="flex items-center gap-1 text-[10px] font-mono">
+                                    <span className="text-emerald-400 font-bold">✓{runItem.greenCount}</span>
+                                    {runItem.yellowCount > 0 && <span className="text-amber-400 font-bold">!{runItem.yellowCount}</span>}
+                                    {runItem.redCount > 0 && <span className="text-rose-400 font-bold">✗{runItem.redCount}</span>}
+                                  </div>
+
+                                  {onDeleteTestRun && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (confirm(`Delete run record for "${runItem.planName}"?`)) {
+                                          onDeleteTestRun(runItem.runId);
+                                        }
+                                      }}
+                                      className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors ml-1"
+                                      title="Delete this test run record"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  )}
                                 </div>
                               </div>
-
-                              <div className="flex items-center gap-2">
-                                {/* Duration Badge */}
-                                <div className="bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 px-2.5 py-1 rounded-xl font-mono text-[11px] font-extrabold flex items-center gap-1">
-                                  <Clock className="w-3 h-3 text-indigo-400" />
-                                  <span>{runItem.durationFormatted}</span>
-                                </div>
-
-                                {/* Results pill */}
-                                <div className="flex items-center gap-1 text-[10px] font-mono">
-                                  <span className="text-emerald-400 font-bold">✓{runItem.greenCount}</span>
-                                  {runItem.yellowCount > 0 && <span className="text-amber-400 font-bold">!{runItem.yellowCount}</span>}
-                                  {runItem.redCount > 0 && <span className="text-rose-400 font-bold">✗{runItem.redCount}</span>}
-                                </div>
-
-                                {/* Delete Run Action */}
-                                {onDeleteTestRun && (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      if (confirm(`Delete run record for "${runItem.planName}"?`)) {
-                                        onDeleteTestRun(runItem.runId);
-                                      }
-                                    }}
-                                    className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors ml-1"
-                                    title="Delete this test run record"
-                                  >
-                                    <Trash2 className="w-3 h-3" />
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                   </div>
                 );
