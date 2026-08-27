@@ -333,12 +333,13 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     }
   }, [testRuns, archivedRuns, activeRunIdBeingTested, activeTesterNameBeingTested, showSetupModal, isCompleted]);
 
-  // Auto-kick user to setup screen if active run or plan gets deleted
+  // Auto-kick user to setup screen if active run or plan gets deleted (bypassed if test plan is completed)
   useEffect(() => {
+    if (completedRunSummary || isCompleted) return;
     if (!currentPlan || !activeRun?.testerName || !activeRun?.deviceName) {
       setShowSetupModal(true);
     }
-  }, [currentPlan, activeRun?.testerName, activeRun?.deviceName]);
+  }, [currentPlan, activeRun?.testerName, activeRun?.deviceName, completedRunSummary, isCompleted]);
 
   // Submit Bug ONLY
   const handleReportBugSubmit = (e: React.FormEvent) => {

@@ -1193,15 +1193,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         </div>
                       </div>
 
-                      {/* Middle: Compact Day Stats (Plans Finished & Avg Time) */}
+                      {/* Middle: Compact Day Stats (Plans Finished) */}
                       <div className="flex items-center gap-4 text-xs font-mono">
                         <div className="text-right hidden sm:block">
                           <span className="text-[9px] uppercase text-slate-400 block">Finished</span>
                           <span className="font-extrabold text-emerald-300">{dayData.completedCount} Plans</span>
-                        </div>
-                        <div className="text-right hidden sm:block">
-                          <span className="text-[9px] uppercase text-slate-400 block">Avg Time</span>
-                          <span className="font-extrabold text-indigo-300">{avgFormatted}</span>
                         </div>
                       </div>
 
