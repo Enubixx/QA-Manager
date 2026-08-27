@@ -778,98 +778,124 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           </div>
         ) : (
           /* Completion Summary View (Liquid Glass Style) */
-          <div className="p-6 flex-1 flex flex-col justify-between items-center text-center space-y-4 overflow-y-auto max-h-[580px]">
-            
-            <div className="space-y-2">
-              <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/40 shadow-xl mx-auto backdrop-blur-md">
-                <Check className="w-6 h-6" />
-              </div>
-              <h3 className="text-lg font-extrabold text-white tracking-tight">Test Plan Completed!</h3>
-              <p className="text-xs text-slate-300 max-w-xs font-medium">
-                All steps in "{currentPlan?.name}" have been executed.
-              </p>
-            </div>
+          (() => {
+            const summaryRun = completedRunSummary || activeRun;
+            const summaryResults = summaryRun?.results || {};
+            const summaryResultsArray = Object.values(summaryResults);
+            const summaryGreen = summaryResultsArray.filter(r => r.status === 'green').length;
+            const summaryYellow = summaryResultsArray.filter(r => r.status === 'yellow').length;
+            const summaryRed = summaryResultsArray.filter(r => r.status === 'red').length;
 
-            {/* Results breakdown */}
-            <div className="w-full liquid-glass-panel rounded-2xl p-4 space-y-2 text-xs border-white/10">
-              <div className="font-bold text-white flex items-center justify-between border-b border-white/10 pb-2">
-                <span>Total Steps Executed</span>
-                <span className="font-mono text-indigo-300">{totalSteps}</span>
-              </div>
-              <div className="flex justify-between text-slate-300">
-                <span>Reporter Name:</span>
-                <span className="text-white font-bold">{activeRun?.testerName || 'Field Tester'}</span>
-              </div>
-              <div className="flex justify-between text-slate-300">
-                <span>Device Model:</span>
-                <span className="text-purple-300 font-mono font-bold">{activeRun?.deviceName || 'N/A'}</span>
-              </div>
-              <div className="flex justify-between text-emerald-300 pt-1.5 border-t border-white/10 font-semibold">
-                <span className="flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Green (Pass):</span>
-                <span className="font-mono font-bold">{Object.values(activeRun?.results || {}).filter(r => r.status === 'green').length}</span>
-              </div>
-              <div className="flex justify-between text-amber-300 font-semibold">
-                <span className="flex items-center gap-1"><AlertTriangle className="w-3.5 h-3.5 text-amber-400" /> Yellow (Caution):</span>
-                <span className="font-mono font-bold">{Object.values(activeRun?.results || {}).filter(r => r.status === 'yellow').length}</span>
-              </div>
-              <div className="flex justify-between text-rose-300 font-semibold">
-                <span className="flex items-center gap-1"><XCircle className="w-3.5 h-3.5 text-rose-400" /> Red (Fail):</span>
-                <span className="font-mono font-bold">{Object.values(activeRun?.results || {}).filter(r => r.status === 'red').length}</span>
-              </div>
-            </div>
+            const startMs = summaryRun?.startedAt ? new Date(summaryRun.startedAt).getTime() : 0;
+            const endMs = summaryRun?.completedAt ? new Date(summaryRun.completedAt).getTime() : Date.now();
+            const durationSecs = (startMs > 0 && endMs > startMs) ? Math.max(1, Math.round((endMs - startMs) / 1000)) : 0;
+            const durationFormatted = durationSecs >= 60 
+              ? `${Math.floor(durationSecs / 60)}m ${durationSecs % 60 < 10 ? '0' : ''}${durationSecs % 60}s`
+              : `${durationSecs}s`;
 
-            {/* Logged Bugs List */}
-            {activeRun?.bugLogs && activeRun.bugLogs.length > 0 && (
-              <div className="w-full liquid-glass-card rounded-2xl p-3.5 text-xs space-y-2 text-left border-white/15">
-                <div className="font-bold text-rose-300 flex items-center justify-between pb-1.5 border-b border-white/10">
-                  <span>Logged Bugs ({activeRun.bugLogs.length}):</span>
-                  <span className="text-[10px] text-slate-400">Tap trash to delete</span>
+            const bugLogsList = summaryRun?.bugLogs || [];
+
+            return (
+              <div className="p-6 flex-1 flex flex-col justify-between items-center text-center space-y-4 overflow-y-auto max-h-[580px]">
+                
+                <div className="space-y-2">
+                  <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/40 shadow-xl mx-auto backdrop-blur-md">
+                    <Check className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-lg font-extrabold text-white tracking-tight">Test Plan Completed!</h3>
+                  <p className="text-xs text-slate-300 max-w-xs font-medium">
+                    All steps in "{currentPlan?.name}" have been executed.
+                  </p>
                 </div>
-                <div className="space-y-1.5 max-h-32 overflow-y-auto">
-                  {activeRun.bugLogs.map(bug => (
-                    <div key={bug.id} className="flex items-center justify-between bg-slate-950/60 p-2 rounded-xl border border-white/10 text-[11px]">
-                      <div className="truncate pr-2">
-                        <span className="font-mono text-purple-300 mr-1 text-[10px]">[{bug.feature || 'General'}]</span>
-                        <span className="text-slate-200">{bug.note}</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => onDeleteBug(bug.id)}
-                        className="text-slate-400 hover:text-rose-400 p-1 flex-shrink-0"
-                        title="Delete Bug Log"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+
+                {/* Results breakdown */}
+                <div className="w-full liquid-glass-panel rounded-2xl p-4 space-y-2 text-xs border-white/10">
+                  <div className="font-bold text-white flex items-center justify-between border-b border-white/10 pb-2">
+                    <span>Total Steps Executed</span>
+                    <span className="font-mono text-indigo-300">{summaryResultsArray.length || totalSteps}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-300">
+                    <span>Reporter Name:</span>
+                    <span className="text-white font-bold">{summaryRun?.testerName || inputReporterName || 'Field Tester'}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-300">
+                    <span>Device Model:</span>
+                    <span className="text-purple-300 font-mono font-bold">{summaryRun?.deviceName || inputDeviceName || 'N/A'}</span>
+                  </div>
+                  {durationSecs > 0 && (
+                    <div className="flex justify-between text-slate-300">
+                      <span>Total Duration:</span>
+                      <span className="text-indigo-300 font-mono font-bold">{durationFormatted}</span>
                     </div>
-                  ))}
+                  )}
+                  <div className="flex justify-between text-emerald-300 pt-1.5 border-t border-white/10 font-semibold">
+                    <span className="flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Green (Pass):</span>
+                    <span className="font-mono font-bold">{summaryGreen}</span>
+                  </div>
+                  <div className="flex justify-between text-amber-300 font-semibold">
+                    <span className="flex items-center gap-1"><AlertTriangle className="w-3.5 h-3.5 text-amber-400" /> Yellow (Caution):</span>
+                    <span className="font-mono font-bold">{summaryYellow}</span>
+                  </div>
+                  <div className="flex justify-between text-rose-300 font-semibold">
+                    <span className="flex items-center gap-1"><XCircle className="w-3.5 h-3.5 text-rose-400" /> Red (Fail):</span>
+                    <span className="font-mono font-bold">{summaryRed}</span>
+                  </div>
                 </div>
+
+                {/* Logged Bugs List */}
+                {bugLogsList.length > 0 && (
+                  <div className="w-full liquid-glass-card rounded-2xl p-3.5 text-xs space-y-2 text-left border-white/15">
+                    <div className="font-bold text-rose-300 flex items-center justify-between pb-1.5 border-b border-white/10">
+                      <span>Logged Bugs ({bugLogsList.length}):</span>
+                      <span className="text-[10px] text-slate-400">Tap trash to delete</span>
+                    </div>
+                    <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                      {bugLogsList.map(bug => (
+                        <div key={bug.id} className="flex items-center justify-between bg-slate-950/60 p-2 rounded-xl border border-white/10 text-[11px]">
+                          <div className="truncate pr-2">
+                            <span className="font-mono text-purple-300 mr-1 text-[10px]">[{bug.feature || 'General'}]</span>
+                            <span className="text-slate-200">{bug.note}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => onDeleteBug(bug.id)}
+                            className="text-slate-400 hover:text-rose-400 p-1 flex-shrink-0"
+                            title="Delete Bug Log"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Test Again Action */}
+                <div className="w-full pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCompletedRunSummary(null);
+                      setSelectedStatus(null);
+                      const savedName = localStorage.getItem('qa_tester_name') || activeRun?.testerName || '';
+                      const savedDevice = localStorage.getItem('qa_device_name') || activeRun?.deviceName || '';
+                      if (savedName) setInputReporterName(savedName);
+                      if (savedDevice) setInputDeviceName(savedDevice);
+                      if (currentPlan) {
+                        onRestartRun(currentPlan.id);
+                      }
+                      setShowSetupModal(true);
+                    }}
+                    className="w-full py-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-extrabold text-xs rounded-2xl flex items-center justify-center gap-2 transition-all shadow-xl shadow-indigo-500/25 border border-white/20 hover:scale-[1.01] active:scale-[0.99]"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    <span>Test Again</span>
+                  </button>
+                </div>
+
               </div>
-            )}
-
-            {/* Test Again Action */}
-            <div className="w-full pt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setCompletedRunSummary(null);
-                  setSelectedStatus(null);
-                  const savedName = localStorage.getItem('qa_tester_name') || activeRun?.testerName || '';
-                  const savedDevice = localStorage.getItem('qa_device_name') || activeRun?.deviceName || '';
-                  if (savedName) setInputReporterName(savedName);
-                  if (savedDevice) setInputDeviceName(savedDevice);
-                  if (currentPlan) {
-                    onRestartRun(currentPlan.id);
-                  }
-                  setShowSetupModal(true);
-                }}
-                className="w-full py-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-extrabold text-xs rounded-2xl flex items-center justify-center gap-2 transition-all shadow-xl shadow-indigo-500/25 border border-white/20 hover:scale-[1.01] active:scale-[0.99]"
-              >
-                <RefreshCw className="w-4 h-4" />
-                <span>Test Again</span>
-              </button>
-            </div>
-
-          </div>
+            );
+          })()
         )}
 
         {/* Admin Boot Termination Modal */}
