@@ -7,6 +7,7 @@ import { exportTestRunToCSV } from '../utils/exportUtils';
 interface MobileTesterProps {
   testPlans: TestPlan[];
   testRuns: TestRun[];
+  archivedRuns?: TestRun[];
   selectedPlanId: string;
   populatedDevices: string[];
   onAddPopulatedDevice: (device: string) => void;
@@ -21,6 +22,7 @@ interface MobileTesterProps {
 export const MobileTester: React.FC<MobileTesterProps> = ({
   testPlans,
   testRuns,
+  archivedRuns = [],
   selectedPlanId,
   populatedDevices,
   onAddPopulatedDevice,
@@ -263,16 +265,24 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   }, [showSetupModal, activeRun, isCompleted]);
 
   useEffect(() => {
-    // Only check for admin boot if the run was in progress and NOT completed naturally
-    if (wasExecuting && activeRun && activeRun.status !== 'completed' && !isCompleted) {
-      const existsInState = testRuns.some(r => r.id === activeRun.id || r.id.includes(deviceId));
-      if (!existsInState) {
-        setBootMessage(`⚠️ Session Terminated: An administrator has booted your QA session from the manager dashboard.`);
-        setShowSetupModal(true);
-        setWasExecuting(false);
-      }
+    if (!wasExecuting || !activeRun) return;
+
+    // If the run has completed or is in archived list, NEVER trigger termination popup
+    if (activeRun.status === 'completed' || isCompleted) {
+      setWasExecuting(false);
+      setBootMessage(null);
+      return;
     }
-  }, [testRuns, activeRun, wasExecuting, isCompleted, deviceId]);
+
+    const existsInActive = testRuns.some(r => r.id === activeRun.id);
+    const existsInArchived = archivedRuns.some(r => r.id === activeRun.id);
+
+    if (!existsInActive && !existsInArchived) {
+      setBootMessage(`⚠️ Session Terminated: An administrator has booted your QA session from the manager dashboard.`);
+      setShowSetupModal(true);
+      setWasExecuting(false);
+    }
+  }, [testRuns, archivedRuns, activeRun, wasExecuting, isCompleted]);
 
   // Auto-kick user to setup screen if active run or plan gets deleted
   useEffect(() => {

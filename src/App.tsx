@@ -596,6 +596,7 @@ export function App() {
             <MobileTester
               testPlans={testPlans}
               testRuns={testRuns}
+              archivedRuns={archivedRuns}
               selectedPlanId={selectedPlanId}
               populatedDevices={populatedDevices}
               onAddPopulatedDevice={handleAddPopulatedDevice}
