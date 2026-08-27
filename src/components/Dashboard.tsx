@@ -2055,18 +2055,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
       {selectedImagePreviewUrl && (
         <div
           onClick={() => setSelectedImagePreviewUrl(null)}
-          className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-2xl flex flex-col items-center justify-center p-4 sm:p-8 animate-liquid-fade"
+          className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-2xl flex items-center justify-center p-4 sm:p-8 animate-liquid-fade"
         >
           <div
             onClick={e => e.stopPropagation()}
-            className="relative max-w-4xl w-full bg-slate-900/90 border border-white/20 rounded-3xl overflow-hidden shadow-2xl p-4 space-y-4 liquid-glass-panel"
+            className="relative max-w-4xl w-full max-h-[90vh] flex flex-col bg-slate-900/95 border border-white/20 rounded-3xl overflow-hidden shadow-2xl p-4 sm:p-6 liquid-glass-panel"
           >
             {/* Top Bar with Back / Close Button */}
-            <div className="flex items-center justify-between pb-3 border-b border-white/10">
+            <div className="flex items-center justify-between pb-3.5 mb-3 border-b border-white/10 flex-shrink-0">
               <button
                 type="button"
                 onClick={() => setSelectedImagePreviewUrl(null)}
-                className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-md active:scale-95"
+                className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-extrabold transition flex items-center gap-1.5 cursor-pointer shadow-lg active:scale-95"
               >
                 <span>← Back</span>
               </button>
@@ -2076,7 +2076,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectedImagePreviewUrl(null)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-xl bg-slate-800 hover:bg-slate-700 transition cursor-pointer"
+                className="p-2 text-slate-400 hover:text-white rounded-xl bg-slate-800 hover:bg-slate-700 transition cursor-pointer"
                 title="Close Modal"
               >
                 <X className="w-4 h-4" />
@@ -2084,16 +2084,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </div>
 
             {/* Image Display */}
-            <div className="max-h-[75vh] overflow-auto flex justify-center bg-slate-950/80 rounded-2xl p-2 border border-white/10 shadow-inner">
-              <img src={selectedImagePreviewUrl} alt="Evidence" className="max-w-full max-h-[70vh] object-contain rounded-xl shadow-lg" />
+            <div className="flex-1 min-h-0 overflow-hidden flex items-center justify-center bg-slate-950/90 rounded-2xl p-3 border border-white/10 shadow-inner">
+              <img
+                src={selectedImagePreviewUrl}
+                alt="Evidence"
+                className="max-w-full max-h-full object-contain rounded-xl shadow-2xl"
+              />
             </div>
 
             {/* Bottom Bar with Back Button */}
-            <div className="flex justify-end pt-1">
+            <div className="flex justify-between items-center pt-3.5 mt-3 border-t border-white/10 flex-shrink-0">
+              <span className="text-[11px] text-slate-400 font-mono hidden sm:inline">Press Esc or click outside to close</span>
               <button
                 type="button"
                 onClick={() => setSelectedImagePreviewUrl(null)}
-                className="px-5 py-2 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-400 hover:to-indigo-500 text-white text-xs font-extrabold rounded-2xl shadow-lg border border-white/20 transition cursor-pointer active:scale-95"
+                className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-extrabold rounded-2xl shadow border border-white/10 transition cursor-pointer active:scale-95 ml-auto"
               >
                 ← Back to Dashboard
               </button>
