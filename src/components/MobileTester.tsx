@@ -1039,6 +1039,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 boxShadow: '0 20px 40px -10px rgba(0,0,0,0.9)'
               }}
             >
+              <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: 'red', fontSize: '48px', fontWeight: '900', zIndex: 9999, textShadow: '0px 0px 10px black', pointerEvents: 'none' }}>
+                DEBUG FIX IS LIVE
+              </div>
               <img
                 src={previewImageUrl}
                 alt="Evidence Preview"
