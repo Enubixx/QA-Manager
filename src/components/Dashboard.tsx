@@ -111,7 +111,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
     if (run.status === 'completed' || (totalSteps > 0 && completedCount >= totalSteps)) {
       return 'completed';
     }
-    if (run.status === 'not_started' || completedCount === 0 || !run.testerName) {
+    if (run.status === 'in_progress' || (run.testerName && run.deviceName)) {
+      return 'in_progress';
+    }
+    if (run.status === 'not_started' || (!run.testerName && completedCount === 0)) {
       return 'not_started';
     }
     return 'in_progress';
@@ -409,12 +412,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
       if (run.deviceName) profile.devicesUsed.add(run.deviceName);
 
       const effectiveStatus = getEffectiveRunStatus(run);
-      if (effectiveStatus === 'completed') {
-        profile.allTimeCompletedCount++;
+      const isCompleted = effectiveStatus === 'completed';
+      const isInProgress = effectiveStatus === 'in_progress';
 
-        const completedDate = run.completedAt ? new Date(run.completedAt) : new Date();
-        const dateStr = completedDate.toISOString().split('T')[0];
-        const timeFormatted = completedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      if (isCompleted || isInProgress) {
+        if (isCompleted) {
+          profile.allTimeCompletedCount++;
+        }
+
+        const runDate = (isCompleted && run.completedAt) ? new Date(run.completedAt) : (run.startedAt ? new Date(run.startedAt) : new Date());
+        const dateStr = runDate.toISOString().split('T')[0];
+        const timeFormatted = runDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
         const resultsArray = Object.values(run.results || {});
         let durationMs = 0;
@@ -424,7 +432,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             .filter(t => !isNaN(t));
           if (timestamps.length > 0) {
             const minTime = Math.min(...timestamps);
-            const maxTime = Math.max(...timestamps, completedDate.getTime());
+            const maxTime = Math.max(...timestamps, runDate.getTime());
             durationMs = Math.max(15000, maxTime - minTime);
           }
         }
@@ -449,16 +457,19 @@ export const Dashboard: React.FC<DashboardProps> = ({
           };
         }
 
-        profile.dailyStats[dateStr].completedCount++;
-        profile.dailyStats[dateStr].totalDurationMs += durationMs;
+        if (isCompleted) {
+          profile.dailyStats[dateStr].completedCount++;
+          profile.dailyStats[dateStr].totalDurationMs += durationMs;
+        }
+
         profile.dailyStats[dateStr].devicesUsedOnDay.add(deviceNameStr);
         profile.dailyStats[dateStr].completedRuns.push({
           runId: run.id,
           planName: run.planName,
           deviceName: deviceNameStr,
-          completedAtFormatted: timeFormatted,
+          completedAtFormatted: isCompleted ? timeFormatted : `In Progress (${timeFormatted})`,
           durationMs,
-          durationFormatted,
+          durationFormatted: isCompleted ? durationFormatted : 'Active Now',
           greenCount,
           yellowCount,
           redCount
