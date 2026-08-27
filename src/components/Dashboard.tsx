@@ -2065,20 +2065,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
             zIndex: 9999999,
             backgroundColor: 'rgba(2, 6, 23, 0.96)',
             backdropFilter: 'blur(24px)',
-            WebkitBackdropFilter: 'blur(24px)',
-            display: 'grid',
-            gridTemplateRows: 'auto minmax(0, 1fr) auto',
-            gap: '1rem',
-            justifyItems: 'center',
-            padding: '1.25rem',
-            boxSizing: 'border-box'
+            WebkitBackdropFilter: 'blur(24px)'
           }}
         >
           {/* Top Bar - ALWAYS Visible at Top of Screen Viewport */}
           <div
             onClick={e => e.stopPropagation()}
             style={{
-              width: '100%',
+              position: 'absolute',
+              top: '1.25rem',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              width: 'calc(100vw - 2.5rem)',
               maxWidth: '1000px',
               display: 'flex',
               alignItems: 'center',
@@ -2087,7 +2085,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
               border: '1px solid rgba(255, 255, 255, 0.2)',
               borderRadius: '1rem',
               padding: '0.75rem 1.25rem',
-              boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)'
+              boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)',
+              zIndex: 10
             }}
           >
             <button
@@ -2112,13 +2111,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </button>
           </div>
 
-          {/* Center Image Container - Grid minmax(0, 1fr) enforces absolute constraint */}
+          {/* Center Image Container - Absolutely positioned to prevent ANY auto-expansion */}
           <div
             onClick={e => e.stopPropagation()}
             style={{
-              width: '100%',
+              position: 'absolute',
+              top: '6rem',
+              bottom: '6rem',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              width: 'calc(100vw - 2.5rem)',
               maxWidth: '1000px',
-              height: '100%',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -2149,7 +2152,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
           <div
             onClick={e => e.stopPropagation()}
             style={{
-              width: '100%',
+              position: 'absolute',
+              bottom: '1.25rem',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              width: 'calc(100vw - 2.5rem)',
               maxWidth: '1000px',
               display: 'flex',
               alignItems: 'center',
@@ -2158,7 +2165,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
               border: '1px solid rgba(255, 255, 255, 0.2)',
               borderRadius: '1rem',
               padding: '0.75rem 1.25rem',
-              boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)'
+              boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)',
+              zIndex: 10
             }}
           >
             <span className="text-xs text-slate-400 font-mono hidden sm:inline">

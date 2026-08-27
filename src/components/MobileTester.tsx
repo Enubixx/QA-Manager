@@ -971,20 +971,18 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               zIndex: 9999999,
               backgroundColor: 'rgba(2, 6, 23, 0.96)',
               backdropFilter: 'blur(24px)',
-              WebkitBackdropFilter: 'blur(24px)',
-              display: 'grid',
-              gridTemplateRows: 'auto minmax(0, 1fr) auto',
-              gap: '1rem',
-              justifyItems: 'center',
-              padding: '1rem',
-              boxSizing: 'border-box'
+              WebkitBackdropFilter: 'blur(24px)'
             }}
           >
             {/* Top Bar - Pinned at Top of Screen Viewport */}
             <div
               onClick={e => e.stopPropagation()}
               style={{
-                width: '100%',
+                position: 'absolute',
+                top: '1.25rem',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                width: 'calc(100vw - 2.5rem)',
                 maxWidth: '800px',
                 display: 'flex',
                 alignItems: 'center',
@@ -993,7 +991,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 border: '1px solid rgba(255, 255, 255, 0.2)',
                 borderRadius: '1rem',
                 padding: '0.75rem 1rem',
-                boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)'
+                boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)',
+                zIndex: 10
               }}
             >
               <button
@@ -1018,13 +1017,17 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               </button>
             </div>
 
-            {/* Center Image Container - Grid minmax(0, 1fr) enforces absolute constraint */}
+            {/* Center Image Container - Absolutely positioned to prevent ANY auto-expansion */}
             <div
               onClick={e => e.stopPropagation()}
               style={{
-                width: '100%',
+                position: 'absolute',
+                top: '6rem',
+                bottom: '6rem',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                width: 'calc(100vw - 2.5rem)',
                 maxWidth: '800px',
-                height: '100%',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -1055,7 +1058,11 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
             <div
               onClick={e => e.stopPropagation()}
               style={{
-                width: '100%',
+                position: 'absolute',
+                bottom: '1.25rem',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                width: 'calc(100vw - 2.5rem)',
                 maxWidth: '800px',
                 display: 'flex',
                 alignItems: 'center',
@@ -1064,7 +1071,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 border: '1px solid rgba(255, 255, 255, 0.2)',
                 borderRadius: '1rem',
                 padding: '0.75rem 1rem',
-                boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)'
+                boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)',
+                zIndex: 10
               }}
             >
               <button
