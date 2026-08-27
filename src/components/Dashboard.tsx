@@ -2056,11 +2056,41 @@ export const Dashboard: React.FC<DashboardProps> = ({
       {selectedImagePreviewUrl && createPortal(
         <div
           onClick={() => setSelectedImagePreviewUrl(null)}
-          className="fixed inset-0 z-[99999] bg-slate-950/95 backdrop-blur-2xl flex items-center justify-center p-4 sm:p-8"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            width: '100vw',
+            height: '100vh',
+            zIndex: 999999,
+            backgroundColor: 'rgba(3, 7, 18, 0.95)',
+            backdropFilter: 'blur(24px)',
+            WebkitBackdropFilter: 'blur(24px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1.5rem',
+            margin: 0,
+            boxSizing: 'border-box'
+          }}
         >
           <div
             onClick={e => e.stopPropagation()}
-            className="relative max-w-4xl w-full max-h-[85vh] flex flex-col bg-slate-900 border border-white/20 rounded-3xl overflow-hidden shadow-2xl p-4 sm:p-6"
+            style={{
+              maxHeight: '85vh',
+              maxWidth: '900px',
+              width: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              backgroundColor: '#0f172a',
+              border: '1px solid rgba(255, 255, 255, 0.2)',
+              borderRadius: '1.5rem',
+              overflow: 'hidden',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.9)',
+              padding: '1.25rem'
+            }}
           >
             {/* Top Bar with Back / Close Button */}
             <div className="flex items-center justify-between pb-3.5 mb-3 border-b border-white/10 flex-shrink-0 w-full">
@@ -2084,12 +2114,34 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </button>
             </div>
 
-            {/* Image Display */}
-            <div className="flex-1 min-h-0 w-full overflow-hidden flex items-center justify-center bg-slate-950 rounded-2xl p-3 border border-white/10 shadow-inner">
+            {/* Image Display Container */}
+            <div
+              style={{
+                flex: '1 1 0%',
+                minHeight: 0,
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: '#030712',
+                borderRadius: '1rem',
+                padding: '0.75rem',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                overflow: 'hidden'
+              }}
+            >
               <img
                 src={selectedImagePreviewUrl}
                 alt="Evidence"
-                className="max-w-full max-h-full w-auto h-auto object-contain rounded-xl shadow-2xl"
+                style={{
+                  maxWidth: '100%',
+                  maxHeight: '100%',
+                  width: 'auto',
+                  height: 'auto',
+                  objectFit: 'contain',
+                  borderRadius: '0.75rem',
+                  boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)'
+                }}
               />
             </div>
 
