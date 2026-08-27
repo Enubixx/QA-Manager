@@ -261,29 +261,51 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showSetupModal, isCompleted, showBugModal, selectedStatus, currentStep, activeRun]);
 
-  // Real-Time Admin Boot Detection (kicks tester out in real time if session deleted on Desktop)
+  // Real-Time Admin Boot Detection (kicks tester out in real time if session or tester is deleted on Desktop)
   const [activeRunIdBeingTested, setActiveRunIdBeingTested] = useState<string | null>(null);
+  const [activeTesterNameBeingTested, setActiveTesterNameBeingTested] = useState<string | null>(null);
   const [bootMessage, setBootMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!showSetupModal && activeRun && activeRun.status === 'in_progress' && !isCompleted) {
       setActiveRunIdBeingTested(activeRun.id);
+      if (activeRun.testerName) {
+        setActiveTesterNameBeingTested(activeRun.testerName);
+      }
     }
   }, [showSetupModal, activeRun, isCompleted]);
 
   useEffect(() => {
-    if (!activeRunIdBeingTested) return;
+    if (showSetupModal || isCompleted) return;
 
-    const runStillActive = testRuns.some(r => r.id === activeRunIdBeingTested);
-    const runArchived = archivedRuns.some(r => r.id === activeRunIdBeingTested);
+    // 1. Check if the active run session ID was deleted by Admin
+    if (activeRunIdBeingTested) {
+      const runStillActive = testRuns.some(r => r.id === activeRunIdBeingTested);
+      const runArchived = archivedRuns.some(r => r.id === activeRunIdBeingTested);
 
-    // If the run being actively tested was removed from testRuns AND NOT moved to archivedRuns, admin booted it!
-    if (!runStillActive && !runArchived) {
-      setBootMessage(`⚠️ Session Terminated: An administrator has booted your QA session from the manager dashboard.`);
-      setShowSetupModal(true);
-      setActiveRunIdBeingTested(null);
+      if (!runStillActive && !runArchived) {
+        setBootMessage(`⚠️ Session Terminated: An administrator has booted your QA session from the manager dashboard.`);
+        setShowSetupModal(true);
+        setActiveRunIdBeingTested(null);
+        setActiveTesterNameBeingTested(null);
+        return;
+      }
     }
-  }, [testRuns, archivedRuns, activeRunIdBeingTested]);
+
+    // 2. Check if the entire tester profile was deleted by Admin
+    if (activeTesterNameBeingTested) {
+      const testerNameLower = activeTesterNameBeingTested.trim().toLowerCase();
+      const hasAnyRuns = testRuns.some(r => r.testerName?.trim().toLowerCase() === testerNameLower) ||
+                         archivedRuns.some(r => r.testerName?.trim().toLowerCase() === testerNameLower);
+
+      if (!hasAnyRuns) {
+        setBootMessage(`⚠️ Session Terminated: Your tester profile (${activeTesterNameBeingTested}) was deleted by an administrator.`);
+        setShowSetupModal(true);
+        setActiveRunIdBeingTested(null);
+        setActiveTesterNameBeingTested(null);
+      }
+    }
+  }, [testRuns, archivedRuns, activeRunIdBeingTested, activeTesterNameBeingTested, showSetupModal, isCompleted]);
 
   // Auto-kick user to setup screen if active run or plan gets deleted
   useEffect(() => {
