@@ -250,6 +250,27 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showSetupModal, isCompleted, showBugModal, selectedStatus, currentStep, activeRun]);
 
+  // Real-Time Admin Boot Detection (kicks tester out in real time if session deleted on Desktop)
+  const [wasExecuting, setWasExecuting] = useState(false);
+  const [bootMessage, setBootMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!showSetupModal && activeRun && activeRun.testerName) {
+      setWasExecuting(true);
+    }
+  }, [showSetupModal, activeRun]);
+
+  useEffect(() => {
+    if (wasExecuting && activeRun) {
+      const existsInState = testRuns.some(r => r.id === activeRun.id || r.id === `run-${currentPlan?.id}-${deviceId}`);
+      if (!existsInState) {
+        setBootMessage(`⚠️ Session Terminated: An administrator has booted your QA session from the manager dashboard.`);
+        setShowSetupModal(true);
+        setWasExecuting(false);
+      }
+    }
+  }, [testRuns, activeRun, wasExecuting, currentPlan, deviceId]);
+
   // Auto-kick user to setup screen if active run or plan gets deleted
   useEffect(() => {
     if (!currentPlan || !activeRun?.testerName || !activeRun?.deviceName) {
@@ -428,6 +449,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   onChange={e => {
                     setSelectedStatus(null);
                     onSelectPlan(e.target.value);
+                    setShowSetupModal(true);
                   }}
                   style={{ backgroundColor: '#0b101d', color: '#e0e7ff', WebkitAppearance: 'none', appearance: 'none' }}
                   className="w-full dark-select-input rounded-xl px-3 py-1.5 text-xs font-bold shadow-inner focus:outline-none focus:border-indigo-500 cursor-pointer truncate pr-6"
@@ -806,6 +828,29 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               </button>
             </div>
 
+          </div>
+        )}
+
+        {/* Admin Boot Termination Modal */}
+        {bootMessage && (
+          <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-2xl p-6 flex flex-col items-center justify-center text-center z-[100] animate-in fade-in duration-200 rounded-[44px]">
+            <div className="p-4 bg-rose-500/20 text-rose-400 rounded-full border border-rose-500/40 mb-4 shadow-xl shadow-rose-500/20">
+              <AlertTriangle className="w-8 h-8 text-rose-400" />
+            </div>
+            <h3 className="text-lg font-extrabold text-white mb-2 tracking-tight">Session Terminated</h3>
+            <p className="text-xs text-slate-300 max-w-xs mb-6 leading-relaxed font-medium">
+              An administrator has ended your QA session from the desktop manager dashboard.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setBootMessage(null);
+                setShowSetupModal(true);
+              }}
+              className="px-6 py-3 bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 text-white font-extrabold text-xs rounded-2xl shadow-xl shadow-rose-500/30 border border-white/20 active:scale-95 transition-all cursor-pointer"
+            >
+              Back to Test Plans
+            </button>
           </div>
         )}
 

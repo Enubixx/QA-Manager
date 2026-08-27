@@ -562,7 +562,11 @@ export function App() {
               onLogBug={handleLogBug}
               onDeleteBug={handleDeleteBug}
               onRestartRun={handleRestartRun}
-              onNavigateToDashboard={() => setCurrentView('dashboard')}
+              onNavigateToDashboard={
+                (window as any).Capacitor?.isNativePlatform?.() || window.location.pathname.includes('/mobile')
+                  ? undefined
+                  : () => setCurrentView('dashboard')
+              }
             />
           </div>
         )}
