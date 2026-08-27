@@ -394,10 +394,20 @@ export function App() {
   const handleDeleteBug = (bugId: string) => {
     setBugLogs(prev => prev.filter(b => b.id !== bugId));
     deleteBugLogFromSupabase(bugId);
-    setTestRuns(prev => prev.map(r => ({
-      ...r,
-      bugLogs: r.bugLogs.filter(b => b.id !== bugId)
-    })));
+
+    setTestRuns(prev => prev.map(r => {
+      const hasBug = r.bugLogs.some(b => b.id === bugId);
+      const updated = { ...r, bugLogs: r.bugLogs.filter(b => b.id !== bugId) };
+      if (hasBug) syncTestRunToSupabase(updated);
+      return updated;
+    }));
+
+    setArchivedRuns(prev => prev.map(r => {
+      const hasBug = r.bugLogs.some(b => b.id === bugId);
+      const updated = { ...r, bugLogs: r.bugLogs.filter(b => b.id !== bugId) };
+      if (hasBug) syncArchivedRunToSupabase(updated);
+      return updated;
+    }));
   };
 
   const handleUpdateRun = (updatedRun: TestRun) => {
@@ -612,6 +622,7 @@ export function App() {
               testPlans={testPlans}
               testRuns={testRuns}
               archivedRuns={archivedRuns}
+              bugLogs={bugLogs}
               selectedPlanId={selectedPlanId}
               populatedDevices={populatedDevices}
               onAddPopulatedDevice={handleAddPopulatedDevice}

@@ -8,6 +8,7 @@ interface MobileTesterProps {
   testPlans: TestPlan[];
   testRuns: TestRun[];
   archivedRuns?: TestRun[];
+  bugLogs?: BugLog[];
   selectedPlanId: string;
   populatedDevices: string[];
   onAddPopulatedDevice: (device: string) => void;
@@ -23,6 +24,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   testPlans,
   testRuns,
   archivedRuns = [],
+  bugLogs = [],
   selectedPlanId,
   populatedDevices,
   onAddPopulatedDevice,
@@ -106,6 +108,16 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   const activeOrSummaryCompleted = completedRunSummary || (archivedCompletedRun && activeRun?.status === 'not_started' ? archivedCompletedRun : null);
   const isCompleted = activeOrSummaryCompleted !== null || activeRun?.status === 'completed' || (totalSteps > 0 && currentStepIndex >= totalSteps && activeRun?.status !== 'not_started');
+
+  // Dynamically filter active run bugs against global real-time bugLogs
+  const activeBugs = useMemo(() => {
+    const rawRunBugs = (activeOrSummaryCompleted || activeRun)?.bugLogs || [];
+    if (bugLogs && bugLogs.length >= 0) {
+      const validIds = new Set(bugLogs.map(b => b.id));
+      return rawRunBugs.filter(b => validIds.has(b.id));
+    }
+    return rawRunBugs;
+  }, [bugLogs, activeOrSummaryCompleted, activeRun?.bugLogs]);
 
   // Selected Status for current step
   const [selectedStatus, setSelectedStatus] = useState<'green' | 'yellow' | 'red' | null>(null);
@@ -587,7 +599,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
             </div>
 
             {/* Bug List */}
-            {(!activeRun?.bugLogs || activeRun.bugLogs.length === 0) ? (
+            {activeBugs.length === 0 ? (
               <div className="liquid-glass-card rounded-3xl p-8 text-center space-y-3 flex-1 flex flex-col items-center justify-center border-white/10">
                 <div className="p-4 bg-slate-950/80 rounded-full border border-white/10 text-slate-500 backdrop-blur-md">
                   <CheckCircle2 className="w-8 h-8 text-emerald-400" />
@@ -601,7 +613,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               </div>
             ) : (
               <div className="space-y-3 flex-1 overflow-y-auto max-h-[420px] pr-1">
-                {activeRun.bugLogs.map(bug => (
+                {activeBugs.map(bug => (
                   <div key={bug.id} className="liquid-glass-panel rounded-2xl p-4 space-y-2 border-white/15 relative text-left">
                     
                     <div className="flex items-center justify-between">
