@@ -120,24 +120,37 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   // Explicit state for completion summary view
   const [completedRunSummary, setCompletedRunSummary] = useState<TestRun | null>(null);
 
-  // Check if current plan has a completed run in archivedRuns
+  // Check if current plan has a completed run in archivedRuns for THIS device or tester
   const archivedCompletedRun = useMemo(() => {
     if (!currentPlan) return undefined;
-    return archivedRuns.find(r => r.planId === currentPlan.id && r.status === 'completed');
-  }, [archivedRuns, currentPlan]);
+    const currentTesterLower = inputReporterName ? inputReporterName.trim().toLowerCase() : '';
+    return archivedRuns.find(r => 
+      r.planId === currentPlan.id && 
+      r.status === 'completed' &&
+      (r.deviceId === deviceId || r.id.includes(deviceId) || (currentTesterLower && r.testerName?.trim().toLowerCase() === currentTesterLower))
+    );
+  }, [archivedRuns, currentPlan, deviceId, inputReporterName]);
 
   const activeOrSummaryCompleted = completedRunSummary || (archivedCompletedRun && activeRun?.status === 'not_started' ? archivedCompletedRun : null);
   const isCompleted = activeOrSummaryCompleted !== null || activeRun?.status === 'completed' || (totalSteps > 0 && currentStepIndex >= totalSteps && activeRun?.status !== 'not_started');
 
-  // Dynamically filter active run bugs against global real-time bugLogs
+  // Dynamically compute active bugs for current plan/run
   const activeBugs = useMemo(() => {
     const rawRunBugs = (activeOrSummaryCompleted || activeRun)?.bugLogs || [];
-    if (bugLogs && bugLogs.length >= 0) {
-      const validIds = new Set(bugLogs.map(b => b.id));
-      return rawRunBugs.filter(b => validIds.has(b.id));
+    if (rawRunBugs.length > 0) {
+      if (bugLogs && bugLogs.length > 0) {
+        const validIds = new Set(bugLogs.map(b => b.id));
+        // Keep bugs that are either in global bugLogs OR were newly created in this local session
+        return rawRunBugs.filter(b => validIds.has(b.id) || b.id.startsWith('bug-'));
+      }
+      return rawRunBugs;
     }
-    return rawRunBugs;
-  }, [bugLogs, activeOrSummaryCompleted, activeRun?.bugLogs]);
+    // Fallback to global bugLogs matching this plan or run
+    if (bugLogs && bugLogs.length > 0) {
+      return bugLogs.filter(b => b.planId === currentPlan?.id || (activeRun && b.testRunId === activeRun.id));
+    }
+    return [];
+  }, [bugLogs, activeOrSummaryCompleted, activeRun?.bugLogs, currentPlan?.id]);
 
   // Selected Status for current step
   const [selectedStatus, setSelectedStatus] = useState<'green' | 'yellow' | 'red' | null>(null);
