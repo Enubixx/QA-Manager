@@ -838,7 +838,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       {/* Tab 1: Overview - Test Plans & Active Runs */}
       {activeTab === 'overview' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 animate-liquid-fade">
           
           {/* Test Plans List */}
           <div className="lg:col-span-2 space-y-4">
@@ -1059,7 +1059,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       {/* Tab: QA Status - Tester Profiles & Daily Time Tracking */}
       {activeTab === 'qa-status' && (
-        <div className="space-y-6">
+        <div className="space-y-6 animate-liquid-fade">
           
           {/* Header & Date Filter Bar */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 liquid-glass-panel rounded-3xl p-6 shadow-2xl">
