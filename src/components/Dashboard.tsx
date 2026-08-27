@@ -429,22 +429,30 @@ export const Dashboard: React.FC<DashboardProps> = ({
         const timeFormatted = runDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
         const resultsArray = Object.values(run.results || {});
+        
+        // Exact start and completion timestamps
+        const startMs = run.startedAt ? new Date(run.startedAt).getTime() : 0;
+        const endMs = (isCompleted && run.completedAt) ? new Date(run.completedAt).getTime() : Date.now();
+
         let durationMs = 0;
-        if (resultsArray.length > 0) {
+        if (startMs > 0 && endMs > startMs) {
+          durationMs = endMs - startMs;
+        } else if (resultsArray.length > 0) {
           const timestamps = resultsArray
             .map(r => r.timestamp ? new Date(r.timestamp).getTime() : NaN)
             .filter(t => !isNaN(t));
           if (timestamps.length > 0) {
             const minTime = Math.min(...timestamps);
-            const maxTime = Math.max(...timestamps, runDate.getTime());
-            durationMs = Math.max(15000, maxTime - minTime);
+            const maxTime = Math.max(...timestamps);
+            durationMs = Math.max(0, maxTime - minTime);
           }
         }
-        if (!durationMs) durationMs = 300000;
 
         const mins = Math.floor(durationMs / 60000);
         const secs = Math.floor((durationMs % 60000) / 1000);
-        const durationFormatted = `${mins}m ${secs < 10 ? '0' : ''}${secs}s`;
+        const durationFormatted = mins > 0 
+          ? `${mins}m ${secs < 10 ? '0' : ''}${secs}s` 
+          : `${secs}s`;
 
         const greenCount = resultsArray.filter(r => r.status === 'green').length;
         const yellowCount = resultsArray.filter(r => r.status === 'yellow').length;
