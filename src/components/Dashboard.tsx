@@ -1,4 +1,5 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog } from '../types';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON } from '../utils/exportUtils';
@@ -2051,11 +2052,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
 
-      {/* Image Lightbox Preview Modal */}
-      {selectedImagePreviewUrl && (
+      {/* Image Lightbox Preview Modal via Portal */}
+      {selectedImagePreviewUrl && createPortal(
         <div
           onClick={() => setSelectedImagePreviewUrl(null)}
-          className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-2xl flex items-center justify-center p-4 sm:p-8 animate-liquid-fade"
+          className="fixed inset-0 z-[9999] bg-slate-950/95 backdrop-blur-2xl flex items-center justify-center p-4 sm:p-8 animate-liquid-fade"
         >
           <div
             onClick={e => e.stopPropagation()}
@@ -2104,7 +2105,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
     </div>

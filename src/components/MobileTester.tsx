@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog } from '../types';
 import { CheckCircle2, Clock, Bug, Smartphone, RefreshCw, Send, Check, Layers, ChevronDown, AlertTriangle, XCircle, ArrowRight, User, Download, Edit3, Trash2, Tag, Image, Camera, X } from 'lucide-react';
 import { exportTestRunToCSV } from '../utils/exportUtils';
@@ -957,17 +958,17 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           </div>
         )}
 
-        {/* Full Screen Photo Lightbox Modal */}
-        {previewImageUrl && (
+        {/* Full Screen Photo Lightbox Modal via Portal */}
+        {previewImageUrl && createPortal(
           <div
             onClick={() => setPreviewImageUrl(null)}
-            className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-2xl p-4 flex flex-col justify-between animate-in fade-in duration-200"
+            className="fixed inset-0 z-[9999] bg-slate-950/95 backdrop-blur-2xl p-4 flex flex-col justify-between animate-in fade-in duration-200"
           >
-            <div className="flex items-center justify-between pb-3 border-b border-white/10">
+            <div className="flex items-center justify-between pb-3 border-b border-white/10 flex-shrink-0">
               <button
                 type="button"
                 onClick={() => setPreviewImageUrl(null)}
-                className="px-3.5 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow active:scale-95 cursor-pointer"
+                className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow active:scale-95 cursor-pointer"
               >
                 <span>← Back</span>
               </button>
@@ -977,21 +978,21 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               <button
                 type="button"
                 onClick={() => setPreviewImageUrl(null)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-xl bg-slate-800 cursor-pointer"
+                className="p-2 text-slate-400 hover:text-white rounded-xl bg-slate-800 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="flex-1 flex items-center justify-center py-4 overflow-auto">
+            <div className="flex-1 min-h-0 overflow-hidden flex items-center justify-center py-4">
               <img
                 src={previewImageUrl}
                 alt="Evidence Preview"
-                className="max-w-full max-h-[75vh] object-contain rounded-2xl border border-white/15 shadow-2xl"
+                className="max-w-full max-h-full object-contain rounded-2xl border border-white/15 shadow-2xl"
               />
             </div>
 
-            <div className="pt-2">
+            <div className="pt-2 flex-shrink-0">
               <button
                 type="button"
                 onClick={() => setPreviewImageUrl(null)}
@@ -1000,7 +1001,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 ← Back to QA Walkthrough
               </button>
             </div>
-          </div>
+          </div>,
+          document.body
         )}
 
       </div>
