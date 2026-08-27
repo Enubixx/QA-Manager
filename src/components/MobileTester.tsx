@@ -1,0 +1,735 @@
+import React, { useState, useEffect } from 'react';
+import { TestPlan, TestRun, BugLog } from '../types';
+import { CheckCircle2, Clock, Bug, Smartphone, RefreshCw, Send, Check, Layers, ChevronDown, AlertTriangle, XCircle, ArrowRight, User, Download, Edit3, Trash2, Tag, Image, Camera, X } from 'lucide-react';
+import { exportTestRunToCSV } from '../utils/exportUtils';
+
+interface MobileTesterProps {
+  testPlans: TestPlan[];
+  testRuns: TestRun[];
+  selectedPlanId: string;
+  populatedDevices: string[];
+  onAddPopulatedDevice: (device: string) => void;
+  onSelectPlan: (planId: string) => void;
+  onUpdateRun: (updatedRun: TestRun) => void;
+  onLogBug: (bug: BugLog) => void;
+  onDeleteBug: (bugId: string) => void;
+  onRestartRun: (planId: string) => void;
+  onNavigateToDashboard?: () => void;
+}
+
+export const MobileTester: React.FC<MobileTesterProps> = ({
+  testPlans,
+  testRuns,
+  selectedPlanId,
+  populatedDevices,
+  onAddPopulatedDevice,
+  onSelectPlan,
+  onUpdateRun,
+  onLogBug,
+  onDeleteBug,
+  onRestartRun,
+  onNavigateToDashboard
+}) => {
+  // Find current plan
+  const currentPlan = testPlans.find(p => p.id === selectedPlanId) || testPlans[0];
+
+  // Find active run
+  let activeRun = testRuns.find(r => r.planId === currentPlan?.id);
+  if (!activeRun && currentPlan) {
+    activeRun = {
+      id: 'run-' + currentPlan.id,
+      planId: currentPlan.id,
+      planName: currentPlan.name,
+      testerName: '',
+      deviceName: '',
+      status: 'not_started',
+      currentStepIndex: 0,
+      results: {},
+      bugLogs: [],
+      startedAt: new Date().toISOString()
+    };
+  }
+
+  // Pre-test Session Setup state (Reporter Name & Device Name)
+  const [showSetupModal, setShowSetupModal] = useState<boolean>(() => {
+    return !activeRun?.testerName || !activeRun?.deviceName;
+  });
+
+  const [inputReporterName, setInputReporterName] = useState(activeRun?.testerName || '');
+  const [inputDeviceName, setInputDeviceName] = useState(activeRun?.deviceName || '');
+
+  const steps = currentPlan?.steps || [];
+  const currentStepIndex = activeRun?.currentStepIndex || 0;
+  const currentStep = steps[currentStepIndex];
+  const totalSteps = steps.length;
+  const isCompleted = (activeRun?.status === 'completed' || currentStepIndex >= totalSteps) && totalSteps > 0;
+
+  // Selected Status for current step
+  const [selectedStatus, setSelectedStatus] = useState<'green' | 'yellow' | 'red' | null>(null);
+
+  // Bug Modal state
+  const [showBugModal, setShowBugModal] = useState(false);
+  const [bugNote, setBugNote] = useState('');
+  const [bugImageUrl, setBugImageUrl] = useState('');
+  const [bugSeverity, setBugSeverity] = useState<'low' | 'medium' | 'high' | 'critical'>('medium');
+  const [bugSuccessMessage, setBugSuccessMessage] = useState<string | null>(null);
+
+  // Native Mobile Photo Upload Handler (links to Photos App / Camera)
+  const handlePhotoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (typeof event.target?.result === 'string') {
+        setBugImageUrl(event.target.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Save Setup Session Info
+  const handleSaveSessionSetup = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputReporterName.trim() || !inputDeviceName.trim() || !activeRun) return;
+
+    const trimmedDevice = inputDeviceName.trim();
+    onAddPopulatedDevice(trimmedDevice);
+
+    const updatedRun: TestRun = {
+      ...activeRun,
+      testerName: inputReporterName.trim(),
+      deviceName: trimmedDevice,
+      status: activeRun.status === 'not_started' ? 'in_progress' : activeRun.status
+    };
+
+    onUpdateRun(updatedRun);
+    setShowSetupModal(false);
+  };
+
+  // Submit Step with Selected Status
+  const handleConfirmStepStatus = () => {
+    if (!currentStep || !activeRun || !selectedStatus) return;
+
+    const now = new Date();
+    const isoTimestamp = now.toISOString();
+
+    const updatedResults = {
+      ...activeRun.results,
+      [currentStep.id]: {
+        stepId: currentStep.id,
+        status: selectedStatus,
+        feature: currentStep.feature || 'General',
+        timestamp: isoTimestamp
+      }
+    };
+
+    const nextIndex = currentStepIndex + 1;
+    const isDone = nextIndex >= totalSteps;
+
+    const updatedRun: TestRun = {
+      ...activeRun,
+      results: updatedResults,
+      currentStepIndex: nextIndex,
+      status: isDone ? 'completed' : 'in_progress',
+      completedAt: isDone ? isoTimestamp : undefined
+    };
+
+    onUpdateRun(updatedRun);
+    setSelectedStatus(null);
+    setBugSuccessMessage(null);
+  };
+
+  // Keyboard Shortcuts listener (1 = Green, 2 = Yellow, 3 = Red, Enter = Confirm & Next, B = Log Bug)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const targetTag = (e.target as HTMLElement)?.tagName;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(targetTag)) {
+        if (e.key === 'Escape' && showBugModal) {
+          setShowBugModal(false);
+        }
+        return;
+      }
+
+      if (showSetupModal || isCompleted) return;
+
+      if (showBugModal) {
+        if (e.key === 'Escape') setShowBugModal(false);
+        return;
+      }
+
+      if (e.key === '1') {
+        e.preventDefault();
+        setSelectedStatus('green');
+      } else if (e.key === '2') {
+        e.preventDefault();
+        setSelectedStatus('yellow');
+      } else if (e.key === '3') {
+        e.preventDefault();
+        setSelectedStatus('red');
+      } else if (e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        setShowBugModal(true);
+      } else if (e.key === 'Enter' && selectedStatus) {
+        e.preventDefault();
+        handleConfirmStepStatus();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showSetupModal, isCompleted, showBugModal, selectedStatus, currentStep, activeRun]);
+
+  // Submit Bug ONLY
+  const handleReportBugSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentStep || !bugNote.trim() || !activeRun || !currentPlan) return;
+
+    const now = new Date();
+    const isoTimestamp = now.toISOString();
+    const formattedTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    const newBug: BugLog = {
+      id: 'bug-' + Date.now(),
+      testRunId: activeRun.id,
+      planId: currentPlan.id,
+      stepId: currentStep.id,
+      stepTitle: currentStep.title,
+      feature: currentStep.feature || 'General',
+      testerName: activeRun.testerName || 'Tester',
+      deviceName: activeRun.deviceName || 'Mobile Device',
+      severity: bugSeverity,
+      note: bugNote.trim(),
+      imageUrl: bugImageUrl.trim() || undefined,
+      timestamp: isoTimestamp,
+      formattedTime: formattedTime
+    };
+
+    onLogBug(newBug);
+
+    const updatedRun: TestRun = {
+      ...activeRun,
+      bugLogs: [...activeRun.bugLogs, newBug]
+    };
+    onUpdateRun(updatedRun);
+
+    setBugSuccessMessage(`Bug/Note logged at ${formattedTime}`);
+    setBugNote('');
+    setBugImageUrl('');
+    setShowBugModal(false);
+  };
+
+  return (
+    <div className="py-6 px-4">
+      
+      {/* Mobile Device Container Frame (Apple Liquid Glass Device) */}
+      <div className="mobile-device-frame glass-panel text-slate-100 min-h-[680px] flex flex-col justify-between overflow-hidden shadow-2xl relative border-white/10 rounded-[44px]">
+        
+        {/* Top Phone Status Bar */}
+        <div className="bg-slate-950/80 backdrop-blur-md px-5 py-2.5 flex items-center justify-between border-b border-white/10 text-[11px] text-slate-400 font-mono">
+          <div className="flex items-center gap-2">
+            {onNavigateToDashboard && (
+              <button
+                type="button"
+                onClick={onNavigateToDashboard}
+                className="px-2 py-0.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg border border-slate-700 text-[10px] font-sans font-bold transition flex items-center gap-1"
+                title="Return to Manager Dashboard"
+              >
+                ← Exit
+              </button>
+            )}
+            <span className="flex items-center gap-1.5 font-sans font-semibold text-slate-300">
+              <Smartphone className="w-3.5 h-3.5 text-indigo-400" />
+              Field QA Mobile
+            </span>
+          </div>
+          <span className="text-emerald-400 flex items-center gap-1.5 font-sans font-bold bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            Live Session
+          </span>
+        </div>
+
+        {/* Test Plan & Tester Bar */}
+        {testPlans.length > 0 && (
+          <div className="bg-slate-950/60 backdrop-blur-xl border-b border-white/10 px-4 py-2.5 space-y-2">
+            
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-xs text-slate-400 font-semibold">
+                <Layers className="w-3.5 h-3.5 text-purple-400" />
+                <span>Plan:</span>
+              </div>
+              <div className="relative flex-1 max-w-[210px]">
+                <select
+                  value={currentPlan?.id || ''}
+                  onChange={e => {
+                    setSelectedStatus(null);
+                    onSelectPlan(e.target.value);
+                  }}
+                  className="w-full glass-input rounded-xl px-2.5 py-1 text-xs text-indigo-200 font-bold focus:outline-none cursor-pointer truncate appearance-none pr-6"
+                >
+                  {testPlans.map(plan => (
+                    <option key={plan.id} value={plan.id} className="bg-slate-900 text-slate-100">
+                      {plan.name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 top-2 pointer-events-none" />
+              </div>
+            </div>
+
+            {/* Reporter & Device Info Badge */}
+            <div className="flex items-center justify-between text-[11px] text-slate-300 glass-panel-subtle px-3 py-1.5 rounded-xl">
+              <div className="flex items-center gap-2 truncate">
+                <span className="text-white font-semibold flex items-center gap-1">
+                  <User className="w-3 h-3 text-indigo-400" />
+                  {activeRun?.testerName || 'Unassigned'}
+                </span>
+                <span className="text-slate-500">•</span>
+                <span className="text-purple-300 font-mono flex items-center gap-1 truncate font-semibold">
+                  <Smartphone className="w-3 h-3 text-purple-400" />
+                  {activeRun?.deviceName || 'Device Setup Needed'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSetupModal(true)}
+                className="text-[10px] text-purple-300 hover:text-white font-bold flex items-center gap-0.5 ml-1 flex-shrink-0 bg-purple-500/20 px-2 py-0.5 rounded-lg border border-purple-500/30 transition"
+              >
+                <Edit3 className="w-3 h-3" /> Edit
+              </button>
+            </div>
+
+          </div>
+        )}
+
+        {/* Content Body */}
+        {testPlans.length === 0 ? (
+          <div className="p-6 flex-1 flex flex-col justify-center items-center text-center space-y-4">
+            <div className="p-4 bg-slate-950/80 rounded-full border border-white/10 text-slate-500 backdrop-blur-md">
+              <Layers className="w-8 h-8 text-indigo-400" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-white tracking-tight">No Test Plans Available</h3>
+              <p className="text-xs text-slate-400 mt-1 max-w-xs font-medium">
+                Create a test plan on the Manager Dashboard to start testing on mobile.
+              </p>
+            </div>
+          </div>
+        ) : !isCompleted && currentStep ? (
+          <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
+            
+            {/* Step Progress Bar */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs font-semibold">
+                <span className="text-indigo-300 uppercase tracking-wider text-[10px]">Sequential Walkthrough</span>
+                <span className="font-mono text-slate-400 text-[11px]">Step {currentStepIndex + 1} of {totalSteps}</span>
+              </div>
+
+              <div className="w-full bg-slate-950/80 h-2 rounded-full overflow-hidden border border-white/10 shadow-inner">
+                <div
+                  className="bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 h-full transition-all duration-300 shadow-md shadow-purple-500/20"
+                  style={{ width: `${((currentStepIndex + 1) / totalSteps) * 100}%` }}
+                ></div>
+              </div>
+            </div>
+
+            {/* Test Plan Header Pill */}
+            <div className="liquid-glass-pill rounded-2xl px-4 py-2 flex items-center justify-between">
+              <div className="text-xs font-bold text-white truncate max-w-[220px]">{currentPlan?.name}</div>
+              <span className="text-[10px] font-mono text-purple-300 font-bold bg-purple-500/20 px-2 py-0.5 rounded-lg border border-purple-500/30">
+                {currentStep.feature || 'General'}
+              </span>
+            </div>
+
+            {/* Current Step Instruction Card (Apple Liquid Glass Card) */}
+            <div className="liquid-glass-card rounded-3xl p-5 shadow-2xl space-y-4 flex-1 flex flex-col justify-between border-white/15 bg-slate-950/40">
+              
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="px-3 py-1 bg-indigo-500/20 text-indigo-200 border border-indigo-400/30 rounded-xl text-xs font-bold backdrop-blur-md">
+                    Step #{currentStepIndex + 1}
+                  </span>
+
+                  <button
+                    onClick={() => setShowBugModal(true)}
+                    className="text-xs font-bold text-rose-300 bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 px-3 py-1.5 rounded-2xl transition-all duration-300 flex items-center gap-1.5 backdrop-blur-md hover:scale-[1.02] active:scale-[0.98]"
+                  >
+                    <Bug className="w-3.5 h-3.5 text-rose-400" />
+                    <span>Log Bug / Note</span>
+                  </button>
+                </div>
+
+                <h3 className="text-base font-extrabold text-white leading-snug tracking-tight">
+                  {currentStep.title}
+                </h3>
+
+                <p className="text-xs text-slate-200 leading-relaxed bg-slate-950/60 backdrop-blur-md p-3.5 rounded-2xl border border-white/10 font-medium">
+                  {currentStep.description}
+                </p>
+              </div>
+
+              {/* Expected Result Box */}
+              <div className="bg-emerald-500/10 border border-emerald-400/30 backdrop-blur-md rounded-2xl p-3.5 space-y-1">
+                <div className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">Expected Outcome</div>
+                <div className="text-xs font-medium text-emerald-100 leading-normal">{currentStep.expectedOutcome}</div>
+              </div>
+
+              {/* Inline feedback if bug was logged */}
+              {bugSuccessMessage && (
+                <div className="bg-rose-500/20 border border-rose-400/40 backdrop-blur-md rounded-2xl p-2.5 text-[11px] font-semibold text-rose-200 flex items-center gap-2">
+                  <Clock className="w-3.5 h-3.5 text-rose-400 flex-shrink-0" />
+                  <span>{bugSuccessMessage}</span>
+                </div>
+              )}
+
+            </div>
+
+            {/* 3 Status Selection Buttons: Green, Yellow, Red */}
+            <div className="space-y-3 pt-1">
+              <div className="text-[11px] font-bold text-slate-300 uppercase tracking-wider px-1">
+                Select Step Result
+              </div>
+
+              <div className="grid grid-cols-3 gap-2.5">
+                
+                {/* GREEN Status Button */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedStatus('green')}
+                  className={`py-3 rounded-2xl font-bold text-xs flex flex-col items-center justify-center gap-1.5 transition-all border ${
+                    selectedStatus === 'green'
+                      ? 'bg-emerald-500/30 text-white border-emerald-400 shadow-xl shadow-emerald-500/30 ring-2 ring-emerald-400/50 scale-[1.02]'
+                      : 'liquid-glass-button text-emerald-300 hover:bg-emerald-500/20 hover:border-emerald-400/40'
+                  }`}
+                >
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                  <span>Pass</span>
+                </button>
+
+                {/* YELLOW Status Button */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedStatus('yellow')}
+                  className={`py-3 rounded-2xl font-bold text-xs flex flex-col items-center justify-center gap-1.5 transition-all border ${
+                    selectedStatus === 'yellow'
+                      ? 'bg-amber-500/30 text-white border-amber-400 shadow-xl shadow-amber-500/30 ring-2 ring-amber-400/50 scale-[1.02]'
+                      : 'liquid-glass-button text-amber-300 hover:bg-amber-500/20 hover:border-amber-400/40'
+                  }`}
+                >
+                  <AlertTriangle className="w-5 h-5 text-amber-400" />
+                  <span>Caution</span>
+                </button>
+
+                {/* RED Status Button */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedStatus('red')}
+                  className={`py-3 rounded-2xl font-bold text-xs flex flex-col items-center justify-center gap-1.5 transition-all border ${
+                    selectedStatus === 'red'
+                      ? 'bg-rose-500/30 text-white border-rose-400 shadow-xl shadow-rose-500/30 ring-2 ring-rose-400/50 scale-[1.02]'
+                      : 'liquid-glass-button text-rose-300 hover:bg-rose-500/20 hover:border-rose-400/40'
+                  }`}
+                >
+                  <XCircle className="w-5 h-5 text-rose-400" />
+                  <span>Fail</span>
+                </button>
+
+              </div>
+
+              {/* Confirm & Move to Next Step Button */}
+              <button
+                type="button"
+                disabled={!selectedStatus}
+                onClick={handleConfirmStepStatus}
+                className={`w-full py-3.5 rounded-2xl font-black text-xs flex items-center justify-center gap-2 transition-all duration-300 shadow-xl ${
+                  selectedStatus
+                    ? 'bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 text-white shadow-purple-500/30 border border-white/30 hover:scale-[1.02] active:scale-[0.98]'
+                    : 'liquid-glass-button text-slate-500 opacity-50 cursor-not-allowed'
+                }`}
+              >
+                <span>{selectedStatus ? `Confirm ${selectedStatus.toUpperCase()} & Next Step` : 'Select Result Above'}</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+
+          </div>
+        ) : (
+          /* Completion Summary View (Liquid Glass Style) */
+          <div className="p-6 flex-1 flex flex-col justify-between items-center text-center space-y-4 overflow-y-auto max-h-[580px]">
+            
+            <div className="space-y-2">
+              <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/40 shadow-xl mx-auto backdrop-blur-md">
+                <Check className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-extrabold text-white tracking-tight">Test Plan Completed!</h3>
+              <p className="text-xs text-slate-300 max-w-xs font-medium">
+                All steps in "{currentPlan?.name}" have been executed.
+              </p>
+            </div>
+
+            {/* Results breakdown */}
+            <div className="w-full liquid-glass-panel rounded-2xl p-4 space-y-2 text-xs border-white/10">
+              <div className="font-bold text-white flex items-center justify-between border-b border-white/10 pb-2">
+                <span>Total Steps Executed</span>
+                <span className="font-mono text-indigo-300">{totalSteps}</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>Reporter Name:</span>
+                <span className="text-white font-bold">{activeRun?.testerName || 'Field Tester'}</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>Device Model:</span>
+                <span className="text-purple-300 font-mono font-bold">{activeRun?.deviceName || 'N/A'}</span>
+              </div>
+              <div className="flex justify-between text-emerald-300 pt-1.5 border-t border-white/10 font-semibold">
+                <span className="flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Green (Pass):</span>
+                <span className="font-mono font-bold">{Object.values(activeRun?.results || {}).filter(r => r.status === 'green').length}</span>
+              </div>
+              <div className="flex justify-between text-amber-300 font-semibold">
+                <span className="flex items-center gap-1"><AlertTriangle className="w-3.5 h-3.5 text-amber-400" /> Yellow (Caution):</span>
+                <span className="font-mono font-bold">{Object.values(activeRun?.results || {}).filter(r => r.status === 'yellow').length}</span>
+              </div>
+              <div className="flex justify-between text-rose-300 font-semibold">
+                <span className="flex items-center gap-1"><XCircle className="w-3.5 h-3.5 text-rose-400" /> Red (Fail):</span>
+                <span className="font-mono font-bold">{Object.values(activeRun?.results || {}).filter(r => r.status === 'red').length}</span>
+              </div>
+            </div>
+
+            {/* Logged Bugs List */}
+            {activeRun?.bugLogs && activeRun.bugLogs.length > 0 && (
+              <div className="w-full liquid-glass-card rounded-2xl p-3.5 text-xs space-y-2 text-left border-white/15">
+                <div className="font-bold text-rose-300 flex items-center justify-between pb-1.5 border-b border-white/10">
+                  <span>Logged Bugs ({activeRun.bugLogs.length}):</span>
+                  <span className="text-[10px] text-slate-400">Tap trash to delete</span>
+                </div>
+                <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                  {activeRun.bugLogs.map(bug => (
+                    <div key={bug.id} className="flex items-center justify-between bg-slate-950/60 p-2 rounded-xl border border-white/10 text-[11px]">
+                      <div className="truncate pr-2">
+                        <span className="font-mono text-purple-300 mr-1 text-[10px]">[{bug.feature || 'General'}]</span>
+                        <span className="text-slate-200">{bug.note}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onDeleteBug(bug.id)}
+                        className="text-slate-400 hover:text-rose-400 p-1 flex-shrink-0"
+                        title="Delete Bug Log"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Export & Restart */}
+            <div className="w-full space-y-2 pt-1">
+              <button
+                type="button"
+                onClick={() => currentPlan && activeRun && exportTestRunToCSV(currentPlan, activeRun)}
+                className="w-full py-3 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-extrabold text-xs rounded-2xl shadow-lg border border-white/20 flex items-center justify-center gap-2 transition-all"
+              >
+                <Download className="w-4 h-4" />
+                Export Results to CSV
+              </button>
+
+              <button
+                onClick={() => {
+                  setSelectedStatus(null);
+                  currentPlan && onRestartRun(currentPlan.id);
+                }}
+                className="w-full py-2.5 liquid-glass-button text-slate-200 font-bold text-xs rounded-2xl flex items-center justify-center gap-2 transition-all"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Restart Test Walkthrough
+              </button>
+            </div>
+
+          </div>
+        )}
+
+        {/* Pre-Test Session Setup Modal */}
+        {showSetupModal && (
+          <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-2xl p-6 flex flex-col justify-center z-50 animate-in fade-in duration-200 rounded-[44px]">
+            
+            <form onSubmit={handleSaveSessionSetup} className="space-y-5 max-w-sm mx-auto w-full">
+              
+              <div className="text-center space-y-1.5">
+                <div className="p-3.5 bg-indigo-500/20 text-indigo-300 rounded-2xl w-fit mx-auto border border-indigo-400/30 backdrop-blur-md shadow-lg shadow-indigo-500/10">
+                  <Smartphone className="w-7 h-7" />
+                </div>
+                <h3 className="text-lg font-extrabold text-white tracking-tight">Start Field QA Session</h3>
+                <p className="text-xs text-slate-300 font-medium leading-relaxed">
+                  Enter your name and mobile device model to begin testing.
+                </p>
+              </div>
+
+              <div className="liquid-glass-panel rounded-3xl p-5 space-y-4 border-white/15 shadow-2xl">
+                
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5 text-indigo-400" />
+                    Reporter Name
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Alex Rivera"
+                    value={inputReporterName}
+                    onChange={e => setInputReporterName(e.target.value)}
+                    className="w-full liquid-glass-input rounded-2xl px-4 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none font-medium"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
+                    <Smartphone className="w-3.5 h-3.5 text-purple-400" />
+                    Device Model
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Enter device model..."
+                    value={inputDeviceName}
+                    onChange={e => setInputDeviceName(e.target.value)}
+                    className="w-full liquid-glass-input rounded-2xl px-4 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none font-medium"
+                    required
+                  />
+                </div>
+
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-3.5 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-400 hover:to-pink-400 text-white font-extrabold text-xs rounded-2xl shadow-xl shadow-purple-500/25 border border-white/30 flex items-center justify-center gap-2 transition-all duration-300 hover:scale-[1.02] active:scale-[0.98]"
+              >
+                <span>Start QA Walkthrough</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+
+            </form>
+
+          </div>
+        )}
+
+        {/* Bug Modal (Apple Liquid Glass Modal) */}
+        {showBugModal && (
+          <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-2xl p-6 flex flex-col justify-between z-50 animate-in fade-in duration-200 rounded-[44px]">
+            
+            <form onSubmit={handleReportBugSubmit} className="h-full flex flex-col justify-between space-y-4">
+              
+              <div className="space-y-3.5">
+                <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                  <h4 className="text-sm font-black text-rose-300 flex items-center gap-1.5 tracking-tight">
+                    <Bug className="w-4 h-4 text-rose-400" />
+                    Bug / Note Entry
+                  </h4>
+                  <div className="text-[10px] font-mono text-slate-300 bg-white/10 px-2.5 py-1 rounded-xl border border-white/15 backdrop-blur-md flex items-center gap-1">
+                    <Clock className="w-3 h-3 text-indigo-400" />
+                    {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </div>
+                </div>
+
+                <div className="liquid-glass-pill rounded-2xl p-2.5 text-xs text-indigo-200 flex items-center justify-between font-semibold">
+                  <span>Feature: <strong className="text-purple-300 font-mono">{currentStep?.feature || 'General'}</strong></span>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1.5 uppercase tracking-wider">Step Target</label>
+                  <div className="text-xs font-bold text-white liquid-glass-card p-3 rounded-2xl border-white/15">
+                    Step #{currentStepIndex + 1}: {currentStep?.title}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5 text-xs">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase tracking-wider">Reporter</label>
+                    <div className="liquid-glass-input p-2.5 rounded-2xl text-slate-200 font-semibold truncate">{activeRun?.testerName || 'N/A'}</div>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase tracking-wider">Device Model</label>
+                    <div className="liquid-glass-input p-2.5 rounded-2xl text-purple-300 font-mono font-bold truncate">{activeRun?.deviceName || 'N/A'}</div>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1.5 uppercase tracking-wider">Bug Description / Notes</label>
+                  <textarea
+                    rows={3}
+                    placeholder="Describe what went wrong or observation notes..."
+                    value={bugNote}
+                    onChange={e => setBugNote(e.target.value)}
+                    className="w-full liquid-glass-input rounded-2xl p-3.5 text-xs text-white placeholder-slate-500 focus:outline-none font-medium leading-relaxed"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1.5 uppercase tracking-wider">
+                    Attach Screenshot / Photo
+                  </label>
+
+                  <input
+                    type="file"
+                    accept="image/*"
+                    id="mobile-bug-photo-upload"
+                    onChange={handlePhotoFileChange}
+                    className="hidden"
+                  />
+
+                  {bugImageUrl ? (
+                    <div className="space-y-2">
+                      <div className="relative w-full h-32 rounded-2xl overflow-hidden border border-white/20 shadow-md bg-slate-950">
+                        <img src={bugImageUrl} alt="Evidence Preview" className="w-full h-full object-cover" />
+                        <button
+                          type="button"
+                          onClick={() => setBugImageUrl('')}
+                          className="absolute top-2 right-2 bg-rose-600/90 text-white p-1 rounded-full text-xs hover:bg-rose-500 shadow transition-transform active:scale-95"
+                          title="Remove photo"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      <div className="text-[10px] text-emerald-400 font-bold flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5" /> Photo Attached from Photos App
+                      </div>
+                    </div>
+                  ) : (
+                    <label
+                      htmlFor="mobile-bug-photo-upload"
+                      className="liquid-glass-button w-full py-3.5 px-4 rounded-2xl flex items-center justify-center gap-2.5 cursor-pointer text-xs font-bold text-slate-200 hover:text-white transition-all duration-300 border-white/20 hover:bg-white/15 shadow-lg active:scale-[0.98]"
+                    >
+                      <Camera className="w-4 h-4 text-purple-400" />
+                      <span>Attach Photo from Photos App / Camera</span>
+                    </label>
+                  )}
+                </div>
+              </div>
+
+              {/* Modal Actions */}
+              <div className="flex gap-2.5 pt-3 border-t border-white/10">
+                <button
+                  type="button"
+                  onClick={() => setShowBugModal(false)}
+                  className="w-1/3 py-3 liquid-glass-button text-slate-300 hover:text-white font-bold text-xs rounded-2xl transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="w-2/3 py-3 bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-400 hover:to-pink-500 text-white font-extrabold text-xs rounded-2xl shadow-xl shadow-rose-500/25 border border-white/20 flex items-center justify-center gap-1.5 transition-all"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  Save Bug Log
+                </button>
+              </div>
+
+            </form>
+
+          </div>
+        )}
+
+      </div>
+
+    </div>
+  );
+};
