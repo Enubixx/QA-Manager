@@ -2006,66 +2006,67 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-950 border-b border-slate-800 text-slate-400 uppercase font-mono">
+                <table className="w-full text-left text-xs table-auto">
+                  <thead className="bg-slate-950 border-b border-slate-800 text-slate-400 uppercase font-mono text-[11px]">
                     <tr>
-                      <th className="py-3 px-4">Exact Timestamp</th>
-                      <th className="py-3 px-4">Feature</th>
-                      <th className="py-3 px-4">Device Model</th>
-                      <th className="py-3 px-4">Severity</th>
-                      <th className="py-3 px-4">Step Target</th>
-                      <th className="py-3 px-4">Reporter</th>
-                      <th className="py-3 px-4">Bug Observation Note</th>
-                      <th className="py-3 px-4">Evidence Image</th>
-                      <th className="py-3 px-4 text-right">Action</th>
+                      <th className="py-3 px-3">Time</th>
+                      <th className="py-3 px-3">Feature</th>
+                      <th className="py-3 px-3">Device Model</th>
+                      <th className="py-3 px-3">Step Target</th>
+                      <th className="py-3 px-3">Reporter</th>
+                      <th className="py-3 px-3">Bug Observation Note</th>
+                      <th className="py-3 px-3">Evidence</th>
+                      <th className="py-3 px-3 text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60">
                     {processedBugs.map(bug => {
                       const isBugExpanded = !!expandedBugIds[bug.id];
+                      const formatted12HrTime = (() => {
+                        try {
+                          const d = bug.timestamp ? new Date(bug.timestamp) : new Date();
+                          if (!isNaN(d.getTime())) {
+                            return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+                          }
+                        } catch (e) {}
+                        return bug.formattedTime || 'N/A';
+                      })();
+
                       return (
                         <React.Fragment key={bug.id}>
                           <tr 
                             onClick={() => toggleBugExpand(bug.id)}
                             className="hover:bg-slate-850 transition group cursor-pointer border-b border-slate-800/60"
                           >
-                            <td className="py-3.5 px-4 font-mono text-indigo-300 font-semibold flex items-center gap-2">
-                              <ChevronDown className={`w-3.5 h-3.5 text-indigo-400 transition-transform duration-300 ${isBugExpanded ? 'rotate-180 text-emerald-400' : ''}`} />
-                              <Clock className="w-3.5 h-3.5 text-indigo-400" />
-                              <span>{bug.formattedTime}</span>
-                              <span className="text-[10px] text-slate-500 font-normal">({new Date(bug.timestamp).toLocaleDateString()})</span>
+                            <td className="py-3 px-3 font-mono text-indigo-300 font-bold whitespace-nowrap">
+                              <div className="flex items-center gap-1.5">
+                                <ChevronDown className={`w-3.5 h-3.5 text-indigo-400 transition-transform duration-300 ${isBugExpanded ? 'rotate-180 text-emerald-400' : ''}`} />
+                                <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                                <span>{formatted12HrTime}</span>
+                              </div>
                             </td>
-                            <td className="py-3.5 px-4">
+                            <td className="py-3 px-3 whitespace-nowrap">
                               <span className="bg-purple-950 text-purple-300 font-mono text-[11px] px-2 py-0.5 rounded border border-purple-800/40 flex items-center gap-1 w-fit">
                                 <Tag className="w-3 h-3 text-purple-400" />
                                 {bug.feature || 'General'}
                               </span>
                             </td>
-                            <td className="py-3.5 px-4">
+                            <td className="py-3 px-3 whitespace-nowrap">
                               <span className="bg-slate-950 text-slate-300 font-mono text-[11px] px-2 py-0.5 rounded border border-slate-800 flex items-center gap-1 w-fit">
                                 <Smartphone className="w-3 h-3 text-indigo-400" />
                                 {bug.deviceName || 'Unspecified'}
                               </span>
                             </td>
-                            <td className="py-3.5 px-4">
-                              <span className={`px-2.5 py-0.5 rounded-full font-bold uppercase text-[10px] ${
-                                bug.severity === 'critical' || bug.severity === 'high'
-                                  ? 'bg-rose-950 text-rose-400 border border-rose-800'
-                                  : 'bg-indigo-950 text-indigo-300 border border-indigo-800'
-                              }`}>
-                                {bug.severity}
-                              </span>
-                            </td>
-                            <td className="py-3.5 px-4 font-medium text-white max-w-[180px] truncate">
+                            <td className="py-3 px-3 font-medium text-white max-w-[150px] truncate">
                               {bug.stepTitle}
                             </td>
-                            <td className="py-3.5 px-4 text-slate-300">
+                            <td className="py-3 px-3 text-slate-300 whitespace-nowrap">
                               {bug.testerName}
                             </td>
-                            <td className="py-3.5 px-4 text-slate-300 max-w-xs truncate">
+                            <td className="py-3 px-3 text-slate-300 max-w-[200px] truncate">
                               {bug.note}
                             </td>
-                            <td className="py-3.5 px-4">
+                            <td className="py-3 px-3 whitespace-nowrap">
                               {bug.imageUrl ? (
                                 <button
                                   type="button"
@@ -2076,7 +2077,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   className="group relative flex items-center gap-1 bg-slate-950 border border-slate-800 p-1 rounded-lg hover:border-purple-500 transition"
                                   title="Click to expand image"
                                 >
-                                  <img src={bug.imageUrl} alt="Bug screenshot" className="w-7 h-7 object-cover rounded" />
+                                  <img src={bug.imageUrl} alt="Bug screenshot" className="w-6 h-6 object-cover rounded" />
                                   <span className="text-[10px] text-purple-300 font-mono pr-1 flex items-center gap-0.5">
                                     <ImageIcon className="w-3 h-3 text-purple-400" /> View
                                   </span>
@@ -2085,7 +2086,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 <span className="text-slate-600 font-mono text-[10px]">None</span>
                               )}
                             </td>
-                            <td className="py-3.5 px-4 text-right">
+                            <td className="py-3 px-3 text-right whitespace-nowrap">
                               <div className="flex items-center justify-end gap-1" onClick={e => e.stopPropagation()}>
                                 <button
                                   type="button"
@@ -2109,22 +2110,19 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           {/* Expanded Full Bug Detail Log Card Sub-row */}
                           {isBugExpanded && (
                             <tr className="bg-slate-950/90 border-b border-purple-500/20">
-                              <td colSpan={9} className="p-4">
+                              <td colSpan={8} className="p-4">
                                 <div className="liquid-glass-card rounded-2xl p-4 space-y-3 border-purple-500/30 text-left bg-slate-950/90 shadow-2xl">
                                   
                                   <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
                                     <div className="flex items-center gap-2">
-                                      <span className="px-2.5 py-0.5 rounded-full font-bold uppercase text-[10px] bg-rose-500/20 text-rose-300 border border-rose-500/40">
-                                        {bug.severity} SEVERITY
-                                      </span>
                                       <span className="text-xs font-bold text-white flex items-center gap-1 font-mono">
                                         <Tag className="w-3.5 h-3.5 text-purple-400" />
-                                        {bug.feature || 'General'}
+                                        Feature: {bug.feature || 'General'}
                                       </span>
                                     </div>
                                     <span className="text-xs font-mono text-indigo-300 flex items-center gap-1">
                                       <Clock className="w-3.5 h-3.5 text-indigo-400" />
-                                      {new Date(bug.timestamp).toLocaleString()}
+                                      {formatted12HrTime} ({new Date(bug.timestamp).toLocaleDateString()})
                                     </span>
                                   </div>
 
