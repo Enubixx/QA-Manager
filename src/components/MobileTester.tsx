@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog } from '../types';
 import { CheckCircle2, Clock, Bug, Smartphone, RefreshCw, Send, Check, Layers, ChevronDown, AlertTriangle, XCircle, ArrowRight, User, Download, Edit3, Trash2, Tag, Image, Camera, X } from 'lucide-react';
@@ -97,7 +97,15 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   
   // Explicit state for completion summary view
   const [completedRunSummary, setCompletedRunSummary] = useState<TestRun | null>(null);
-  const isCompleted = completedRunSummary !== null || ((activeRun?.status === 'completed' || currentStepIndex >= totalSteps) && totalSteps > 0 && activeRun?.status !== 'not_started');
+
+  // Check if current plan has a completed run in archivedRuns
+  const archivedCompletedRun = useMemo(() => {
+    if (!currentPlan) return undefined;
+    return archivedRuns.find(r => r.planId === currentPlan.id && r.status === 'completed');
+  }, [archivedRuns, currentPlan]);
+
+  const activeOrSummaryCompleted = completedRunSummary || (archivedCompletedRun && activeRun?.status === 'not_started' ? archivedCompletedRun : null);
+  const isCompleted = activeOrSummaryCompleted !== null || activeRun?.status === 'completed' || (totalSteps > 0 && currentStepIndex >= totalSteps && activeRun?.status !== 'not_started');
 
   // Selected Status for current step
   const [selectedStatus, setSelectedStatus] = useState<'green' | 'yellow' | 'red' | null>(null);
@@ -805,12 +813,12 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         ) : (
           /* Completion Summary View (Liquid Glass Style) */
           (() => {
-            const summaryRun = completedRunSummary || activeRun;
+            const summaryRun = completedRunSummary || archivedCompletedRun || activeRun;
             const summaryResults = summaryRun?.results || {};
-            const summaryResultsArray = Object.values(summaryResults);
-            const summaryGreen = summaryResultsArray.filter(r => r.status === 'green').length;
-            const summaryYellow = summaryResultsArray.filter(r => r.status === 'yellow').length;
-            const summaryRed = summaryResultsArray.filter(r => r.status === 'red').length;
+            const summaryResultsArray = Object.values(summaryResults) as any[];
+            const summaryGreen = summaryResultsArray.filter((r: any) => r && r.status === 'green').length;
+            const summaryYellow = summaryResultsArray.filter((r: any) => r && r.status === 'yellow').length;
+            const summaryRed = summaryResultsArray.filter((r: any) => r && r.status === 'red').length;
 
             const startMs = summaryRun?.startedAt ? new Date(summaryRun.startedAt).getTime() : 0;
             const endMs = summaryRun?.completedAt ? new Date(summaryRun.completedAt).getTime() : Date.now();
@@ -876,7 +884,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                       <span className="text-[10px] text-slate-400">Tap trash to delete</span>
                     </div>
                     <div className="space-y-1.5 max-h-32 overflow-y-auto">
-                      {bugLogsList.map(bug => (
+                      {bugLogsList.map((bug: any) => (
                         <div key={bug.id} className="flex items-center justify-between bg-slate-950/60 p-2 rounded-xl border border-white/10 text-[11px]">
                           <div className="truncate pr-2">
                             <span className="font-mono text-purple-300 mr-1 text-[10px]">[{bug.feature || 'General'}]</span>
