@@ -177,7 +177,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       deviceId: deviceId,
       testerName: trimmedReporter,
       deviceName: trimmedDevice,
-      status: activeRun.status === 'not_started' ? 'in_progress' : activeRun.status
+      status: activeRun.status === 'not_started' ? 'in_progress' : activeRun.status,
+      startedAt: (activeRun.status === 'not_started' || !activeRun.startedAt) ? new Date().toISOString() : activeRun.startedAt
     };
 
     onUpdateRun(updatedRun);
