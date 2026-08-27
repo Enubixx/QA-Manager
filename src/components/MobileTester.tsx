@@ -272,6 +272,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     setShowBugModal(false);
   };
 
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const isDesktop = typeof window !== 'undefined' && window.innerWidth >= 768;
 
   // Capacitor Android Hardware Back Button listener
@@ -279,7 +280,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     let sub: any = null;
     import('@capacitor/app').then(({ App: CapApp }) => {
       CapApp.addListener('backButton', () => {
-        if (showBugModal) {
+        if (previewImageUrl) {
+          setPreviewImageUrl(null);
+        } else if (showBugModal) {
           setShowBugModal(false);
         } else if (showSetupModal) {
           if (onNavigateToDashboard) onNavigateToDashboard();
@@ -294,7 +297,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     return () => {
       if (sub && typeof sub.remove === 'function') sub.remove();
     };
-  }, [showBugModal, showSetupModal, onNavigateToDashboard]);
+  }, [previewImageUrl, showBugModal, showSetupModal, onNavigateToDashboard]);
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 p-0 sm:p-6 select-none font-sans relative">
@@ -512,8 +515,16 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                     </div>
 
                     {bug.imageUrl && (
-                      <div className="rounded-xl overflow-hidden border border-white/15 max-h-36">
-                        <img src={bug.imageUrl} alt="Bug screenshot" className="w-full object-cover" />
+                      <div
+                        onClick={() => setPreviewImageUrl(bug.imageUrl!)}
+                        className="rounded-xl overflow-hidden border border-white/15 max-h-40 relative group cursor-pointer"
+                      >
+                        <img src={bug.imageUrl} alt="Bug screenshot" className="w-full object-cover max-h-40" />
+                        <div className="absolute inset-0 bg-slate-950/40 backdrop-blur-[2px] flex items-center justify-center transition">
+                          <span className="px-3 py-1 bg-slate-950/90 text-purple-200 border border-purple-400/40 rounded-xl text-xs font-bold font-mono flex items-center gap-1.5 shadow-lg">
+                            <Image className="w-3.5 h-3.5 text-purple-400" /> Tap to Expand Photo
+                          </span>
+                        </div>
                       </div>
                     )}
 
@@ -943,6 +954,52 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
             </form>
 
+          </div>
+        )}
+
+        {/* Full Screen Photo Lightbox Modal */}
+        {previewImageUrl && (
+          <div
+            onClick={() => setPreviewImageUrl(null)}
+            className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-2xl p-4 flex flex-col justify-between animate-in fade-in duration-200"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-white/10">
+              <button
+                type="button"
+                onClick={() => setPreviewImageUrl(null)}
+                className="px-3.5 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow active:scale-95 cursor-pointer"
+              >
+                <span>← Back</span>
+              </button>
+              <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5 font-sans">
+                <Image className="w-4 h-4 text-purple-400" /> Photo Evidence Preview
+              </span>
+              <button
+                type="button"
+                onClick={() => setPreviewImageUrl(null)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-xl bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 flex items-center justify-center py-4 overflow-auto">
+              <img
+                src={previewImageUrl}
+                alt="Evidence Preview"
+                className="max-w-full max-h-[75vh] object-contain rounded-2xl border border-white/15 shadow-2xl"
+              />
+            </div>
+
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => setPreviewImageUrl(null)}
+                className="w-full py-3 bg-gradient-to-r from-indigo-500 to-purple-600 text-white text-xs font-extrabold rounded-2xl shadow-xl border border-white/20 active:scale-95 cursor-pointer"
+              >
+                ← Back to QA Walkthrough
+              </button>
+            </div>
           </div>
         )}
 

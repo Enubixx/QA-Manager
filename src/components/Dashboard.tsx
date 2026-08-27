@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { TestPlan, TestRun, BugLog } from '../types';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON } from '../utils/exportUtils';
@@ -89,6 +89,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [copiedReport, setCopiedReport] = useState<boolean>(false);
   const [copiedImage, setCopiedImage] = useState<boolean>(false);
   const [isVisualSnapshotModalOpen, setIsVisualSnapshotModalOpen] = useState<boolean>(false);
+  const [selectedImagePreviewUrl, setSelectedImagePreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && selectedImagePreviewUrl) {
+        setSelectedImagePreviewUrl(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedImagePreviewUrl]);
 
   // Helper to determine real, effective run status
   const getEffectiveRunStatus = (run: TestRun) => {
@@ -111,9 +122,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     onAddFeature(newFeatureInput.trim());
     setNewFeatureInput('');
   };
-
-  // Image Lightbox Modal State
-  const [selectedImagePreviewUrl, setSelectedImagePreviewUrl] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -2045,21 +2053,50 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       {/* Image Lightbox Preview Modal */}
       {selectedImagePreviewUrl && (
-        <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="relative max-w-3xl w-full bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl p-2 space-y-3">
-            <div className="flex items-center justify-between px-3 py-1">
+        <div
+          onClick={() => setSelectedImagePreviewUrl(null)}
+          className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-2xl flex flex-col items-center justify-center p-4 sm:p-8 animate-liquid-fade"
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="relative max-w-4xl w-full bg-slate-900/90 border border-white/20 rounded-3xl overflow-hidden shadow-2xl p-4 space-y-4 liquid-glass-panel"
+          >
+            {/* Top Bar with Back / Close Button */}
+            <div className="flex items-center justify-between pb-3 border-b border-white/10">
+              <button
+                type="button"
+                onClick={() => setSelectedImagePreviewUrl(null)}
+                className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-md active:scale-95"
+              >
+                <span>← Back</span>
+              </button>
               <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-                <ImageIcon className="w-4 h-4 text-purple-400" /> Screenshot Evidence
+                <ImageIcon className="w-4 h-4 text-purple-400" /> Screenshot Evidence Preview
               </span>
               <button
+                type="button"
                 onClick={() => setSelectedImagePreviewUrl(null)}
-                className="p-1 text-slate-400 hover:text-white rounded-lg bg-slate-800"
+                className="p-1.5 text-slate-400 hover:text-white rounded-xl bg-slate-800 hover:bg-slate-700 transition cursor-pointer"
+                title="Close Modal"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="max-h-[80vh] overflow-auto flex justify-center bg-slate-950 rounded-xl p-2 border border-slate-850">
-              <img src={selectedImagePreviewUrl} alt="Evidence" className="max-w-full max-h-[70vh] object-contain rounded-lg" />
+
+            {/* Image Display */}
+            <div className="max-h-[75vh] overflow-auto flex justify-center bg-slate-950/80 rounded-2xl p-2 border border-white/10 shadow-inner">
+              <img src={selectedImagePreviewUrl} alt="Evidence" className="max-w-full max-h-[70vh] object-contain rounded-xl shadow-lg" />
+            </div>
+
+            {/* Bottom Bar with Back Button */}
+            <div className="flex justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => setSelectedImagePreviewUrl(null)}
+                className="px-5 py-2 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-400 hover:to-indigo-500 text-white text-xs font-extrabold rounded-2xl shadow-lg border border-white/20 transition cursor-pointer active:scale-95"
+              >
+                ← Back to Dashboard
+              </button>
             </div>
           </div>
         </div>

@@ -318,24 +318,47 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
 
       </form>
 
-      {/* Separate Feature Selector Modal */}
+      {/* Floating Sticky Pop-out Feature Selector Button */}
+      <div className="fixed bottom-6 right-6 z-40">
+        <button
+          type="button"
+          onClick={() => setSelectingFeatureStepIndex(selectingFeatureStepIndex !== null ? null : -1)}
+          className="px-4 py-3 bg-gradient-to-r from-purple-600 via-indigo-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-extrabold text-xs rounded-full shadow-2xl shadow-purple-500/40 border border-white/30 flex items-center gap-2 transition-all duration-300 hover:scale-105 active:scale-95 cursor-pointer backdrop-blur-xl"
+          title="Open Pop-out Feature Selector without scrolling to top"
+        >
+          <Tag className="w-4 h-4 text-purple-200" />
+          <span>Feature Manager ({populatedFeatures.length})</span>
+        </button>
+      </div>
+
+      {/* Pop-out Feature Selector Modal */}
       {selectingFeatureStepIndex !== null && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full space-y-5 shadow-2xl animate-in fade-in duration-150">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+        <div
+          onClick={() => setSelectingFeatureStepIndex(null)}
+          className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-liquid-fade"
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="bg-slate-900 border border-white/20 rounded-3xl p-6 max-w-md w-full space-y-5 shadow-2xl liquid-glass-panel relative"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-white/10">
               <div>
                 <h4 className="text-sm font-bold text-white flex items-center gap-1.5">
                   <Tag className="w-4 h-4 text-purple-400" />
-                  Select Linked Feature Tag
+                  {selectingFeatureStepIndex >= 0
+                    ? `Link Feature for Step #${selectingFeatureStepIndex + 1}`
+                    : 'Pop-out Feature Tag Manager'}
                 </h4>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Step #{selectingFeatureStepIndex + 1}: <span className="text-slate-200 font-medium">{steps[selectingFeatureStepIndex]?.title || 'Untitled Step'}</span>
+                  {selectingFeatureStepIndex >= 0 && steps[selectingFeatureStepIndex]
+                    ? `Step: ${steps[selectingFeatureStepIndex].title || 'Untitled Step'}`
+                    : 'Manage active feature tags or add new features'}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setSelectingFeatureStepIndex(null)}
-                className="p-1 text-slate-400 hover:text-white rounded-lg bg-slate-800 transition"
+                className="p-1.5 text-slate-400 hover:text-white rounded-xl bg-slate-800 hover:bg-slate-700 transition cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -346,7 +369,9 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
               <div className="text-xs font-semibold text-slate-300">Choose from Available Features:</div>
               <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-1">
                 {populatedFeatures.map(feat => {
-                  const isCurrent = (steps[selectingFeatureStepIndex]?.feature || '').toLowerCase() === feat.toLowerCase();
+                  const isCurrent = selectingFeatureStepIndex >= 0 && steps[selectingFeatureStepIndex]
+                    ? (steps[selectingFeatureStepIndex].feature || '').toLowerCase() === feat.toLowerCase()
+                    : false;
                   return (
                     <div
                       key={feat}
@@ -356,7 +381,9 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
                           : 'bg-slate-950 hover:bg-slate-800 text-purple-200 border-purple-900/60 hover:border-purple-600'
                       }`}
                       onClick={() => {
-                        handleUpdateStep(selectingFeatureStepIndex, 'feature', feat);
+                        if (selectingFeatureStepIndex >= 0) {
+                          handleUpdateStep(selectingFeatureStepIndex, 'feature', feat);
+                        }
                         setSelectingFeatureStepIndex(null);
                       }}
                     >
@@ -385,21 +412,21 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
 
             {/* Quick Create Custom Feature inside Modal */}
             <form onSubmit={handleAddNewFeatureSubmit} className="pt-3 border-t border-slate-800 space-y-2">
-              <label className="block text-xs font-semibold text-slate-300">Create & Link Custom Feature</label>
+              <label className="block text-xs font-semibold text-slate-300">Create New Custom Feature Tag</label>
               <div className="flex gap-2">
                 <input
                   type="text"
-                  placeholder="Type new feature (e.g. Notifications)..."
+                  placeholder="Type feature (e.g. Payments)..."
                   value={newCustomFeatureName}
                   onChange={e => setNewCustomFeatureName(e.target.value)}
                   className="flex-1 bg-slate-950 border border-purple-800/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-purple-500 font-medium"
                 />
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-xl flex items-center gap-1 transition shadow-lg shadow-purple-600/20"
+                  className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-xl flex items-center gap-1 transition shadow-lg shadow-purple-600/20 cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  Add & Link
+                  Create Tag
                 </button>
               </div>
             </form>
