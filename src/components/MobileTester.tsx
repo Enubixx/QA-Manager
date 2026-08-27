@@ -948,7 +948,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         )}
 
         {/* Pre-Test Session Setup Modal */}
-        {showSetupModal && (
+        {showSetupModal && !completedRunSummary && (
           <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-2xl p-6 flex flex-col justify-center z-50 animate-in fade-in duration-200 rounded-[44px]">
             
             <form onSubmit={handleSaveSessionSetup} className="space-y-5 max-w-sm mx-auto w-full">
