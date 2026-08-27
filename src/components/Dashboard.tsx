@@ -1153,19 +1153,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           {profile.testerName.charAt(0).toUpperCase()}
                         </div>
                         <div className="truncate">
-                          <h4 className="text-sm font-bold text-white truncate flex items-center gap-1.5">
-                            <span>{profile.testerName}</span>
-                            <span className="text-[10px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.2 rounded-full font-semibold">QA Tester</span>
-                          </h4>
+                          <h4 className="text-sm font-bold text-white truncate">{profile.testerName}</h4>
                         </div>
                       </div>
 
-                      {/* Middle: Compact Day Stats (Device Name(s), Plans Finished & Avg Time) */}
+                      {/* Middle: Compact Day Stats (Plans Finished & Avg Time) */}
                       <div className="flex items-center gap-4 text-xs font-mono">
-                        <div className="text-right hidden md:block max-w-[140px] truncate">
-                          <span className="text-[9px] uppercase text-slate-400 block">Device(s) Tested</span>
-                          <span className="font-bold text-purple-300 truncate block" title={devicesStr}>{devicesStr}</span>
-                        </div>
                         <div className="text-right hidden sm:block">
                           <span className="text-[9px] uppercase text-slate-400 block">Finished</span>
                           <span className="font-extrabold text-emerald-300">{dayData.completedCount} Plans</span>
@@ -1210,6 +1203,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <div className={`liquid-accordion-wrapper ${isExpanded ? 'expanded' : ''}`}>
                       <div className="liquid-accordion-inner">
                         <div className="mt-4 pt-3 border-t border-white/10 space-y-3">
+                          {/* Devices Tested Banner */}
+                          <div className="flex items-center justify-between bg-slate-950/70 p-2.5 rounded-xl border border-white/10 text-xs">
+                            <span className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1">
+                              <Smartphone className="w-3 h-3 text-purple-400" />
+                              Devices Tested ({selectedQaDate === todayStr ? 'Today' : selectedQaDate}):
+                            </span>
+                            <span className="font-bold text-purple-300 font-mono truncate max-w-[220px]" title={devicesStr}>{devicesStr}</span>
+                          </div>
+
                           {/* Day Key Stats Summary for Mobile */}
                           <div className="grid grid-cols-2 gap-2 sm:hidden text-xs">
                             <div className="bg-slate-950/60 p-2.5 rounded-xl border border-white/10">
