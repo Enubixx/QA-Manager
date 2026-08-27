@@ -63,8 +63,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   }
 
   if (!activeRun && currentPlan) {
-    const savedName = localStorage.getItem('qa_tester_name') || '';
-    const savedDevice = localStorage.getItem('qa_device_name') || '';
+    const savedName = sessionStorage.getItem('qa_tester_name') || '';
+    const savedDevice = sessionStorage.getItem('qa_device_name') || '';
     const uniqueSuffix = Date.now().toString(36);
     activeRun = {
       id: `run-${currentPlan.id}-${deviceId}-${uniqueSuffix}`,
@@ -81,16 +81,36 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     };
   }
 
+  // Clear legacy localStorage tester info so sessions never persist across force quit
+  useEffect(() => {
+    localStorage.removeItem('qa_tester_name');
+    localStorage.removeItem('qa_device_name');
+
+    // On cold start / fresh launch, clear any leftover in-progress sessions for this device
+    if (!sessionStorage.getItem('qa_session_initialized')) {
+      sessionStorage.setItem('qa_session_initialized', 'true');
+      const inProgressRun = testRuns.find(r => r.status === 'in_progress' && (r.deviceId === deviceId || r.id.includes(deviceId)));
+      if (inProgressRun) {
+        onRestartRun(inProgressRun.planId || (currentPlan ? currentPlan.id : ''));
+      }
+      setShowSetupModal(true);
+      setInputReporterName('');
+      setInputDeviceName('');
+    }
+  }, []);
+
   // Active Mobile View Tab: 'plans' (Configured Test Plans) vs 'bugs' (Logged Bugs)
   const [activeMobileTab, setActiveMobileTab] = useState<'plans' | 'bugs'>('plans');
 
-  // Pre-test Session Setup state (Reporter Name & Device Name)
+  // Pre-test Session Setup state (Reporter Name & Device Name) - Defaults to true on cold start
   const [showSetupModal, setShowSetupModal] = useState<boolean>(() => {
-    return !activeRun?.testerName || !activeRun?.deviceName;
+    const savedName = sessionStorage.getItem('qa_tester_name');
+    const savedDevice = sessionStorage.getItem('qa_device_name');
+    return !savedName || !savedDevice || !activeRun?.testerName || !activeRun?.deviceName;
   });
 
-  const [inputReporterName, setInputReporterName] = useState(() => activeRun?.testerName || localStorage.getItem('qa_tester_name') || '');
-  const [inputDeviceName, setInputDeviceName] = useState(() => activeRun?.deviceName || localStorage.getItem('qa_device_name') || '');
+  const [inputReporterName, setInputReporterName] = useState(() => sessionStorage.getItem('qa_tester_name') || '');
+  const [inputDeviceName, setInputDeviceName] = useState(() => sessionStorage.getItem('qa_device_name') || '');
 
   const steps = currentPlan?.steps || [];
   const currentStepIndex = activeRun?.currentStepIndex || 0;
@@ -186,9 +206,11 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     const trimmedReporter = inputReporterName.trim();
     const trimmedDevice = inputDeviceName.trim();
 
-    // Persist to local device storage so the tester never has to re-type on this device
-    localStorage.setItem('qa_tester_name', trimmedReporter);
-    localStorage.setItem('qa_device_name', trimmedDevice);
+    // Store in session storage so the info resets when the app is force quit
+    sessionStorage.setItem('qa_tester_name', trimmedReporter);
+    sessionStorage.setItem('qa_device_name', trimmedDevice);
+    localStorage.removeItem('qa_tester_name');
+    localStorage.removeItem('qa_device_name');
 
     onAddPopulatedDevice(trimmedDevice);
 
@@ -923,8 +945,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                     onClick={() => {
                       setCompletedRunSummary(null);
                       setSelectedStatus(null);
-                      const savedName = localStorage.getItem('qa_tester_name') || activeRun?.testerName || '';
-                      const savedDevice = localStorage.getItem('qa_device_name') || activeRun?.deviceName || '';
+                      const savedName = sessionStorage.getItem('qa_tester_name') || activeRun?.testerName || '';
+                      const savedDevice = sessionStorage.getItem('qa_device_name') || activeRun?.deviceName || '';
                       if (savedName) setInputReporterName(savedName);
                       if (savedDevice) setInputDeviceName(savedDevice);
                       if (currentPlan) {
