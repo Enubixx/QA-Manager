@@ -443,9 +443,9 @@ export function App() {
     syncBugLogToSupabase(newBug);
   };
 
-  const handleRestartRun = (planId: string) => {
+  const handleRestartRun = (runIdOrPlanId: string) => {
     setTestRuns(prev => prev.map(r => {
-      if (r.planId === planId) {
+      if (r.id === runIdOrPlanId || r.planId === runIdOrPlanId) {
         return {
           ...r,
           currentStepIndex: 0,

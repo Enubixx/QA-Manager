@@ -34,15 +34,36 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   // Find current plan
   const currentPlan = testPlans.find(p => p.id === selectedPlanId) || testPlans[0];
 
-  // Find active run
-  let activeRun = testRuns.find(r => r.planId === currentPlan?.id);
+  // Persistent Device Identifier for multi-tester isolation
+  const getDeviceId = () => {
+    let devId = localStorage.getItem('qa_device_id');
+    if (!devId) {
+      devId = 'dev-' + Math.random().toString(36).substring(2, 9) + '-' + Date.now().toString(36);
+      localStorage.setItem('qa_device_id', devId);
+    }
+    return devId;
+  };
+
+  const deviceId = getDeviceId();
+
+  // Find active run specifically for THIS device & plan
+  let activeRun = testRuns.find(r => r.planId === currentPlan?.id && r.deviceId === deviceId);
+
+  // Fallback: check if an unassigned run matching legacy ID exists
   if (!activeRun && currentPlan) {
+    activeRun = testRuns.find(r => r.id === 'run-' + currentPlan.id);
+  }
+
+  if (!activeRun && currentPlan) {
+    const savedName = localStorage.getItem('qa_tester_name') || '';
+    const savedDevice = localStorage.getItem('qa_device_name') || '';
     activeRun = {
-      id: 'run-' + currentPlan.id,
+      id: `run-${currentPlan.id}-${deviceId}`,
       planId: currentPlan.id,
       planName: currentPlan.name,
-      testerName: '',
-      deviceName: '',
+      deviceId: deviceId,
+      testerName: savedName,
+      deviceName: savedDevice,
       status: 'not_started',
       currentStepIndex: 0,
       results: {},
@@ -59,8 +80,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     return !activeRun?.testerName || !activeRun?.deviceName;
   });
 
-  const [inputReporterName, setInputReporterName] = useState(activeRun?.testerName || '');
-  const [inputDeviceName, setInputDeviceName] = useState(activeRun?.deviceName || '');
+  const [inputReporterName, setInputReporterName] = useState(() => activeRun?.testerName || localStorage.getItem('qa_tester_name') || '');
+  const [inputDeviceName, setInputDeviceName] = useState(() => activeRun?.deviceName || localStorage.getItem('qa_device_name') || '');
 
   const steps = currentPlan?.steps || [];
   const currentStepIndex = activeRun?.currentStepIndex || 0;
@@ -132,12 +153,19 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     e.preventDefault();
     if (!inputReporterName.trim() || !inputDeviceName.trim() || !activeRun) return;
 
+    const trimmedReporter = inputReporterName.trim();
     const trimmedDevice = inputDeviceName.trim();
+
+    // Persist to local device storage so the tester never has to re-type on this device
+    localStorage.setItem('qa_tester_name', trimmedReporter);
+    localStorage.setItem('qa_device_name', trimmedDevice);
+
     onAddPopulatedDevice(trimmedDevice);
 
     const updatedRun: TestRun = {
       ...activeRun,
-      testerName: inputReporterName.trim(),
+      deviceId: deviceId,
+      testerName: trimmedReporter,
       deviceName: trimmedDevice,
       status: activeRun.status === 'not_started' ? 'in_progress' : activeRun.status
     };

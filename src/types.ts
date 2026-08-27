@@ -44,6 +44,7 @@ export interface TestRun {
   planName: string;
   testerName: string;
   deviceName?: string;
+  deviceId?: string;
   status: 'not_started' | 'in_progress' | 'completed';
   currentStepIndex: number;
   results: Record<string, StepResult>; // stepId -> StepResult
