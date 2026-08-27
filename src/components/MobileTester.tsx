@@ -47,7 +47,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   const deviceId = getDeviceId();
 
   // Find active run specifically for THIS device & plan
-  let activeRun = testRuns.find(r => r.planId === currentPlan?.id && r.deviceId === deviceId);
+  let activeRun = testRuns.find(r => 
+    r.planId === currentPlan?.id && 
+    (r.deviceId === deviceId || r.id.endsWith(deviceId) || r.id === `run-${currentPlan?.id}-${deviceId}`)
+  );
 
   // Fallback: check if an unassigned run matching legacy ID exists
   if (!activeRun && currentPlan) {
