@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { TestPlan, TestStep } from '../types';
 import { Plus, Trash2, Save, ListOrdered, FileText, Tag, ArrowUp, ArrowDown, ChevronDown, Check, X } from 'lucide-react';
 
@@ -331,11 +332,11 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
         </button>
       </div>
 
-      {/* Pop-out Feature Selector Modal */}
-      {selectingFeatureStepIndex !== null && (
+      {/* Pop-out Feature Selector Modal via Portal */}
+      {selectingFeatureStepIndex !== null && createPortal(
         <div
           onClick={() => setSelectingFeatureStepIndex(null)}
-          className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-liquid-fade"
+          className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-[9999] flex items-center justify-center p-4 animate-liquid-fade"
         >
           <div
             onClick={e => e.stopPropagation()}
@@ -431,7 +432,8 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
     </div>
