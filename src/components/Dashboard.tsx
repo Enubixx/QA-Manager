@@ -2069,7 +2069,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            justifyContent: 'between',
+            justifyContent: 'space-between',
             padding: '1.25rem',
             boxSizing: 'border-box'
           }}
