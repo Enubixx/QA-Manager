@@ -958,51 +958,130 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           </div>
         )}
 
-        {/* Full Screen Photo Lightbox Modal via Portal */}
+        {/* Full Screen Photo Lightbox Modal via Dedicated Portal */}
         {previewImageUrl && createPortal(
           <div
             onClick={() => setPreviewImageUrl(null)}
-            className="fixed inset-0 z-[9999] bg-slate-950/95 backdrop-blur-2xl p-4 flex flex-col justify-between animate-in fade-in duration-200"
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              width: '100vw',
+              height: '100vh',
+              zIndex: 9999999,
+              backgroundColor: 'rgba(2, 6, 23, 0.96)',
+              backdropFilter: 'blur(24px)',
+              WebkitBackdropFilter: 'blur(24px)',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '1rem',
+              boxSizing: 'border-box'
+            }}
           >
-            <div className="flex items-center justify-between pb-3 border-b border-white/10 flex-shrink-0">
+            {/* Top Bar - Pinned at Top of Screen Viewport */}
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{
+                width: '100%',
+                maxWidth: '800px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+                borderRadius: '1rem',
+                padding: '0.75rem 1rem',
+                marginBottom: '0.75rem',
+                flexShrink: 0,
+                boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)'
+              }}
+            >
               <button
                 type="button"
                 onClick={() => setPreviewImageUrl(null)}
-                className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow active:scale-95 cursor-pointer"
+                className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-extrabold flex items-center gap-1.5 cursor-pointer shadow-lg active:scale-95 transition-all"
               >
                 <span>← Back</span>
               </button>
-              <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5 font-sans">
+
+              <span className="text-xs font-bold text-slate-200 flex items-center gap-2">
                 <Image className="w-4 h-4 text-purple-400" /> Photo Evidence Preview
               </span>
+
               <button
                 type="button"
                 onClick={() => setPreviewImageUrl(null)}
-                className="p-2 text-slate-400 hover:text-white rounded-xl bg-slate-800 cursor-pointer"
+                className="p-2 text-slate-400 hover:text-white rounded-xl bg-slate-800 hover:bg-slate-700 transition cursor-pointer"
+                title="Close Modal"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="flex-1 min-h-0 overflow-hidden flex items-center justify-center py-4">
+            {/* Center Image Container - Explicit 70vh Constraint */}
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{
+                height: '70vh',
+                maxHeight: '70vh',
+                width: '100%',
+                maxWidth: '800px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: '#030712',
+                borderRadius: '1.25rem',
+                border: '1px solid rgba(255, 255, 255, 0.15)',
+                padding: '0.75rem',
+                overflow: 'hidden',
+                boxShadow: '0 20px 40px -10px rgba(0,0,0,0.9)'
+              }}
+            >
               <img
                 src={previewImageUrl}
                 alt="Evidence Preview"
-                className="max-w-full max-h-full object-contain rounded-2xl border border-white/15 shadow-2xl"
+                style={{
+                  maxWidth: '100%',
+                  maxHeight: '100%',
+                  width: 'auto',
+                  height: 'auto',
+                  objectFit: 'contain',
+                  borderRadius: '0.75rem',
+                  boxShadow: '0 10px 30px rgba(0,0,0,0.9)'
+                }}
               />
             </div>
 
-            <div className="pt-2 flex-shrink-0">
+            {/* Bottom Bar - Pinned at Bottom of Screen Viewport */}
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{
+                width: '100%',
+                maxWidth: '800px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+                borderRadius: '1rem',
+                padding: '0.75rem 1rem',
+                marginTop: '0.75rem',
+                flexShrink: 0,
+                boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)'
+              }}
+            >
               <button
                 type="button"
                 onClick={() => setPreviewImageUrl(null)}
-                className="w-full py-3 bg-gradient-to-r from-indigo-500 to-purple-600 text-white text-xs font-extrabold rounded-2xl shadow-xl border border-white/20 active:scale-95 cursor-pointer"
+                className="w-full py-3 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-400 hover:to-purple-500 text-white text-xs font-extrabold rounded-xl shadow-xl border border-white/20 active:scale-95 cursor-pointer transition-all"
               >
                 ← Back to QA Walkthrough
               </button>
             </div>
           </div>,
-          document.body
+          document.getElementById('modal-portal') || document.body
         )}
 
       </div>
