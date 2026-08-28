@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Dashboard } from './components/Dashboard';
 import { PlanBuilder } from './components/PlanBuilder';
 import { MobileTester } from './components/MobileTester';
@@ -116,6 +116,12 @@ export function App() {
     return list.filter(f => f && f.trim() !== '' && f.toLowerCase() !== 'general');
   });
 
+  const devicesRef = useRef(devices);
+  useEffect(() => { devicesRef.current = devices; }, [devices]);
+
+  const testersRef = useRef(testers);
+  useEffect(() => { testersRef.current = testers; }, [testers]);
+
   // Supabase Initial Fetch & Real-Time Sync Subscription
   const loadCloudData = async () => {
     if (!isSupabaseConfigured) return;
@@ -128,10 +134,10 @@ export function App() {
       if (cloudData.populatedFeatures && cloudData.populatedFeatures.length > 0) {
         setPopulatedFeatures(cloudData.populatedFeatures);
       }
-      if (cloudData.devices) {
+      if (cloudData.devices && JSON.stringify(cloudData.devices) !== JSON.stringify(devicesRef.current)) {
         setDevices(cloudData.devices);
       }
-      if (cloudData.testers) {
+      if (cloudData.testers && JSON.stringify(cloudData.testers) !== JSON.stringify(testersRef.current)) {
         setTesters(cloudData.testers);
       }
     }
@@ -181,16 +187,10 @@ export function App() {
 
   useEffect(() => {
     localStorage.setItem('qa_devices_list', JSON.stringify(devices));
-    if (devices.length > 0) {
-      syncDevicesListToCloud(devices);
-    }
   }, [devices]);
 
   useEffect(() => {
     localStorage.setItem('qa_testers_list', JSON.stringify(testers));
-    if (testers.length > 0) {
-      syncTestersListToCloud(testers);
-    }
   }, [testers]);
 
   // Add device name to populated list if not present
