@@ -179,6 +179,20 @@ export function App() {
     localStorage.setItem('qa_populated_features', JSON.stringify(populatedFeatures));
   }, [populatedFeatures]);
 
+  useEffect(() => {
+    localStorage.setItem('qa_devices_list', JSON.stringify(devices));
+    if (devices.length > 0) {
+      syncDevicesListToCloud(devices);
+    }
+  }, [devices]);
+
+  useEffect(() => {
+    localStorage.setItem('qa_testers_list', JSON.stringify(testers));
+    if (testers.length > 0) {
+      syncTestersListToCloud(testers);
+    }
+  }, [testers]);
+
   // Add device name to populated list if not present
   const handleAddPopulatedDevice = (deviceName: string) => {
     const trimmed = deviceName.trim();
