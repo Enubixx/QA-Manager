@@ -148,3 +148,57 @@ export function getBriefIssueSummarySync(
   summarizeFeatureBugsWithGemini(featureName, bugs, yellowCount, redCount);
   return nlpCleanReword(notes, featureName);
 }
+
+/**
+ * Generates a concise 1-2 sentence executive summary overview of all reported bugs across features using Gemini.
+ */
+export async function summarizeOverallBugsWithGemini(bugs: BugLog[] = []): Promise<string> {
+  if (!bugs || bugs.length === 0) return '';
+
+  const bugLines = bugs.map(b => {
+    const feat = b.feature || 'General';
+    const step = b.stepTitle ? ` [${b.stepTitle}]` : '';
+    const note = b.note ? b.note.trim() : '';
+    return `- (${feat}${step}): ${note}`;
+  });
+
+  const userApiKey = getStoredGeminiApiKey();
+  const cacheKey = `overall:${userApiKey}:${bugLines.sort().join('||')}`;
+  if (summaryCache.has(cacheKey)) {
+    return summaryCache.get(cacheKey)!;
+  }
+
+  if (userApiKey) {
+    try {
+      const genAI = new GoogleGenAI({ apiKey: userApiKey });
+      const response = await genAI.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: `You are a senior Lead QA Engineer writing an executive summary overview for a QA report.
+
+Reported Bugs List:
+${bugLines.join('\n')}
+
+GOAL: Write a super concise, 1 to 2 sentence executive summary overview summarizing the main issues and friction points encountered across the features.
+
+Instructions:
+1. Be super concise, clear, and direct (under 30 words total).
+2. Highlight the main root causes or recurring failures.
+3. Return ONLY the concise summary text. Do not add intro phrases, quotes, bullet points, or markdown titles.`,
+      });
+
+      const text = (response.text || '').trim().replace(/^["']|["']$/g, '');
+      if (text) {
+        summaryCache.set(cacheKey, text);
+        return text;
+      }
+    } catch (err) {
+      console.warn('Gemini overall summary API call failed:', err);
+    }
+  }
+
+  // Fallback NLP synthesis if API key is not configured or fails
+  const notes = bugs.map(b => b.note).filter(Boolean);
+  const fallback = notes.length > 0 ? nlpCleanReword(notes, 'Overall') : '';
+  summaryCache.set(cacheKey, fallback);
+  return fallback;
+}

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota } from '../types';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard } from '../utils/exportUtils';
-import { summarizeFeatureBugsWithGemini, getBriefIssueSummarySync, getStoredGeminiApiKey, saveGeminiApiKey } from '../services/geminiService';
+import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, getBriefIssueSummarySync, getStoredGeminiApiKey, saveGeminiApiKey } from '../services/geminiService';
 import { toBlob } from 'html-to-image';
 
 interface DashboardProps {
@@ -694,17 +694,27 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const warningList = featureMetricsList.filter(m => m.status === 'warning');
     const healthyList = featureMetricsList.filter(m => m.status === 'healthy');
 
+    // Fetch overall Gemini bug summary across features if bugs exist
+    const allBugs = featureMetricsList.flatMap(m => m.associatedBugs || []);
+    const overallGeminiSummary = await summarizeOverallBugsWithGemini(allBugs.length > 0 ? allBugs : bugLogs);
+
     // Plain text format
     let plainText = `📊 CUJ Report (${new Date().toLocaleDateString()})\n`;
     plainText += `• Coverage: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)\n`;
-    plainText += `• Status: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)\n\n`;
+    plainText += `• Status: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)\n`;
+    if (overallGeminiSummary) {
+      plainText += `• Gemini Issue Overview: ${overallGeminiSummary}\n`;
+    }
+    plainText += `\n`;
 
     if (criticalList.length > 0) {
       plainText += `🔴 Critical CUJs:\n`;
       criticalList.forEach(m => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})\n`;
+        const issueSummary = getBriefIssueSummarySync(m.featureName, m.associatedBugs, m.yellowCount, m.redCount);
+        const summaryStr = issueSummary ? ` — Issue: ${issueSummary}` : '';
+        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryStr}\n`;
       });
       plainText += `\n`;
     }
@@ -714,7 +724,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
       warningList.forEach(m => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})\n`;
+        const issueSummary = getBriefIssueSummarySync(m.featureName, m.associatedBugs, m.yellowCount, m.redCount);
+        const summaryStr = issueSummary ? ` — Issue: ${issueSummary}` : '';
+        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryStr}\n`;
       });
       plainText += `\n`;
     }
@@ -731,7 +743,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
     let htmlText = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5;">`;
     htmlText += `<p style="margin: 0 0 6px 0;">📊 <b>CUJ Report</b> (${new Date().toLocaleDateString()})</p>`;
     htmlText += `<p style="margin: 0 0 4px 0;">• <b>Coverage</b>: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)</p>`;
-    htmlText += `<p style="margin: 0 0 10px 0;">• <b>Status</b>: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)</p>`;
+    htmlText += `<p style="margin: 0 0 8px 0;">• <b>Status</b>: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)</p>`;
+    if (overallGeminiSummary) {
+      htmlText += `<div style="background-color: #f1f5f9; border-left: 3px solid #6366f1; padding: 8px 12px; margin: 8px 0 12px 0; border-radius: 6px; font-size: 12.5px; color: #1e293b;">🤖 <b>Gemini Executive Issue Summary:</b> ${overallGeminiSummary}</div>`;
+    }
 
     if (criticalList.length > 0) {
       htmlText += `<p style="margin: 8px 0 4px 0; color: #dc2626; font-weight: 700;">🔴 Critical CUJs:</p>`;
@@ -739,7 +754,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
       criticalList.forEach(m => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})</li>`;
+        const issueSummary = getBriefIssueSummarySync(m.featureName, m.associatedBugs, m.yellowCount, m.redCount);
+        const summaryStr = issueSummary ? ` &mdash; <i style="color: #64748b;">Issue: ${issueSummary}</i>` : '';
+        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryStr}</li>`;
       });
       htmlText += `</ul>`;
     }
@@ -750,7 +767,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
       warningList.forEach(m => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})</li>`;
+        const issueSummary = getBriefIssueSummarySync(m.featureName, m.associatedBugs, m.yellowCount, m.redCount);
+        const summaryStr = issueSummary ? ` &mdash; <i style="color: #64748b;">Issue: ${issueSummary}</i>` : '';
+        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryStr}</li>`;
       });
       htmlText += `</ul>`;
     }
