@@ -193,12 +193,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
     )
   ) as string[];
 
-  // Unique features populated across test steps, bug logs, and populatedFeatures
+  // Unique features populated across test steps, bug logs, and populatedFeatures (excluding 'General')
   const uniqueFeatures = Array.from(
     new Set(
       populatedFeatures
-        .concat(testPlans.flatMap(p => p.steps.map(s => s.feature || 'General')))
-        .concat(bugLogs.map(b => b.feature || 'General'))
+        .concat(testPlans.flatMap(p => p.steps.map(s => s.feature || '')))
+        .concat(bugLogs.map(b => b.feature || ''))
+        .filter(f => f && f.trim() !== '' && f.toLowerCase() !== 'general')
     )
   ) as string[];
 
@@ -222,7 +223,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
   // Gather steps from plans
   testPlans.forEach(plan => {
     plan.steps.forEach(step => {
-      const featureName = step.feature || 'General';
+      const featureName = step.feature;
+      if (!featureName || featureName.toLowerCase() === 'general') return;
       if (!featureMetricsMap[featureName]) {
         featureMetricsMap[featureName] = {
           featureName,
@@ -302,7 +304,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
         if (stepDate && stepDate !== selectedDailySessionDate) return;
       }
 
-      const featureName = step.feature || 'General';
+      const featureName = step.feature;
+      if (!featureName || featureName.toLowerCase() === 'general') return;
       if (!featureMetricsMap[featureName]) {
         featureMetricsMap[featureName] = {
           featureName,
@@ -332,7 +335,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
       if (bugDate && bugDate !== selectedDailySessionDate) return;
     }
 
-    const featureName = bug.feature || 'General';
+    const featureName = bug.feature;
+    if (!featureName || featureName.toLowerCase() === 'general') return;
     if (!featureMetricsMap[featureName]) {
       featureMetricsMap[featureName] = {
         featureName,

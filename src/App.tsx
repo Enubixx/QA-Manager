@@ -81,10 +81,15 @@ export function App() {
   // User-populated feature identifiers list
   const [populatedFeatures, setPopulatedFeatures] = useState<string[]>(() => {
     const saved = localStorage.getItem('qa_populated_features');
-    if (saved) return JSON.parse(saved);
-    const existingFromPlans = testPlans.flatMap(p => p.steps.map(s => s.feature || '')).filter(Boolean);
-    const existingFromBugs = bugLogs.map(b => b.feature || '').filter(Boolean);
-    return Array.from(new Set([...existingFromPlans, ...existingFromBugs]));
+    let list: string[] = [];
+    if (saved) {
+      list = JSON.parse(saved);
+    } else {
+      const existingFromPlans = testPlans.flatMap(p => p.steps.map(s => s.feature || '')).filter(Boolean);
+      const existingFromBugs = bugLogs.map(b => b.feature || '').filter(Boolean);
+      list = Array.from(new Set([...existingFromPlans, ...existingFromBugs]));
+    }
+    return list.filter(f => f && f.trim() !== '' && f.toLowerCase() !== 'general');
   });
 
   // Supabase Initial Fetch & Real-Time Sync Subscription

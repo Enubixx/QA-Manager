@@ -49,7 +49,7 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
       {
         id: 'step-' + Date.now() + '-1',
         title: 'Initialize Test Step 1',
-        feature: populatedFeatures[0] || 'General',
+        feature: populatedFeatures[0] || '',
         description: 'Perform initial action instruction...',
         expectedOutcome: 'Verify initial expected result.'
       }
@@ -60,7 +60,7 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
     const newStep: TestStep = {
       id: 'step-' + Date.now() + '-' + (steps.length + 1),
       title: '',
-      feature: populatedFeatures[0] || 'General',
+      feature: populatedFeatures[0] || '',
       description: '',
       expectedOutcome: ''
     };
