@@ -355,17 +355,11 @@ export function App() {
   };
 
   const handleDeleteTestRun = (runId: string) => {
-    const runToDelete = testRuns.find(r => r.id === runId) || archivedRuns.find(r => r.id === runId);
-
     setTestRuns(prev => prev.filter(r => r.id !== runId));
     setArchivedRuns(prev => prev.filter(r => r.id !== runId));
 
     deleteTestRunFromSupabase(runId);
     deleteArchivedRunFromSupabase(runId);
-
-    if (currentView === 'mobile' && runToDelete && runToDelete.planId === selectedPlanId) {
-      setCurrentView('dashboard');
-    }
   };
 
   const handleDeleteTester = (testerName: string) => {

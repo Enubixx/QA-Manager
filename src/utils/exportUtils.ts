@@ -126,3 +126,153 @@ export function exportBugsToCSV(bugs: BugLog[]) {
   downloadFile(csvContent, fileName);
 }
 
+export interface BugCopyFilterOptions {
+  dateFilter?: string;
+  featureFilter?: string;
+  deviceFilter?: string;
+  searchQuery?: string;
+}
+
+/**
+ * Format bugs list into plain text & rich HTML suitable for email, Slack, Teams, and messages
+ */
+export function formatBugsToText(bugs: BugLog[], filterOptions?: BugCopyFilterOptions): { plainText: string; htmlText: string } {
+  const getFormattedTimestamp = (bug: BugLog) => {
+    try {
+      const d = bug.timestamp ? new Date(bug.timestamp) : new Date();
+      if (!isNaN(d.getTime())) {
+        const dateStr = d.toLocaleDateString();
+        const timeStr = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+        return `${dateStr}, ${timeStr}`;
+      }
+    } catch (e) {}
+    return bug.formattedTime || 'N/A';
+  };
+
+  const filterParts: string[] = [];
+  if (filterOptions?.featureFilter && filterOptions.featureFilter !== 'all') {
+    filterParts.push(`Feature: ${filterOptions.featureFilter}`);
+  }
+  if (filterOptions?.deviceFilter && filterOptions.deviceFilter !== 'all') {
+    filterParts.push(`Device: ${filterOptions.deviceFilter}`);
+  }
+  if (filterOptions?.dateFilter && filterOptions.dateFilter !== 'all') {
+    filterParts.push(`Date: ${filterOptions.dateFilter}`);
+  }
+  if (filterOptions?.searchQuery) {
+    filterParts.push(`Search: "${filterOptions.searchQuery}"`);
+  }
+  const filterSummaryStr = filterParts.length > 0 ? filterParts.join(' | ') : 'All Bugs (No filters)';
+
+  // 1. Plain Text Output
+  let plainText = `🐛 QA Bug Report (${bugs.length} ${bugs.length === 1 ? 'Bug' : 'Bugs'})\n`;
+  plainText += `Filters: ${filterSummaryStr}\n`;
+  plainText += `Generated: ${new Date().toLocaleString()}\n`;
+  plainText += `----------------------------------------\n\n`;
+
+  if (bugs.length === 0) {
+    plainText += `No bugs match the selected filter criteria.\n`;
+  } else {
+    bugs.forEach((bug, idx) => {
+      const severityStr = (bug.severity || 'medium').toUpperCase();
+      const ts = getFormattedTimestamp(bug);
+      const feature = bug.feature || 'General';
+      const stepTarget = bug.stepTitle || 'N/A';
+      const tester = bug.testerName || 'Anonymous';
+      const device = bug.deviceName || 'Mobile Device';
+
+      plainText += `${idx + 1}. [${severityStr}] ${feature} — Step: ${stepTarget}\n`;
+      plainText += `   • Description: ${bug.note || 'No description attached.'}\n`;
+      plainText += `   • Reporter: ${tester} (${device})\n`;
+      plainText += `   • Logged Time: ${ts}\n`;
+      if (bug.imageUrl) {
+        plainText += `   • Photo Evidence: ${bug.imageUrl}\n`;
+      }
+      plainText += `\n`;
+    });
+  }
+  plainText += `----------------------------------------\n`;
+  plainText += `Exported from QA Manager`;
+
+  // 2. Rich HTML Output for Email, Slack, Teams, Docs & Apple Notes
+  let htmlText = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5; max-width: 680px;">`;
+  htmlText += `<div style="border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 12px;">`;
+  htmlText += `<h3 style="margin: 0 0 4px 0; font-size: 16px; font-weight: 800; color: #0f172a;">`;
+  htmlText += `🐛 QA Bug Report <span style="font-size: 13px; font-weight: 600; color: #64748b;">(${bugs.length} ${bugs.length === 1 ? 'Bug' : 'Bugs'})</span>`;
+  htmlText += `</h3>`;
+  htmlText += `<div style="font-size: 11.5px; color: #64748b; font-weight: 500;">`;
+  htmlText += `<b>Filters:</b> ${filterSummaryStr} &bull; <i>Generated on ${new Date().toLocaleString()}</i>`;
+  htmlText += `</div>`;
+  htmlText += `</div>`;
+
+  if (bugs.length === 0) {
+    htmlText += `<p style="color: #64748b; font-style: italic;">No bugs match the selected filter criteria.</p>`;
+  } else {
+    htmlText += `<ol style="margin: 0; padding-left: 20px;">`;
+    bugs.forEach((bug) => {
+      const sev = (bug.severity || 'medium').toLowerCase();
+      const severityStr = sev.toUpperCase();
+      const color = sev === 'critical' ? '#dc2626' : sev === 'high' ? '#ea580c' : sev === 'medium' ? '#d97706' : '#2563eb';
+      const ts = getFormattedTimestamp(bug);
+      const feature = bug.feature || 'General';
+      const stepTarget = bug.stepTitle || 'N/A';
+      const tester = bug.testerName || 'Anonymous';
+      const device = bug.deviceName || 'Mobile Device';
+      const note = (bug.note || 'No description attached.').replace(/\n/g, '<br/>');
+
+      htmlText += `<li style="margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #f1f5f9;">`;
+      htmlText += `<div style="font-size: 13px; font-weight: 700; color: #0f172a; margin-bottom: 4px;">`;
+      htmlText += `<span style="color: ${color}; font-weight: 800; font-family: monospace;">[${severityStr}]</span> `;
+      htmlText += `<span style="color: #0f172a;">${feature}</span> &mdash; <span style="color: #475569;">${stepTarget}</span>`;
+      htmlText += `</div>`;
+      htmlText += `<div style="background-color: #f8fafc; border-left: 3px solid #cbd5e1; padding: 8px 12px; margin: 6px 0; border-radius: 4px; font-size: 12.5px; color: #1e293b; font-weight: 500;">`;
+      htmlText += `${note}`;
+      htmlText += `</div>`;
+      htmlText += `<div style="font-size: 11.5px; color: #64748b; margin-top: 4px;">`;
+      htmlText += `&bull; <b>Reporter:</b> ${tester} (${device}) &bull; <b>Time:</b> ${ts}`;
+      if (bug.imageUrl) {
+        htmlText += `<br/>&bull; <b>Evidence Photo:</b> <a href="${bug.imageUrl}" target="_blank" rel="noopener noreferrer" style="color: #2563eb; text-decoration: underline;">View Image</a>`;
+      }
+      htmlText += `</div>`;
+      htmlText += `</li>`;
+    });
+    htmlText += `</ol>`;
+  }
+
+  htmlText += `<div style="margin-top: 12px; padding-top: 8px; border-top: 1px solid #e2e8f0; font-size: 11px; color: #94a3b8; text-align: right;">Exported from QA Manager</div>`;
+  htmlText += `</div>`;
+
+  return { plainText, htmlText };
+}
+
+/**
+ * Copy formatted bug report (text & HTML) to system clipboard
+ */
+export async function copyBugsToClipboard(bugs: BugLog[], filterOptions?: BugCopyFilterOptions): Promise<boolean> {
+  const { plainText, htmlText } = formatBugsToText(bugs, filterOptions);
+  try {
+    if (navigator.clipboard && window.ClipboardItem) {
+      const textBlob = new Blob([plainText], { type: 'text/plain' });
+      const htmlBlob = new Blob([htmlText], { type: 'text/html' });
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/plain': textBlob,
+          'text/html': htmlBlob,
+        })
+      ]);
+      return true;
+    } else {
+      await navigator.clipboard.writeText(plainText);
+      return true;
+    }
+  } catch (err) {
+    try {
+      await navigator.clipboard.writeText(plainText);
+      return true;
+    } catch (e) {
+      console.error('Failed to copy bugs to clipboard:', e);
+      return false;
+    }
+  }
+}
+

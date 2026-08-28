@@ -2,7 +2,7 @@ import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota } from '../types';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer } from 'lucide-react';
-import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV } from '../utils/exportUtils';
+import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard } from '../utils/exportUtils';
 import { summarizeFeatureBugsWithGemini, getBriefIssueSummarySync, getStoredGeminiApiKey, saveGeminiApiKey } from '../services/geminiService';
 import { toBlob } from 'html-to-image';
 
@@ -166,8 +166,35 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [isBugFilterMenuOpen, setIsBugFilterMenuOpen] = useState<boolean>(false);
   const [copiedReport, setCopiedReport] = useState<boolean>(false);
   const [copiedImage, setCopiedImage] = useState<boolean>(false);
+  const [copiedBugs, setCopiedBugs] = useState<boolean>(false);
   const [isVisualSnapshotModalOpen, setIsVisualSnapshotModalOpen] = useState<boolean>(false);
   const [selectedImagePreviewUrl, setSelectedImagePreviewUrl] = useState<string | null>(null);
+
+  const handleCopyBugsToClipboard = async () => {
+    const filterLabelDate = selectedDateFilter === 'all' 
+      ? 'All Dates' 
+      : selectedDateFilter === 'today' 
+      ? 'Today' 
+      : selectedDateFilter === 'yesterday' 
+      ? 'Yesterday' 
+      : selectedDateFilter === '7days' 
+      ? 'Last 7 Days' 
+      : selectedDateFilter === '30days' 
+      ? 'Last 30 Days' 
+      : customDateInput || 'Custom Date';
+
+    const success = await copyBugsToClipboard(processedBugs, {
+      dateFilter: filterLabelDate,
+      featureFilter: selectedFeatureFilter,
+      deviceFilter: selectedDeviceFilter,
+      searchQuery: searchBugQuery.trim() || undefined
+    });
+
+    if (success) {
+      setCopiedBugs(true);
+      setTimeout(() => setCopiedBugs(false), 2500);
+    }
+  };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -2418,15 +2445,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 )}
               </div>
 
-              {/* Export to CSV / Google Sheets Button */}
+              {/* Copy Filtered Bugs Button (for Messages / Email / Slack / Teams) */}
               <button
                 type="button"
-                onClick={() => exportBugsToCSV(processedBugs)}
-                className="px-3.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-2xl text-xs font-bold transition flex items-center gap-1.5 shadow-lg border border-white/20 active:scale-95 cursor-pointer"
-                title="Export Bug Logs to CSV / Google Sheets"
+                onClick={handleCopyBugsToClipboard}
+                className="px-3.5 py-1.5 bg-gradient-to-r from-purple-600 via-indigo-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white rounded-2xl text-xs font-bold transition flex items-center gap-1.5 shadow-lg border border-white/20 active:scale-95 cursor-pointer"
+                title="Copy filtered bugs list as well-organized text for message or email"
               >
-                <Download className="w-3.5 h-3.5 text-emerald-200" />
-                <span>Export to CSV / Sheets</span>
+                {copiedBugs ? (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-emerald-300 font-extrabold">Bugs Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5 text-purple-200" />
+                    <span>Copy Bugs (Message / Email)</span>
+                  </>
+                )}
               </button>
 
               {/* Single Condensed Filter & Sort Menu Button & Popover */}
@@ -2557,7 +2593,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       </select>
                     </div>
 
-                    <div className="pt-2 border-t border-white/10 text-center">
+                    <div className="pt-2 border-t border-white/10 space-y-2 text-center">
+                      <button
+                        type="button"
+                        onClick={() => exportBugsToCSV(processedBugs)}
+                        className="w-full py-1.5 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5"
+                        title="Download CSV file for Excel / Sheets"
+                      >
+                        <Download className="w-3.5 h-3.5 text-emerald-300" />
+                        <span>Export to CSV File</span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => setIsBugFilterMenuOpen(false)}
