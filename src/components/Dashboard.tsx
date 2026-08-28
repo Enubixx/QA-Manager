@@ -620,7 +620,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       criticalList.forEach(m => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        plainText += `• ${m.featureName}: (${stepDetail}${bugText})\n`;
+        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})\n`;
       });
       plainText += `\n`;
     }
@@ -630,7 +630,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       warningList.forEach(m => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        plainText += `• ${m.featureName}: (${stepDetail}${bugText})\n`;
+        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})\n`;
       });
       plainText += `\n`;
     }
@@ -639,7 +639,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       plainText += `🟢 Healthy CUJs:\n`;
       healthyList.forEach(m => {
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        plainText += `• ${m.featureName}: (${stepDetail})\n`;
+        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail})\n`;
       });
     }
 
@@ -655,7 +655,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       criticalList.forEach(m => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: (${stepDetail}${bugText})</li>`;
+        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})</li>`;
       });
       htmlText += `</ul>`;
     }
@@ -666,7 +666,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       warningList.forEach(m => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: (${stepDetail}${bugText})</li>`;
+        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})</li>`;
       });
       htmlText += `</ul>`;
     }
@@ -676,7 +676,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       htmlText += `<ul style="margin: 0 0 4px 0; padding-left: 18px;">`;
       healthyList.forEach(m => {
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: (${stepDetail})</li>`;
+        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail})</li>`;
       });
       htmlText += `</ul>`;
     }
