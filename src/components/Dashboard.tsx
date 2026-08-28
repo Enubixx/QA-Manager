@@ -606,91 +606,73 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const warningList = featureMetricsList.filter(m => m.status === 'warning');
     const healthyList = featureMetricsList.filter(m => m.status === 'healthy');
 
-    // Summarize issues using Gemini AI (with fast fallback)
-    const criticalSummaries = await Promise.all(
-      criticalList.map(m => summarizeFeatureBugsWithGemini(m.featureName, m.associatedBugs, m.yellowCount, m.redCount))
-    );
-    const warningSummaries = await Promise.all(
-      warningList.map(m => summarizeFeatureBugsWithGemini(m.featureName, m.associatedBugs, m.yellowCount, m.redCount))
-    );
-
-    // Plain text fallback (for markdown / terminal textboxes)
-    let plainText = `📊 QA Quality Report (${new Date().toLocaleDateString()})\n`;
-    plainText += `• Overall Score: ${avgHealthScore}% • ${riskStatus}\n`;
-    plainText += `• Coverage: ${totalFeaturesCount} features (${totalStepsAcrossFeatures} steps)\n`;
+    // Plain text format
+    let plainText = `📊 CUJ Report (${new Date().toLocaleDateString()})\n`;
+    plainText += `• Coverage: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)\n`;
     plainText += `• Status: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)\n\n`;
 
     if (criticalList.length > 0) {
-      plainText += `🔴 Critical Features:\n`;
-      criticalList.forEach((m, idx) => {
+      plainText += `🔴 Critical CUJs:\n`;
+      criticalList.forEach(m => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        const issueSummary = criticalSummaries[idx];
-        const issueSuffix = issueSummary ? ` — ${issueSummary}` : '';
-        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${issueSuffix}\n`;
+        plainText += `• ${m.featureName}: (${stepDetail}${bugText})\n`;
       });
       plainText += `\n`;
     }
 
     if (warningList.length > 0) {
-      plainText += `🟡 Degraded Features:\n`;
-      warningList.forEach((m, idx) => {
+      plainText += `🟡 Degraded CUJs:\n`;
+      warningList.forEach(m => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        const issueSummary = warningSummaries[idx];
-        const issueSuffix = issueSummary ? ` — ${issueSummary}` : '';
-        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${issueSuffix}\n`;
+        plainText += `• ${m.featureName}: (${stepDetail}${bugText})\n`;
       });
       plainText += `\n`;
     }
 
     if (healthyList.length > 0) {
-      plainText += `🟢 Healthy Features:\n`;
+      plainText += `🟢 Healthy CUJs:\n`;
       healthyList.forEach(m => {
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail})\n`;
+        plainText += `• ${m.featureName}: (${stepDetail})\n`;
       });
     }
 
     // Rich HTML format (for Slack, Teams, Google Docs, Word, Apple Notes, Email)
     let htmlText = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5;">`;
-    htmlText += `<p style="margin: 0 0 6px 0;">📊 <b>QA Quality Report</b> (${new Date().toLocaleDateString()})</p>`;
-    htmlText += `<p style="margin: 0 0 4px 0;">• <b>Overall Score</b>: ${avgHealthScore}% • ${riskStatus}</p>`;
-    htmlText += `<p style="margin: 0 0 4px 0;">• <b>Coverage</b>: ${totalFeaturesCount} features (${totalStepsAcrossFeatures} steps)</p>`;
+    htmlText += `<p style="margin: 0 0 6px 0;">📊 <b>CUJ Report</b> (${new Date().toLocaleDateString()})</p>`;
+    htmlText += `<p style="margin: 0 0 4px 0;">• <b>Coverage</b>: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)</p>`;
     htmlText += `<p style="margin: 0 0 10px 0;">• <b>Status</b>: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)</p>`;
 
     if (criticalList.length > 0) {
-      htmlText += `<p style="margin: 8px 0 4px 0; color: #dc2626; font-weight: 700;">🔴 Critical Features:</p>`;
+      htmlText += `<p style="margin: 8px 0 4px 0; color: #dc2626; font-weight: 700;">🔴 Critical CUJs:</p>`;
       htmlText += `<ul style="margin: 0 0 8px 0; padding-left: 18px;">`;
-      criticalList.forEach((m, idx) => {
+      criticalList.forEach(m => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        const issueSummary = criticalSummaries[idx];
-        const issueHtml = issueSummary ? `<span style="color: #64748b; font-size: 11px;"> — ${issueSummary}</span>` : '';
-        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${issueHtml}</li>`;
+        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: (${stepDetail}${bugText})</li>`;
       });
       htmlText += `</ul>`;
     }
 
     if (warningList.length > 0) {
-      htmlText += `<p style="margin: 8px 0 4px 0; color: #d97706; font-weight: 700;">🟡 Degraded Features:</p>`;
+      htmlText += `<p style="margin: 8px 0 4px 0; color: #d97706; font-weight: 700;">🟡 Degraded CUJs:</p>`;
       htmlText += `<ul style="margin: 0 0 8px 0; padding-left: 18px;">`;
-      warningList.forEach((m, idx) => {
+      warningList.forEach(m => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        const issueSummary = warningSummaries[idx];
-        const issueHtml = issueSummary ? `<span style="color: #64748b; font-size: 11px;"> — ${issueSummary}</span>` : '';
-        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${issueHtml}</li>`;
+        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: (${stepDetail}${bugText})</li>`;
       });
       htmlText += `</ul>`;
     }
 
     if (healthyList.length > 0) {
-      htmlText += `<p style="margin: 8px 0 4px 0; color: #16a34a; font-weight: 700;">🟢 Healthy Features:</p>`;
+      htmlText += `<p style="margin: 8px 0 4px 0; color: #16a34a; font-weight: 700;">🟢 Healthy CUJs:</p>`;
       htmlText += `<ul style="margin: 0 0 4px 0; padding-left: 18px;">`;
       healthyList.forEach(m => {
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail})</li>`;
+        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: (${stepDetail})</li>`;
       });
       htmlText += `</ul>`;
     }
@@ -1548,29 +1530,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <span className="text-xs text-slate-400 font-mono">Live Snapshot • {new Date().toLocaleDateString()}</span>
                   </div>
                   <h3 className="text-xl font-extrabold text-white mt-1 flex items-center gap-2 tracking-tight">
-                    Feature Quality & Risk Profile
+                    CUJ Quality Report
                   </h3>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2.5">
-                  {/* Gemini AI Key Settings Button */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const currentKey = getStoredGeminiApiKey();
-                      const inputKey = prompt('Enter your Gemini API Key for AI bug rewording:', currentKey);
-                      if (inputKey !== null) {
-                        saveGeminiApiKey(inputKey);
-                        alert(inputKey.trim() ? 'Gemini API Key saved! AI will now summarize & reword all reported bugs.' : 'Gemini API Key cleared. Using local AI rewriter.');
-                      }
-                    }}
-                    className="no-capture px-3 h-9 bg-purple-950/60 hover:bg-purple-900/80 text-purple-300 border border-purple-500/40 rounded-2xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all shadow-md hover:scale-[1.02] active:scale-[0.98]"
-                    title="Configure Gemini API Key to enable Gemini AI bug note rewording"
-                  >
-                    <Sparkles className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
-                    <span className="leading-none">{getStoredGeminiApiKey() ? 'Gemini Active' : 'Set Gemini Key'}</span>
-                  </button>
-
                   {/* Copy Text Summary Button */}
                   <button
                     type="button"
