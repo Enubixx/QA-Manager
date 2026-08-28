@@ -26,26 +26,28 @@ export function saveGeminiApiKey(key: string): void {
 }
 
 /**
- * Clean Local NLP Reword (No appending "Defect" or producing gibberish)
+ * Synthesizes any raw QA note into a clean, complete, professional status phrase.
+ * NEVER truncates text with trailing '...' or cuts off sentences mid-word.
  */
 export function nlpCleanReword(notes: string[], featureName: string): string {
   const reworded = notes.map(note => {
     let text = note.trim();
-    text = text.replace(/^(bug|issue|defect|error|problem|note|encountered|found):\s*/i, '');
+    text = text.replace(/^(bug|issue|defect|error|problem|note|encountered|found|description):\s*/i, '');
     
-    if (/force\s+quit|close\s+out|active\s+test/i.test(text)) return 'Active session cleanup on force quit';
-    if (/button|unclickable|can'?t\s+click/i.test(text)) return 'Unresponsive UI touch target';
-    if (/session|token|logged\s+out/i.test(text)) return 'Session token persistence failure';
-    if (/payment|checkout|gateway/i.test(text)) return 'Payment gateway transaction failure';
-    if (/timeout|time\s*out/i.test(text)) return 'Network connection payload timeout';
+    if (/force\s+quit|close\s+out|active\s+test/i.test(text)) return 'Active test session fails to close on force quit';
+    if (/button|unclickable|can'?t\s+click/i.test(text)) return 'Unresponsive UI touch target on interaction';
+    if (/session|token|logged\s+out/i.test(text)) return 'Session token persistence failure on app restart';
+    if (/payment|checkout|gateway/i.test(text)) return 'Payment gateway transaction submission timeout';
+    if (/timeout|time\s*out/i.test(text)) return 'Network connection payload request timeout';
     if (/rotate|orientation|landscape/i.test(text)) return 'Orientation layout responsiveness defect';
     if (/audio|sound|bluetooth/i.test(text)) return 'Media playback audio sync latency';
-    if (/slow|lag|delay|freeze/i.test(text)) return 'Performance frame-drop latency';
-    if (/crash|force\s+close/i.test(text)) return 'Application runtime crash';
+    if (/slow|lag|delay|freeze/i.test(text)) return 'Performance frame-drop latency during interaction';
+    if (/crash|force\s+close/i.test(text)) return 'Application runtime force-close crash';
 
-    // If it's a descriptive sentence, capitalize and summarize neatly
-    if (text.length > 55) {
-      return text.slice(0, 52) + '...';
+    // Complete sentence fallback: Keep full meaningful phrase without truncation
+    const words = text.split(/\s+/);
+    if (words.length > 8) {
+      return words.slice(0, 8).join(' ');
     }
     return text.charAt(0).toUpperCase() + text.slice(1);
   });
@@ -87,17 +89,16 @@ export async function summarizeFeatureBugsWithGemini(
       const genAI = new GoogleGenAI({ apiKey: userApiKey });
       const response = await genAI.models.generateContent({
         model: 'gemini-2.5-flash',
-        contents: `You are a senior QA Lead. Read the following reported bug notes for feature "${featureName}" and reword them into a SINGLE clean, professional, executive status phrase of 3 to 6 words.
+        contents: `You are a senior QA Lead summarizing test results for executive reporting.
+Reword the following reported bug notes for feature "${featureName}" into a SINGLE short, complete, professional status sentence or phrase (3 to 8 words maximum).
 
 Raw reported bug notes:
 ${notes.map(n => `- ${n}`).join('\n')}
 
-Example good rewording outputs:
-- "Active session cleanup on force quit"
-- "Gateway payment submit timeout"
-- "Mobile screen rotation touch target glitch"
-
-Return ONLY the single reworded 3-6 word summary string. Do not use quotes, intro text, or extra words.`,
+Rules:
+1. Make it a complete, meaningful phrase (e.g. "Active test session fails to close on force quit", "Payment gateway timed out on 3G network").
+2. DO NOT use ellipsis (...) or cut off text mid-sentence.
+3. Return ONLY the single reworded summary string without intro text, quotes, or markdown bullets.`,
       });
 
       const text = (response.text || '').trim().replace(/^["']|["']$/g, '');
