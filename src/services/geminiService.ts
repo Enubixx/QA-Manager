@@ -57,12 +57,60 @@ export function saveGeminiModel(model: string): void {
 }
 
 /**
- * Synthesizes raw QA notes into clean, human-readable issue phrases without cutting off sentences.
+ * Direct native fetch call to Google's Gemini REST API.
+ * Ensures 100% browser compatibility without Node SDK or bundler runtime quirks.
+ */
+async function callGeminiRestApi(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  asJson: boolean = false
+): Promise<string> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const bodyPayload: any = {
+    contents: [
+      {
+        parts: [{ text: prompt }]
+      }
+    ],
+    generationConfig: {
+      temperature: 0.2,
+    }
+  };
+
+  if (asJson) {
+    bodyPayload.generationConfig.responseMimeType = 'application/json';
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(bodyPayload)
+  });
+
+  if (!response.ok) {
+    const errorJson = await response.json().catch(() => null);
+    const message = errorJson?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+    throw new Error(message);
+  }
+
+  const data = await response.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) {
+    throw new Error('No candidate content returned by Gemini');
+  }
+  return text;
+}
+
+/**
+ * Synthesizes raw QA notes into concise, clean issue phrases without dumping raw logs.
  */
 export function nlpCleanReword(notes: string[], featureName: string): string {
   if (!notes || notes.length === 0) return '';
 
-  const cleaned = notes.map(note => {
+  const synthesized = notes.map(note => {
     let text = (note || '').trim();
     // Strip leading time strings like "1.38 pm.", "[10:15 AM]", "14:30 -", "at 2:00 PM,"
     text = text.replace(/^(?:\[?\d{1,2}[:.]\d{2}\s*(?:am|pm)?\]?[:.-]?\s*|at\s+\d{1,2}[:.]\d{2}\s*(?:am|pm)?[:,-]?\s*)/i, '');
@@ -70,20 +118,34 @@ export function nlpCleanReword(notes: string[], featureName: string): string {
     text = text.replace(/^(?:\d+[:.]|\*|-|•)\s*/g, '');
     // Remove typical prefixes
     text = text.replace(/^(bug|issue|defect|error|problem|note|encountered|found|description):\s*/i, '');
-    
-    // Capitalize first letter
-    if (text.length > 0) {
-      text = text.charAt(0).toUpperCase() + text.slice(1);
+
+    // Split into sentences and take only the core descriptive statement
+    const segments = text.split(/[.\n;]/).map(s => s.trim()).filter(Boolean);
+    let primary = segments[0] || text;
+
+    // Filter out first-person conversational narrative ("I took a photo with...", "did not speak, overheard...")
+    primary = primary.replace(/\b(?:I|we)\s+(?:took|tried|noticed|clicked|saw|went|tapped|tested|pressed|was)\b.*$/i, '').trim();
+    if (!primary && segments.length > 1) {
+      primary = segments[1].trim();
     }
-    // Clean trailing punctuation
-    text = text.trim().replace(/[,;]+$/, '');
-    return text;
+    if (!primary) primary = text;
+
+    // Cap at ~14 words so it stays a summary instead of a word dump
+    const words = primary.split(/\s+/);
+    if (words.length > 14) {
+      primary = words.slice(0, 14).join(' ');
+    }
+
+    if (primary.length > 0) {
+      primary = primary.charAt(0).toUpperCase() + primary.slice(1);
+    }
+    return primary.replace(/[,;.]+$/, '').trim();
   }).filter(Boolean);
 
-  const unique = Array.from(new Set(cleaned));
+  const unique = Array.from(new Set(synthesized));
   if (unique.length === 0) return '';
   if (unique.length === 1) return unique[0];
-  return unique.join('; ');
+  return unique.slice(0, 2).join(' & ');
 }
 
 /**
@@ -120,10 +182,7 @@ export async function summarizeFeatureBugsWithGemini(
 
   if (userApiKey) {
     try {
-      const genAI = new GoogleGenAI({ apiKey: userApiKey });
-      const response = await genAI.models.generateContent({
-        model: selectedModel,
-        contents: `You are a senior Lead QA Engineer distilling test results for executive reporting.
+      const prompt = `You are a senior Lead QA Engineer distilling test results for executive reporting.
 
 Feature Tested: "${featureName}"
 Reported Bugs (Step Title & Description):
@@ -136,10 +195,10 @@ CRITICAL REQUIREMENTS:
 2. NEVER TRUNCATE: Write a full, complete sentence. Do not cut off text or use ellipses (...).
 3. MAKE COMPLETE SENSE: Ensure the summary is grammatically sound, clear, and makes complete logical sense to a human reader.
 4. DOUBLE-CHECK: Before returning, double-check your summary against the reported bugs to verify it is 100% accurate and coherent.
-5. Return ONLY the final summary string. Do not add intro text, quotes, prefixes, or markdown bullets.`,
-      });
+5. Return ONLY the final summary string. Do not add intro text, quotes, prefixes, or markdown bullets.`;
 
-      const text = (response.text || '').trim().replace(/^["']|["']$/g, '');
+      const responseText = await callGeminiRestApi(userApiKey, selectedModel, prompt, false);
+      const text = (responseText || '').trim().replace(/^["']|["']$/g, '');
       if (text) {
         summaryCache.set(cacheKey, text);
         return text;
@@ -207,10 +266,7 @@ export async function summarizeOverallBugsWithGemini(bugs: BugLog[] = []): Promi
 
   if (userApiKey) {
     try {
-      const genAI = new GoogleGenAI({ apiKey: userApiKey });
-      const response = await genAI.models.generateContent({
-        model: selectedModel,
-        contents: `You are a senior Lead QA Engineer writing an executive summary overview for a QA report.
+      const prompt = `You are a senior Lead QA Engineer writing an executive summary overview for a QA report.
 
 Reported Bugs List:
 ${bugLines.join('\n')}
@@ -222,10 +278,10 @@ CRITICAL REQUIREMENTS:
 2. COMPLETE SENTENCES: Write full, complete, grammatical sentences. Never cut off sentences or end with ellipses (...).
 3. SENSE & GRAMMAR: Ensure the summary is grammatically sound, clear, and makes logical sense to a human reader.
 4. DOUBLE-CHECK: Review your summary against the bug logs to ensure 100% fidelity and clarity.
-5. Return ONLY the final executive summary text.`,
-      });
+5. Return ONLY the final executive summary text.`;
 
-      const text = (response.text || '').trim().replace(/^["']|["']$/g, '');
+      const responseText = await callGeminiRestApi(userApiKey, selectedModel, prompt, false);
+      const text = (responseText || '').trim().replace(/^["']|["']$/g, '');
       if (text) {
         summaryCache.set(cacheKey, text);
         return text;
@@ -305,17 +361,17 @@ TEST EXECUTION DEFECT DATA:
 ${formattedFeaturesList}
 
 GOAL:
-Produce an executive-ready, coherent, accurate, and sensible summary of the issues encountered during testing.
+Produce an executive-ready, coherent, accurate, and concise summary of the issues encountered during testing.
 
 CRITICAL INSTRUCTIONS:
-1. ACCURACY & SENSE FIRST: Every summary must be 100% faithful to the actual bugs described in the notes above. Do NOT hallucinate technical errors (such as timeouts, payload failures, or token drops) unless they were explicitly reported.
-2. NO TIMESTAMPS OR VOICE LOG CHAT: Strip away any timestamps (like "1.38 pm"), tester names, or conversational voice transcripts. Focus purely on the core functional failure or defect.
-3. NEVER TRUNCATE OR CUT SENTENCES OFF: Write complete, coherent, well-formed sentences. Never end a summary with an ellipsis (...) or cut off mid-sentence.
-4. CONCISE & PROFESSIONAL:
-   - "overallSummary": A crisp, high-level 1 to 2 sentence executive overview (20 to 40 words) summarizing the main friction points across the entire test session.
-   - "featureSummaries": For each feature with bugs, provide a complete, clear 1-sentence summary (8 to 20 words) explaining the primary defect(s) for that feature.
+1. SUMMARIZE, DO NOT DUMP RAW NOTES: Synthesize and distill the root failure into a clean summary phrase. DO NOT copy-paste long tester logs or conversational dialogue.
+2. ACCURACY FIRST: Every summary must accurately reflect the actual bugs described above. Do NOT hallucinate technical errors not reported.
+3. COMPLETE CONCISE SENTENCES:
+   - "overallSummary": A crisp 1 to 2 sentence executive overview (20 to 35 words) summarizing key problem areas.
+   - "featureSummaries": For each feature with bugs, provide a single, crisp, complete sentence (6 to 15 words) explaining the primary defect(s).
+4. NEVER TRUNCATE: Do not end sentences with ellipses (...) or cut off text.
 5. RETURN FORMAT:
-   Return valid JSON with this exact structure:
+   Return valid JSON with this exact schema:
    {
      "overallSummary": "...",
      "featureSummaries": {
@@ -326,17 +382,7 @@ CRITICAL INSTRUCTIONS:
 
     for (const modelName of modelsToTry) {
       try {
-        const genAI = new GoogleGenAI({ apiKey: userApiKey });
-        const response = await genAI.models.generateContent({
-          model: modelName,
-          contents: prompt,
-          config: {
-            responseMimeType: 'application/json',
-            temperature: 0.2
-          }
-        });
-
-        const text = (response.text || '').trim();
+        const text = await callGeminiRestApi(userApiKey, modelName, prompt, true);
         if (text) {
           const parsed = JSON.parse(text);
           const overall = typeof parsed.overallSummary === 'string' ? parsed.overallSummary.trim() : '';
@@ -374,6 +420,6 @@ CRITICAL INSTRUCTIONS:
   return {
     overallSummary: fallbackOverall,
     featureSummaries: fallbackFeatureMap,
-    error: lastErrorMessage || (!userApiKey ? 'No API Key set' : undefined)
+    error: lastErrorMessage || (!userApiKey ? 'No API Key configured' : undefined)
   };
 }

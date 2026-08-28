@@ -171,6 +171,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState<boolean>(false);
   const [tempApiKey, setTempApiKey] = useState<string>(() => getStoredGeminiApiKey());
   const [tempModel, setTempModel] = useState<string>(() => getStoredGeminiModel());
+  const [summaryToast, setSummaryToast] = useState<{ type: 'success' | 'warning' | 'error'; message: string } | null>(null);
   const [isVisualSnapshotModalOpen, setIsVisualSnapshotModalOpen] = useState<boolean>(false);
   const [selectedImagePreviewUrl, setSelectedImagePreviewUrl] = useState<string | null>(null);
 
@@ -844,12 +845,35 @@ export const Dashboard: React.FC<DashboardProps> = ({
         } else {
           await navigator.clipboard.writeText(plainText);
         }
-      } catch (err) {
+      } catch (clipboardErr) {
         await navigator.clipboard.writeText(plainText);
       }
 
       setCopiedReport(true);
       setTimeout(() => setCopiedReport(false), 2500);
+
+      if (result.modelUsed) {
+        setSummaryToast({
+          type: 'success',
+          message: `✨ AI Executive Summary generated with ${result.modelUsed} & copied to clipboard!`
+        });
+      } else if (result.error && getStoredGeminiApiKey()) {
+        setSummaryToast({
+          type: 'error',
+          message: `⚠️ Gemini API Error (${result.error}). Standard clean summary copied. Please verify your API key in Gemini settings.`
+        });
+      } else if (!getStoredGeminiApiKey()) {
+        setSummaryToast({
+          type: 'warning',
+          message: `📋 Standard synthesized summary copied. Click "Gemini AI" to configure an API key for full AI executive summaries.`
+        });
+      } else {
+        setSummaryToast({
+          type: 'success',
+          message: `📋 Copied clean synthesized CUJ report to clipboard!`
+        });
+      }
+      setTimeout(() => setSummaryToast(null), 5000);
     } finally {
       setIsGeneratingSummary(false);
     }
@@ -3111,6 +3135,25 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 Save & Run AI Summary
               </button>
             </div>
+          </div>
+        </div>,
+        document.getElementById('modal-portal') || document.body
+      )}
+
+      {/* Summary Status Toast */}
+      {summaryToast && createPortal(
+        <div className="fixed top-5 left-1/2 transform -translate-x-1/2 z-[9999999] max-w-lg w-full px-4 pointer-events-none animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className={`p-3.5 rounded-2xl border shadow-2xl backdrop-blur-md flex items-center gap-3 text-xs font-semibold ${
+            summaryToast.type === 'success'
+              ? 'bg-emerald-950/95 text-emerald-200 border-emerald-500/40 shadow-emerald-950/50'
+              : summaryToast.type === 'error'
+              ? 'bg-rose-950/95 text-rose-200 border-rose-500/40 shadow-rose-950/50'
+              : 'bg-amber-950/95 text-amber-200 border-amber-500/40 shadow-amber-950/50'
+          }`}>
+            <Sparkles className={`w-4 h-4 flex-shrink-0 ${
+              summaryToast.type === 'success' ? 'text-emerald-400' : summaryToast.type === 'error' ? 'text-rose-400' : 'text-amber-400'
+            }`} />
+            <span className="leading-snug">{summaryToast.message}</span>
           </div>
         </div>,
         document.getElementById('modal-portal') || document.body
