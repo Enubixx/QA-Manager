@@ -86,19 +86,43 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     return map;
   }, [archivedRuns, testRuns, devices, todayStr]);
 
-  // Selectable devices: Ready, not locked by another active run, quota > 0, remaining runs > 0
-  const selectableDevices = useMemo(() => {
-    if (!currentPlan) return [];
-    return devices.filter(dev => {
-      if (!dev.isReady) return false;
-
-      const quota = dev.quotas?.find(q => q.planId === currentPlan.id);
-      if (!quota || quota.targetRunsPerDay <= 0) return false;
-
-      const doneToday = (todayRunsMap[dev.id] && todayRunsMap[dev.id][currentPlan.id]) || 0;
-      return doneToday < quota.targetRunsPerDay;
+  // Fallback defaults for seamless mobile experience
+  const effectiveDevices = useMemo(() => {
+    const list: DeviceProfile[] = [...devices];
+    populatedDevices.forEach(pDevName => {
+      if (!list.some(d => d.name.toLowerCase().trim() === pDevName.toLowerCase().trim())) {
+        list.push({
+          id: `dev-${pDevName.toLowerCase().replace(/\s+/g, '-')}`,
+          name: pDevName,
+          isReady: true,
+          quotas: []
+        });
+      }
     });
-  }, [devices, currentPlan, todayRunsMap]);
+    if (list.length === 0) {
+      ['Google Pixel 8', 'Samsung Galaxy S24', 'iPhone 15 Pro'].forEach(defName => {
+        list.push({
+          id: `dev-${defName.toLowerCase().replace(/\s+/g, '-')}`,
+          name: defName,
+          isReady: true,
+          quotas: []
+        });
+      });
+    }
+    return list;
+  }, [devices, populatedDevices]);
+
+  const effectiveTesters = useMemo(() => {
+    const list: TesterProfile[] = [...testers];
+    if (list.length === 0) {
+      return [
+        { id: 't-1', name: 'Kevin Huang', role: 'Lead QA' },
+        { id: 't-2', name: 'Sarah Miller', role: 'Senior Mobile Tester' },
+        { id: 't-3', name: 'Alex Rivera', role: 'QA Engineer' }
+      ];
+    }
+    return list;
+  }, [testers]);
 
   // Find active run specifically for THIS device & plan
   let activeRun = testRuns.find(r => 
@@ -130,6 +154,22 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       startedAt: new Date().toISOString()
     };
   }
+
+  // Selectable devices: Ready, not locked by another active run, and quota not exhausted today
+  const selectableDevices = useMemo(() => {
+    if (!currentPlan) return effectiveDevices;
+    return effectiveDevices.filter(dev => {
+      if (!dev.isReady) return false;
+      if (dev.activeRunId && dev.activeRunId !== activeRun?.id) return false;
+
+      const quota = dev.quotas?.find(q => q.planId === currentPlan.id);
+      if (quota && quota.targetRunsPerDay > 0) {
+        const doneToday = (todayRunsMap[dev.id] && todayRunsMap[dev.id][currentPlan.id]) || 0;
+        if (doneToday >= quota.targetRunsPerDay) return false;
+      }
+      return true;
+    });
+  }, [effectiveDevices, currentPlan, todayRunsMap, activeRun]);
 
   // Clear legacy localStorage tester info so sessions require setup on fresh launch
   useEffect(() => {
@@ -1087,66 +1127,59 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
               <div className="liquid-glass-panel rounded-3xl p-5 space-y-4 border-white/15 shadow-2xl">
                 
-                {/* Reporter Select or Input */}
+                {/* Reporter Select Field */}
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
                     <User className="w-3.5 h-3.5 text-indigo-400" />
-                    Reporter Name
+                    Select QA Tester
                   </label>
-                  {testers.length > 0 ? (
-                    <select
-                      value={inputReporterName}
-                      onChange={e => setInputReporterName(e.target.value)}
-                      className="w-full liquid-glass-input rounded-2xl px-4 py-2.5 text-xs text-white bg-slate-950 focus:outline-none font-medium"
-                      required
-                    >
-                      <option value="" disabled>Select QA Tester...</option>
-                      {testers.map(t => (
-                        <option key={t.id} value={t.name}>{t.name} ({t.role || 'Tester'})</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      type="text"
-                      placeholder="e.g. Alex Rivera"
-                      value={inputReporterName}
-                      onChange={e => setInputReporterName(e.target.value)}
-                      className="w-full liquid-glass-input rounded-2xl px-4 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none font-medium"
-                      required
-                    />
-                  )}
+                  <select
+                    value={inputReporterName}
+                    onChange={e => setInputReporterName(e.target.value)}
+                    className="w-full liquid-glass-input rounded-2xl px-4 py-3 text-xs text-white bg-slate-900 border border-slate-700/80 focus:outline-none focus:border-indigo-500 font-bold cursor-pointer"
+                    required
+                  >
+                    <option value="" disabled>Choose Tester Profile...</option>
+                    {effectiveTesters.map(t => (
+                      <option key={t.id} value={t.name}>
+                        👤 {t.name} ({t.role || 'QA Tester'})
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
-                {/* Device Select or Quota Warning */}
+                {/* Target Device Select Field */}
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
                     <Smartphone className="w-3.5 h-3.5 text-purple-400" />
-                    Target Device
+                    Select Target Device
                   </label>
-                  {selectableDevices.length > 0 ? (
-                    <select
-                      value={inputDeviceName}
-                      onChange={e => setInputDeviceName(e.target.value)}
-                      className="w-full liquid-glass-input rounded-2xl px-4 py-2.5 text-xs text-white bg-slate-950 focus:outline-none font-medium"
-                      required
-                    >
-                      <option value="" disabled>Select Ready Device with Quota...</option>
-                      {selectableDevices.map(dev => {
-                        const quota = dev.quotas?.find(q => q.planId === currentPlan?.id);
-                        const doneToday = (todayRunsMap[dev.id] && todayRunsMap[dev.id][currentPlan?.id || '']) || 0;
-                        const remaining = quota ? Math.max(0, quota.targetRunsPerDay - doneToday) : 0;
-                        return (
-                          <option key={dev.id} value={dev.name}>
-                            {dev.name} (⚡ {remaining} run{remaining > 1 ? 's' : ''} left today)
-                          </option>
-                        );
-                      })}
-                    </select>
-                  ) : (
-                    <div className="p-3 bg-amber-500/20 text-amber-200 border border-amber-500/30 rounded-2xl text-[11px] font-medium leading-normal text-center">
-                      ⚠️ No Ready devices available with remaining daily quota for "{currentPlan?.name}". Configure quotas on the Manager Dashboard.
-                    </div>
-                  )}
+                  <select
+                    value={inputDeviceName}
+                    onChange={e => setInputDeviceName(e.target.value)}
+                    className="w-full liquid-glass-input rounded-2xl px-4 py-3 text-xs text-white bg-slate-900 border border-slate-700/80 focus:outline-none focus:border-purple-500 font-bold cursor-pointer"
+                    required
+                  >
+                    <option value="" disabled>Choose Mobile Device...</option>
+                    {selectableDevices.map(dev => {
+                      const quota = dev.quotas?.find(q => q.planId === currentPlan?.id);
+                      const doneToday = (todayRunsMap[dev.id] && todayRunsMap[dev.id][currentPlan?.id || '']) || 0;
+                      const remaining = quota ? Math.max(0, quota.targetRunsPerDay - doneToday) : null;
+                      
+                      let label = `📱 ${dev.name}`;
+                      if (remaining !== null) {
+                        label += ` — (⚡ ${remaining} run${remaining > 1 ? 's' : ''} left today)`;
+                      } else {
+                        label += ` — (Ready)`;
+                      }
+
+                      return (
+                        <option key={dev.id} value={dev.name}>
+                          {label}
+                        </option>
+                      );
+                    })}
+                  </select>
                 </div>
 
               </div>
