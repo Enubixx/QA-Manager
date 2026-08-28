@@ -363,7 +363,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     if (total > 0) {
       metric.healthScorePct = Math.round((metric.greenCount / total) * 100);
     } else {
-      metric.healthScorePct = metric.bugCount > 0 ? 50 : 100;
+      metric.healthScorePct = metric.bugCount > 0 ? 80 : 100;
     }
 
     if (metric.healthScorePct <= 59) {
