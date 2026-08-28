@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog } from '../types';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV } from '../utils/exportUtils';
-import { getAiFeatureIssueAnalysis, AiFeatureIssueAnalysis } from '../utils/aiSummaryUtils';
+import { getBriefIssueSummary } from '../utils/aiSummaryUtils';
 import { toBlob } from 'html-to-image';
 
 interface DashboardProps {
@@ -607,19 +607,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
     plainText += `• Overall Score: ${avgHealthScore}% • ${riskStatus}\n`;
     plainText += `• Coverage: ${totalFeaturesCount} features (${totalStepsAcrossFeatures} steps)\n`;
     plainText += `• Status: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)\n\n`;
-    plainText += `Feature Breakdown & AI Issue Analysis:\n`;
+    plainText += `Feature Breakdown:\n`;
 
     featureMetricsList.forEach(m => {
       const statusIcon = m.status === 'healthy' ? '🟢 Healthy' : m.status === 'warning' ? '🟡 Degraded' : '🔴 Critical';
       const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
       const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
       
-      const aiAnalysis = getAiFeatureIssueAnalysis(m.featureName, m.associatedBugs, m.yellowCount, m.redCount);
+      const issueSummary = getBriefIssueSummary(m.associatedBugs, m.yellowCount, m.redCount);
+      const issueSuffix = issueSummary ? ` — Issues: ${issueSummary}` : '';
 
-      plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText}) • ${statusIcon}\n`;
-      if (aiAnalysis.summary) {
-        plainText += `  └─ 🤖 AI Issue Summary: ${aiAnalysis.summary}\n`;
-      }
+      plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText}) • ${statusIcon}${issueSuffix}\n`;
     });
 
     // Rich HTML format (for Slack, Teams, Google Docs, Word, Apple Notes, Email)
@@ -628,7 +626,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     htmlText += `<p style="margin: 0 0 4px 0;">• <b>Overall Score</b>: ${avgHealthScore}% • ${riskStatus}</p>`;
     htmlText += `<p style="margin: 0 0 4px 0;">• <b>Coverage</b>: ${totalFeaturesCount} features (${totalStepsAcrossFeatures} steps)</p>`;
     htmlText += `<p style="margin: 0 0 10px 0;">• <b>Status</b>: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)</p>`;
-    htmlText += `<p style="margin: 0 0 6px 0;"><b>Feature Breakdown & AI Issue Analysis</b>:</p>`;
+    htmlText += `<p style="margin: 0 0 6px 0;"><b>Feature Breakdown</b>:</p>`;
     htmlText += `<ul style="margin: 0; padding-left: 18px;">`;
 
     featureMetricsList.forEach(m => {
@@ -636,16 +634,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
       const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
       const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
 
-      const aiAnalysis = getAiFeatureIssueAnalysis(m.featureName, m.associatedBugs, m.yellowCount, m.redCount);
-      const borderColor = m.status === 'critical' ? '#ef4444' : m.status === 'warning' ? '#f59e0b' : '#10b981';
+      const issueSummary = getBriefIssueSummary(m.associatedBugs, m.yellowCount, m.redCount);
+      const issueHtml = issueSummary ? `<span style="color: #64748b; font-size: 11px;"> — Issues: ${issueSummary}</span>` : '';
 
-      htmlText += `<li style="margin-bottom: 8px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText}) • ${statusIcon}`;
-      if (aiAnalysis.summary) {
-        htmlText += `<div style="margin-top: 3px; margin-left: 8px; font-size: 11px; color: #334155; background: #f8fafc; padding: 5px 9px; border-left: 3px solid ${borderColor}; border-radius: 4px;">`;
-        htmlText += `🤖 <b>AI Issue Breakdown:</b> ${aiAnalysis.summary}`;
-        htmlText += `</div>`;
-      }
-      htmlText += `</li>`;
+      htmlText += `<li style="margin-bottom: 4px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText}) • ${statusIcon}${issueHtml}</li>`;
     });
     htmlText += `</ul></div>`;
 
@@ -1685,12 +1677,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             <th className="py-3 px-4">Warning (Yellow)</th>
                             <th className="py-3 px-4">Failed (Red)</th>
                             <th className="py-3 px-4">Bugs Logged</th>
-                            <th className="py-3 px-4">AI Issue Breakdown & Categorization</th>
+                            <th className="py-3 px-4">Issues Encountered</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-800/60 text-slate-300">
                           {featureMetricsList.map(metric => {
-                            const aiAnalysis = getAiFeatureIssueAnalysis(metric.featureName, metric.associatedBugs, metric.yellowCount, metric.redCount);
+                            const issueSummary = getBriefIssueSummary(metric.associatedBugs, metric.yellowCount, metric.redCount);
                             return (
                               <tr key={metric.featureName} className="hover:bg-slate-900/50 transition">
                                 <td className="py-2.5 px-4 font-bold text-white whitespace-nowrap">{metric.featureName}</td>
@@ -1714,19 +1706,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 <td className="py-2.5 px-4 text-amber-400 font-bold font-mono whitespace-nowrap">{metric.yellowCount}</td>
                                 <td className="py-2.5 px-4 text-rose-400 font-bold font-mono whitespace-nowrap">{metric.redCount}</td>
                                 <td className="py-2.5 px-4 text-rose-400 font-bold font-mono whitespace-nowrap">{metric.bugCount}</td>
-                                <td className="py-2.5 px-4 text-xs font-mono">
-                                  <div className="flex flex-col gap-1 max-w-md">
-                                    <div className="flex flex-wrap gap-1">
-                                      {aiAnalysis.categories.map(cat => (
-                                        <span key={cat} className="px-2 py-0.5 bg-purple-950/80 text-purple-200 border border-purple-800/60 rounded-md text-[10px] font-bold">
-                                          {cat}
-                                        </span>
-                                      ))}
-                                    </div>
-                                    <div className="text-[11px] text-slate-300 font-sans leading-tight" title={aiAnalysis.summary}>
-                                      {aiAnalysis.summary}
-                                    </div>
-                                  </div>
+                                <td className="py-2.5 px-4 text-xs font-sans text-slate-300 max-w-xs truncate" title={issueSummary || 'No issues encountered'}>
+                                  {issueSummary ? (
+                                    <span className="text-amber-300/90 font-medium">{issueSummary}</span>
+                                  ) : (
+                                    <span className="text-slate-500 font-mono">-</span>
+                                  )}
                                 </td>
                               </tr>
                             );
