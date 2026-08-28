@@ -125,47 +125,349 @@ async function callGeminiRestApi(
 }
 
 /**
- * Synthesizes raw QA notes into concise, clean issue phrases without dumping raw logs.
+ * Cleans leading timestamps, bullet markers, and conversational clutter from raw note text.
+ */
+export function cleanRawNote(raw: string): string {
+  let text = (raw || '').trim();
+  // Strip timestamps like "[10:15 AM]", "1.38 pm.", "at 2:00 PM,", "14:30 -"
+  text = text.replace(/^(?:\[?\d{1,2}[:.]\d{2}\s*(?:am|pm)?\]?[:.-]?\s*|at\s+\d{1,2}[:.]\d{2}\s*(?:am|pm)?[:,-]?\s*)/i, '');
+  // Strip list markers like "0.", "1.", "0: ", "- ", "* ", "• "
+  text = text.replace(/^(?:\d+[:.]|\*|-|•)\s*/g, '');
+  // Strip prefixes like "bug:", "issue:", "defect:", "note:", "encountered:", "found:"
+  text = text.replace(/^(?:bug|issue|defect|error|problem|note|encountered|found|description):\s*/i, '');
+  return text.trim();
+}
+
+/**
+ * Extracts normalized duration string (e.g. "4 minutes", "15 seconds", "500 ms").
+ */
+export function extractNormalizedDuration(text: string): string | null {
+  const match = text.match(/(?:exceeding|over|took|more than|greater than|delay of|delayed by|lagged for|hangs? for)?\s*(\d+(?:\.\d+)?)\s*(minutes?|mins?|seconds?|secs?|ms|milliseconds?|hours?|hrs?)\b/i);
+  if (!match) return null;
+  const num = match[1];
+  let unit = match[2].toLowerCase();
+  if (unit.startsWith('min')) unit = Number(num) === 1 ? 'minute' : 'minutes';
+  else if (unit.startsWith('sec') || unit === 's') unit = Number(num) === 1 ? 'second' : 'seconds';
+  else if (unit.startsWith('hr') || unit.startsWith('hour')) unit = Number(num) === 1 ? 'hour' : 'hours';
+  else if (unit.startsWith('ms') || unit.startsWith('milli')) unit = 'ms';
+  return `${num} ${unit}`;
+}
+
+/**
+ * Intelligent pattern detection for individual QA defect notes.
+ * Distills root failure mechanics into concise, executive-grade engineering phrases.
+ */
+export function extractIntelligentDefectPattern(note: string, featureContext: string = ''): string {
+  const text = cleanRawNote(note);
+  if (!text) return '';
+  const lower = text.toLowerCase();
+  const contextLower = (featureContext || '').toLowerCase();
+  const combinedContext = `${contextLower} ${lower}`;
+  const duration = extractNormalizedDuration(text);
+
+  // 1. Latency / Delay / Timeout patterns
+  const isLatency = /\b(?:latency|delay|delayed|slow|lag|lagged|took|exceeding|timed? out|timeout|wait|hangs for)\b/i.test(lower) || !!duration;
+  if (isLatency) {
+    const isConsecutive = /\b(?:consecutive|back-to-back|repeated|sequential|multiple)\s*requests?\b/i.test(lower);
+    const consecutiveSuffix = isConsecutive ? ' during consecutive requests' : '';
+
+    if (/\b(?:image|photo|stylized|render|generat)/i.test(combinedContext)) {
+      if (duration) {
+        return `Image generation latency exceeding ${duration}${consecutiveSuffix}`;
+      }
+      return `Image generation latency${consecutiveSuffix}`;
+    }
+
+    if (/\b(?:voice|audio|speech|assistant|sound|playback|spoken)\b/i.test(combinedContext)) {
+      if (duration) {
+        return `Audio response latency exceeding ${duration}`;
+      }
+      return `Audio playback latency`;
+    }
+
+    if (/\b(?:ui|screen|navigation|load|page|view|render|transition)\b/i.test(combinedContext)) {
+      if (duration) {
+        return `UI rendering latency exceeding ${duration}`;
+      }
+      return `UI response latency during navigation`;
+    }
+
+    if (/\b(?:network|api|server|request|backend|fetch)\b/i.test(combinedContext)) {
+      if (duration) {
+        return `Network request latency exceeding ${duration}`;
+      }
+      return `Network request latency`;
+    }
+
+    if (duration) {
+      return `Processing latency exceeding ${duration}${consecutiveSuffix}`;
+    }
+  }
+
+  // 2. False / Unprompted Triggers & Spontaneous Activations
+  const isFalseTrigger = /\b(?:unprompted|spontaneous|spontaneously|false[\s-]trigger|falsely\s*activat|false\s*activat|ambient|overheard|background\s*(?:speech|noise|voice|tv|sound)|phantom|without\s*(?:pressing|clicking|prompt|trigger|input|touching))\b/i.test(lower);
+  if (isFalseTrigger) {
+    if (/\b(?:photo|camera|capture|picture|shutter|lens)\b/i.test(combinedContext)) {
+      return 'spontaneous unprompted photo capture';
+    }
+
+    if (/\b(?:voice|audio|assistant|hotword|speech|command|listening)\b/i.test(combinedContext)) {
+      if (/\b(?:ambient|overheard|background|tv|noise|conversation)\b/i.test(lower)) {
+        return 'false voice-trigger activations from ambient background speech';
+      }
+      return 'false voice-trigger activations';
+    }
+
+    if (/\b(?:sensor|gesture|motion|proximity)\b/i.test(combinedContext)) {
+      return 'unprompted sensor activation';
+    }
+
+    return 'spontaneous unprompted trigger activation';
+  }
+
+  // 3. Duplicate Feedback / Duplicate Responses
+  const isDuplicate = /\b(?:duplicate|twice|repeated|repeating|two times|double|spoke twice|echoed)\b/i.test(lower);
+  if (isDuplicate) {
+    if (/\b(?:voice|speech|confirmation|spoke|assistant|audio|feedback|announcement)\b/i.test(combinedContext)) {
+      if (/\b(?:event|calendar|task|meeting|reminder|entry|creation|created|upon|add(?:ed)?)\b/i.test(lower)) {
+        return 'Duplicate voice confirmation feedback upon event creation';
+      }
+      return 'Duplicate voice confirmation feedback';
+    }
+
+    if (/\b(?:notification|alert|message|banner)\b/i.test(combinedContext)) {
+      return 'Duplicate notification dispatch';
+    }
+
+    if (/\b(?:item|entry|card|record|transaction)\b/i.test(combinedContext)) {
+      return 'Duplicate entry creation';
+    }
+
+    return 'Duplicate response feedback';
+  }
+
+  // 4. UI Freezing / Unresponsiveness
+  if (/\b(?:freeze|frozen|freezing|unresponsive|not\s*responding|hang|hangs|hanging|stuck|lockup|locked\s*up)\b/i.test(lower)) {
+    if (duration) {
+      return `UI unresponsiveness and ${duration} freeze`;
+    }
+    if (/\b(?:navigation|transition|settings|menu|scroll)\b/i.test(lower)) {
+      return 'UI unresponsiveness during navigation';
+    }
+    return 'UI freezing and unresponsiveness';
+  }
+
+  // 5. Crashes / Process Abort
+  if (/\b(?:crash|crashed|crashes|crashing|force\s*close|fatal|exception|abort)\b/i.test(lower)) {
+    if (/\b(?:launch|start|open|init)\b/i.test(lower)) {
+      return 'Application crash upon launch';
+    }
+    if (/\b(?:background|resume|switch)\b/i.test(lower)) {
+      return 'Application crash during background transition';
+    }
+    return 'Application crash during execution';
+  }
+
+  // 6. Audio Dropout / Distortion / Clipping
+  if (/\b(?:audio\s*cut|audio\s*drop|no\s*sound|mute|silent|clipping|crackl|distortion|stutter)\b/i.test(lower)) {
+    return 'Audio playback dropouts and distortion';
+  }
+
+  // 7. Speech Recognition / Transcription Inaccuracies
+  if (/\b(?:transcription|transcribe|recognition|misheard|failed\s*to\s*(?:recognize|hear|understand)|inaccurate\s*(?:speech|transcription))\b/i.test(lower)) {
+    if (/\b(?:ambient|noise|background)\b/i.test(lower)) {
+      return 'Speech recognition inaccuracies under ambient noise';
+    }
+    return 'Speech transcription recognition errors';
+  }
+
+  // 8. Bluetooth / Connectivity / Sync Failures
+  if (/\b(?:bluetooth|disconnect|connection\s*lost|failed\s*to\s*connect|offline|sync\s*fail|synchronization)\b/i.test(lower)) {
+    return 'Intermittent Bluetooth disconnection and synchronization failure';
+  }
+
+  // 9. Rendering / Blank Display
+  if (/\b(?:blank\s*screen|white\s*screen|black\s*screen|flicker|render|glitch|visual\s*artifact)\b/i.test(lower)) {
+    return 'UI rendering defect resulting in blank display';
+  }
+
+  // General fallback: clean conversational narrative while keeping essential core
+  let cleaned = text
+    .replace(/\b(?:I|we)\s+(?:took|tried|noticed|clicked|saw|went|tapped|tested|pressed|was|observed)\b/gi, '')
+    .replace(/^(?:the\s+)?(?:user\s+)?(?:noticed|observed|reported)\s+that\s+/i, '')
+    .trim();
+
+  // Remove trailing period or comma
+  cleaned = cleaned.replace(/[,;.]+$/, '').trim();
+
+  // Limit word count to keep crisp
+  const words = cleaned.split(/\s+/);
+  if (words.length > 14) {
+    cleaned = words.slice(0, 14).join(' ');
+  }
+
+  if (!cleaned) cleaned = text;
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
+/**
+ * Generates an executive-level synthesized overview matching the requested tone and structure:
+ * "Testing revealed latency and false-trigger issues across voice and camera flows, primarily characterized by
+ * image generation delays exceeding 4 minutes, unprompted photo captures, and duplicate confirmation speech triggered by overheard ambient voices."
+ */
+export function synthesizeExecutiveOverview(notes: string[], featureNames: string[] = []): string {
+  if (!notes || notes.length === 0) return '';
+
+  const allText = notes.join(' ');
+  const lower = allText.toLowerCase();
+
+  // 1. Detect Defect Categories
+  const categories: string[] = [];
+  const hasLatency = /\b(?:latency|delay|delayed|slow|lag|exceeding|timeout|took)\b/i.test(lower);
+  const hasFalseTrigger = /\b(?:unprompted|spontaneous|false[\s-]trigger|falsely\s*activat|ambient|overheard)\b/i.test(lower);
+  const hasDuplicate = /\b(?:duplicate|twice|repeated|double|echoed)\b/i.test(lower);
+  const hasStability = /\b(?:freeze|frozen|unresponsive|hang|crash|crashed|force\s*close)\b/i.test(lower);
+  const hasAudio = /\b(?:audio\s*cut|no\s*sound|clipping|distortion|stutter)\b/i.test(lower);
+  const hasConnectivity = /\b(?:bluetooth|disconnect|connection\s*lost|sync\s*fail)\b/i.test(lower);
+
+  if (hasLatency) categories.push('latency');
+  if (hasFalseTrigger) categories.push('false-trigger');
+  if (hasDuplicate && !categories.includes('false-trigger')) categories.push('duplicate-response');
+  if (hasStability) categories.push('stability');
+  if (hasAudio && !categories.includes('latency')) categories.push('audio playback');
+  if (hasConnectivity) categories.push('connectivity');
+
+  let categoryStr = 'functional defect';
+  if (categories.length === 1) {
+    categoryStr = categories[0];
+  } else if (categories.length >= 2) {
+    categoryStr = `${categories[0]} and ${categories[1]}`;
+  }
+
+  // 2. Detect System / Feature Flows
+  const allFlows = featureNames.map(f => f.toLowerCase()).concat([lower]).join(' ');
+  const flows: string[] = [];
+  if (/\b(?:voice|audio|assistant|speech)\b/i.test(allFlows)) flows.push('voice');
+  if (/\b(?:camera|vision|photo|image)\b/i.test(allFlows)) flows.push('camera');
+  if (/\b(?:navigation|settings|ui)\b/i.test(allFlows)) flows.push('navigation');
+  if (/\b(?:bluetooth|connectivity|sync)\b/i.test(allFlows)) flows.push('connectivity');
+
+  // If specific featureNames are present but didn't match keyword list
+  if (flows.length === 0 && featureNames.length > 0) {
+    const cleanNames = featureNames.slice(0, 2).map(n => n.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim());
+    flows.push(...cleanNames);
+  }
+
+  let flowStr = 'core application flows';
+  if (flows.length === 1) {
+    flowStr = `${flows[0]} flows`;
+  } else if (flows.length >= 2) {
+    flowStr = `${flows[0]} and ${flows[1]} flows`;
+  }
+
+  // 3. Extract Specific Highlights
+  const highlights: string[] = [];
+
+  // Check image generation delay
+  if (/\b(?:image|photo|stylized|render).*(?:exceeding|over|took|more than|delay).*(\d+(?:\.\d+)?\s*(?:minutes?|mins?|seconds?|secs?))/i.test(lower) ||
+      (/\b(?:image|photo)\b/i.test(lower) && hasLatency)) {
+    const dur = extractNormalizedDuration(allText);
+    highlights.push(dur ? `image generation delays exceeding ${dur}` : 'image generation delays during consecutive requests');
+  }
+
+  // Check unprompted photo captures
+  if (/\b(?:photo|camera|picture|shutter)\b/i.test(lower) && /\b(?:unprompted|spontaneous|without\s*pressing)\b/i.test(lower)) {
+    highlights.push('unprompted photo captures');
+  }
+
+  // Check duplicate confirmation speech / ambient voices
+  if (/\b(?:duplicate|twice)\b/i.test(lower) && /\b(?:voice|speech|confirmation|spoke)\b/i.test(lower) && /\b(?:ambient|overheard|background)\b/i.test(lower)) {
+    highlights.push('duplicate confirmation speech triggered by overheard ambient voices');
+  } else {
+    if (/\b(?:duplicate|twice)\b/i.test(lower) && /\b(?:voice|speech|confirmation|spoke)\b/i.test(lower)) {
+      highlights.push('duplicate confirmation speech feedback');
+    }
+    if (/\b(?:ambient|overheard|background)\b/i.test(lower) && /\b(?:voice|audio|assistant)\b/i.test(lower)) {
+      highlights.push('false voice-trigger activations from ambient background speech');
+    }
+  }
+
+  // Check freezing / UI unresponsiveness
+  if (hasStability && highlights.length < 3) {
+    const dur = extractNormalizedDuration(allText);
+    highlights.push(dur ? `UI freezes exceeding ${dur}` : 'intermittent UI unresponsiveness');
+  }
+
+  // Check audio dropouts
+  if (hasAudio && highlights.length < 3) {
+    highlights.push('audio playback dropouts and distortion');
+  }
+
+  // Check bluetooth disconnection
+  if (hasConnectivity && highlights.length < 3) {
+    highlights.push('intermittent Bluetooth disconnections');
+  }
+
+  // If no highlights matched rule-based conditions, extract from top notes using pattern extractor
+  if (highlights.length === 0) {
+    for (const note of notes.slice(0, 3)) {
+      const p = extractIntelligentDefectPattern(note, '');
+      if (p) {
+        highlights.push(p.charAt(0).toLowerCase() + p.slice(1).replace(/[.]+$/, ''));
+      }
+    }
+  }
+
+  let highlightStr = 'intermittent functional regressions';
+  if (highlights.length === 1) {
+    highlightStr = highlights[0];
+  } else if (highlights.length === 2) {
+    highlightStr = `${highlights[0]} and ${highlights[1]}`;
+  } else if (highlights.length >= 3) {
+    highlightStr = `${highlights[0]}, ${highlights[1]}, and ${highlights[2]}`;
+  }
+
+  return `Testing revealed ${categoryStr} issues across ${flowStr}, primarily characterized by ${highlightStr}.`;
+}
+
+/**
+ * Synthesizes raw QA notes into concise, clean executive defect phrases.
+ * Supports intelligent pattern detection for latency, duplicate feedback, false triggers, etc.
  */
 export function nlpCleanReword(notes: string[], featureName: string): string {
   if (!notes || notes.length === 0) return '';
 
-  const synthesized = notes.map(note => {
-    let text = (note || '').trim();
-    // Strip leading time strings like "1.38 pm.", "[10:15 AM]", "14:30 -", "at 2:00 PM,"
-    text = text.replace(/^(?:\[?\d{1,2}[:.]\d{2}\s*(?:am|pm)?\]?[:.-]?\s*|at\s+\d{1,2}[:.]\d{2}\s*(?:am|pm)?[:,-]?\s*)/i, '');
-    // Strip leading list numbers like "0.", "1.", "0: ", "1: ", "- ", "* "
-    text = text.replace(/^(?:\d+[:.]|\*|-|•)\s*/g, '');
-    // Remove typical prefixes
-    text = text.replace(/^(bug|issue|defect|error|problem|note|encountered|found|description):\s*/i, '');
+  if (featureName.toLowerCase() === 'overall') {
+    return synthesizeExecutiveOverview(notes, []);
+  }
 
-    // Split into sentences and take only the core descriptive statement
-    const segments = text.split(/[.\n;]/).map(s => s.trim()).filter(Boolean);
-    let primary = segments[0] || text;
-
-    // Filter out first-person conversational narrative ("I took a photo with...", "did not speak, overheard...")
-    primary = primary.replace(/\b(?:I|we)\s+(?:took|tried|noticed|clicked|saw|went|tapped|tested|pressed|was)\b.*$/i, '').trim();
-    if (!primary && segments.length > 1) {
-      primary = segments[1].trim();
+  const synthesized: string[] = [];
+  for (const note of notes) {
+    const pattern = extractIntelligentDefectPattern(note, featureName);
+    if (pattern && !synthesized.some(s => s.toLowerCase() === pattern.toLowerCase())) {
+      synthesized.push(pattern);
     }
-    if (!primary) primary = text;
+  }
 
-    // Cap at ~14 words so it stays a summary instead of a word dump
-    const words = primary.split(/\s+/);
-    if (words.length > 14) {
-      primary = words.slice(0, 14).join(' ');
-    }
+  if (synthesized.length === 0) return '';
 
-    if (primary.length > 0) {
-      primary = primary.charAt(0).toUpperCase() + primary.slice(1);
-    }
-    return primary.replace(/[,;.]+$/, '').trim();
-  }).filter(Boolean);
+  if (synthesized.length === 1) {
+    let single = synthesized[0].trim();
+    single = single.charAt(0).toUpperCase() + single.slice(1);
+    if (!single.endsWith('.')) single += '.';
+    return single;
+  }
 
-  const unique = Array.from(new Set(synthesized));
-  if (unique.length === 0) return '';
-  if (unique.length === 1) return unique[0];
-  return unique.slice(0, 2).join(' & ');
+  // Connect two primary defect phrases with "and"
+  let first = synthesized[0].trim();
+  first = first.charAt(0).toUpperCase() + first.slice(1);
+  first = first.replace(/[.,;]+$/, '');
+
+  let second = synthesized[1].trim();
+  second = second.charAt(0).toLowerCase() + second.slice(1);
+  second = second.replace(/[.,;]+$/, '');
+
+  return `${first} and ${second}.`;
 }
 
 /**
@@ -202,20 +504,23 @@ export async function summarizeFeatureBugsWithGemini(
 
   if (userApiKey) {
     try {
-      const prompt = `You are a senior Lead QA Engineer distilling test results for executive reporting.
+      const prompt = `You are a Senior Principal QA Architect distilling test results for executive reporting.
 
 Feature Tested: "${featureName}"
 Reported Bugs (Step Title & Description):
 ${bugDetailsList.join('\n')}
 
-GOAL: Provide a clear, highly accurate, and complete 1-sentence summary (8 to 20 words) explaining the primary bug(s) encountered for this feature.
+GOAL: Provide an executive-level, clear, and complete 1-sentence synthesis (8 to 22 words) explaining the primary defect(s) encountered for this feature.
+
+FEW-SHOT EXAMPLES:
+- "Image generation latency exceeding 4 minutes during consecutive requests and spontaneous unprompted photo capture."
+- "Duplicate voice confirmation feedback upon event creation and false voice-trigger activations from ambient background speech."
 
 CRITICAL REQUIREMENTS:
-1. ACCURACY & LOGIC FIRST: The summary MUST directly and faithfully reflect the actual reported bugs above. Focus strictly on the core issue, defect, or unexpected behavior. Do NOT include timestamps or conversational artifacts.
-2. NEVER TRUNCATE: Write a full, complete sentence. Do not cut off text or use ellipses (...).
-3. MAKE COMPLETE SENSE: Ensure the summary is grammatically sound, clear, and makes complete logical sense to a human reader.
-4. DOUBLE-CHECK: Before returning, double-check your summary against the reported bugs to verify it is 100% accurate and coherent.
-5. Return ONLY the final summary string. Do not add intro text, quotes, prefixes, or markdown bullets.`;
+1. EXECUTIVE SYNTHESIS: Focus strictly on the core failure mechanisms using precise engineering terminology (e.g. latency, duplicate feedback, unprompted triggers). Do NOT include timestamps or conversational artifacts.
+2. PRESERVE METRICS: Retain specific quantitative thresholds (e.g. durations like "exceeding 4 minutes").
+3. NEVER TRUNCATE: Write a full, complete sentence ending with a period. Do not cut off text or use ellipses (...).
+4. Return ONLY the final summary string. Do not add intro text, quotes, prefixes, or markdown bullets.`;
 
       const responseText = await callGeminiRestApi(userApiKey, selectedModel, prompt, false);
       const text = (responseText || '').trim().replace(/^["']|["']$/g, '');
@@ -286,18 +591,21 @@ export async function summarizeOverallBugsWithGemini(bugs: BugLog[] = []): Promi
 
   if (userApiKey) {
     try {
-      const prompt = `You are a senior Lead QA Engineer writing an executive summary overview for a QA report.
+      const prompt = `You are a Senior Principal QA Architect writing an executive summary overview for an engineering leadership report.
 
 Reported Bugs List:
 ${bugLines.join('\n')}
 
-GOAL: Write a concise 1 to 2 sentence executive overview (20 to 40 words) summarizing the key issues and main points of friction reported across the system.
+GOAL: Write a concise 1 to 2 sentence executive overview (20 to 45 words) synthesizing key failure modes and friction areas across the system.
+
+FEW-SHOT EXAMPLE:
+"Testing revealed latency and false-trigger issues across voice and camera flows, primarily characterized by image generation delays exceeding 4 minutes, unprompted photo captures, and duplicate confirmation speech triggered by overheard ambient voices."
 
 CRITICAL REQUIREMENTS:
-1. ACCURACY & REALITY: The summary MUST accurately reflect the actual bugs listed above. Do not invent unrelated errors or fake technical jargon.
-2. COMPLETE SENTENCES: Write full, complete, grammatical sentences. Never cut off sentences or end with ellipses (...).
-3. SENSE & GRAMMAR: Ensure the summary is grammatically sound, clear, and makes logical sense to a human reader.
-4. DOUBLE-CHECK: Review your summary against the bug logs to ensure 100% fidelity and clarity.
+1. EXECUTIVE SYNTHESIS: Frame the overview strategically: "Testing revealed [key defect categories, e.g. latency, false-trigger, stability] issues across [affected feature/system flows], primarily characterized by [synthesized root causes with exact durations/metrics retained]..."
+2. PRESERVE METRICS: Retain specific quantitative thresholds (e.g. durations like "exceeding 4 minutes").
+3. ACCURACY & REALITY: The summary MUST accurately reflect the actual bugs listed above without hallucinating unrelated errors.
+4. COMPLETE SENTENCES: Write full, complete, grammatical sentences. Never cut off sentences or end with ellipses (...).
 5. Return ONLY the final executive summary text.`;
 
       const responseText = await callGeminiRestApi(userApiKey, selectedModel, prompt, false);
@@ -312,7 +620,8 @@ CRITICAL REQUIREMENTS:
   }
 
   const notes = bugs.map(b => b.note).filter(Boolean);
-  const fallback = notes.length > 0 ? nlpCleanReword(notes, 'Overall') : '';
+  const featureNames = Array.from(new Set(bugs.map(b => b.feature).filter(Boolean))) as string[];
+  const fallback = notes.length > 0 ? synthesizeExecutiveOverview(notes, featureNames) : '';
   summaryCache.set(cacheKey, fallback);
   return fallback;
 }
@@ -377,27 +686,53 @@ export async function generateBatchExecutiveSummaryWithGemini(
     if (!modelsToTry.includes('gemini-1.5-flash')) modelsToTry.push('gemini-1.5-flash');
     if (!modelsToTry.includes('gemini-1.5-pro')) modelsToTry.push('gemini-1.5-pro');
 
-    const prompt = `You are a Principal QA Engineer distilling field defect logs to produce a clear, highly accurate executive summary.
+    const prompt = `You are a Senior Principal QA Architect distilling field defect logs to produce a high-impact executive summary report for engineering leadership.
 
 TEST EXECUTION DEFECT DATA:
 ${formattedFeaturesList}
 
 GOAL:
-Produce an executive-ready, coherent, accurate, and concise summary of the issues encountered during testing.
+Produce an executive-ready, highly synthesized, accurate, and concise summary of the issues encountered during testing matching the tone and precision of the few-shot examples below.
 
-CRITICAL INSTRUCTIONS:
-1. SUMMARIZE, DO NOT DUMP RAW NOTES: Synthesize and distill the root failure into a clean summary phrase. DO NOT copy-paste long tester logs or conversational dialogue.
-2. ACCURACY FIRST: Every summary must accurately reflect the actual bugs described above. Do NOT hallucinate technical errors not reported.
-3. COMPLETE CONCISE SENTENCES:
-   - "overallSummary": A crisp 1 to 2 sentence executive overview (20 to 35 words) summarizing key problem areas.
-   - "featureSummaries": For each feature with bugs, provide a single, crisp, complete sentence (6 to 15 words) explaining the primary defect(s).
-4. NEVER TRUNCATE: Do not end sentences with ellipses (...) or cut off text.
-5. RETURN FORMAT:
+FEW-SHOT EXAMPLES OF EXPECTED SYNTHESIS & TONE:
+
+Example Input:
+Feature: "Camera & Vision" (Pass Rate: 60%, Bugs Logged: 2)
+    - [Step: Capture photo] Spontaneous photo capture occurred without pressing trigger or shutter button.
+    - [Step: Generate stylized image] Took over 4 minutes to generate image when sending consecutive requests.
+
+Feature: "Voice Assistant & Audio" (Pass Rate: 75%, Bugs Logged: 2)
+    - [Step: Create event via voice] Assistant provided duplicate voice confirmation feedback upon event creation.
+    - [Step: Passive listening] Overheard ambient conversation from background TV and falsely activated voice command.
+
+Expected JSON Output:
+{
+  "overallSummary": "Testing revealed latency and false-trigger issues across voice and camera flows, primarily characterized by image generation delays exceeding 4 minutes, unprompted photo captures, and duplicate confirmation speech triggered by overheard ambient voices.",
+  "featureSummaries": {
+    "Camera & Vision": "Image generation latency exceeding 4 minutes during consecutive requests and spontaneous unprompted photo capture.",
+    "Voice Assistant & Audio": "Duplicate voice confirmation feedback upon event creation and false voice-trigger activations from ambient background speech."
+  }
+}
+
+CRITICAL ARCHITECTURAL RULES:
+1. EXECUTIVE SYNTHESIS (NO RAW DUMPS):
+   - Synthesize and distill root failure mechanisms into crisp engineering statements. DO NOT copy-paste raw tester notes, conversational narrative ("I noticed", "we saw"), or timestamps ("1:38 pm", "at 14:00").
+   - Use precise defect terminology: "latency exceeding [duration]", "spontaneous unprompted [action]", "duplicate confirmation feedback upon [event]", "false voice-trigger activations from ambient background speech", "UI unresponsiveness", etc.
+2. PRESERVE METRICS: Retain specific quantitative thresholds, durations, and counts from the logs (e.g., "exceeding 4 minutes", "10-second delay").
+3. "overallSummary" REQUIREMENTS:
+   - Provide a strategic, high-impact 1 to 2 sentence executive overview (25 to 45 words).
+   - Follow this structure: "Testing revealed [key defect categories, e.g. latency, false-trigger, stability] issues across [affected feature/system flows], primarily characterized by [synthesized root causes with exact durations/metrics retained]..."
+4. "featureSummaries" REQUIREMENTS:
+   - Provide an entry in "featureSummaries" for EVERY feature listed in the input.
+   - For each feature, provide a single, complete sentence (8 to 22 words) capturing the core defects (e.g. "[Primary defect phrase] and [Secondary defect phrase].").
+   - Ensure it ends with a period.
+5. NEVER TRUNCATE: Do not end sentences with ellipses (...) or cut off text.
+6. RETURN FORMAT:
    Return valid JSON with this exact schema:
    {
      "overallSummary": "...",
      "featureSummaries": {
-       "Feature Name": "..."
+       "<FeatureName>": "..."
      }
    }
 `;
@@ -437,7 +772,10 @@ CRITICAL INSTRUCTIONS:
   });
 
   const allNotes = allBugs.map(b => b.note).filter(Boolean);
-  const fallbackOverall = allNotes.length > 0 ? nlpCleanReword(allNotes, 'Overall') : '';
+  const featureNamesWithBugs = featuresWithBugs.map(f => f.featureName);
+  const fallbackOverall = allNotes.length > 0
+    ? synthesizeExecutiveOverview(allNotes, featureNamesWithBugs)
+    : '';
 
   return {
     overallSummary: fallbackOverall,

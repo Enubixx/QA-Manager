@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota } from '../types';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard } from '../utils/exportUtils';
-import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel } from '../services/geminiService';
+import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel } from '../services/geminiService';
 import { toBlob } from 'html-to-image';
 
 interface DashboardProps {
@@ -711,20 +711,49 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       // Extract all features & bugs for the dedicated Gemini sub-task
       const allBugs = featureMetricsList.flatMap(m => m.associatedBugs || []);
-      const featuresPayload = featureMetricsList.map(m => ({
-        featureName: m.featureName,
-        status: m.status,
-        healthScorePct: m.healthScorePct,
-        greenCount: m.greenCount,
-        totalStepsExecuted: m.totalStepsExecuted,
-        bugCount: m.bugCount,
-        bugs: m.associatedBugs || []
-      }));
+      const featuresPayload = featureMetricsList.map(m => {
+        const bugsForFeature = (m.associatedBugs && m.associatedBugs.length > 0)
+          ? m.associatedBugs
+          : bugLogs.filter(b => b.feature && b.feature.trim().toLowerCase() === m.featureName.trim().toLowerCase());
+        return {
+          featureName: m.featureName,
+          status: m.status,
+          healthScorePct: m.healthScorePct,
+          greenCount: m.greenCount,
+          totalStepsExecuted: m.totalStepsExecuted,
+          bugCount: m.bugCount || bugsForFeature.length,
+          bugs: bugsForFeature
+        };
+      });
 
       // Spin up dedicated subtask prompt to Gemini
-      const result = await generateBatchExecutiveSummaryWithGemini(featuresPayload, allBugs.length > 0 ? allBugs : bugLogs);
+      const effectiveBugs = allBugs.length > 0 ? allBugs : bugLogs;
+      const result = await generateBatchExecutiveSummaryWithGemini(featuresPayload, effectiveBugs);
       const overallGeminiSummary = result.overallSummary;
       const featureSummaryMap = result.featureSummaries;
+
+      // Helper to cleanly retrieve or synthesize summary for any feature with bugs
+      const getFeatureSummary = (metric: FeatureMetric): string => {
+        let summary = featureSummaryMap[metric.featureName];
+        if (!summary) {
+          const match = Object.entries(featureSummaryMap).find(
+            ([k]) => k.trim().toLowerCase() === metric.featureName.trim().toLowerCase()
+          );
+          if (match && match[1]) summary = match[1];
+        }
+        if (!summary) {
+          const bugs = (metric.associatedBugs && metric.associatedBugs.length > 0)
+            ? metric.associatedBugs
+            : bugLogs.filter(b => b.feature && b.feature.trim().toLowerCase() === metric.featureName.trim().toLowerCase());
+          if (bugs.length > 0) {
+            summary = nlpCleanReword(bugs.map(b => b.note).filter(Boolean), metric.featureName);
+          } else if (metric.redCount > 0 || metric.yellowCount > 0) {
+            const count = metric.redCount + metric.yellowCount;
+            summary = `${count} step failure${count > 1 ? 's' : ''}`;
+          }
+        }
+        return summary || '';
+      };
 
       if (result.error && getStoredGeminiApiKey()) {
         console.warn('Gemini executive summary notice:', result.error);
@@ -735,8 +764,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
       plainText += `• Coverage: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)\n`;
       plainText += `• Status: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)\n`;
       if (overallGeminiSummary) {
-        const modelTag = result.modelUsed ? ` [${result.modelUsed}]` : '';
-        plainText += `• Gemini Issue Overview${modelTag}: ${overallGeminiSummary}\n`;
+        const overviewTag = result.modelUsed ? `Gemini Issue Overview [${result.modelUsed}]` : 'Executive Issue Overview';
+        plainText += `• ${overviewTag}: ${overallGeminiSummary}\n`;
       }
       plainText += `\n`;
 
@@ -745,7 +774,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         criticalList.forEach(m => {
           const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
           const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-          const summary = featureSummaryMap[m.featureName];
+          const summary = getFeatureSummary(m);
           const summaryText = summary ? `\n   ↳ Summary: ${summary}` : '';
           plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryText}\n`;
         });
@@ -757,7 +786,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         warningList.forEach(m => {
           const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
           const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-          const summary = featureSummaryMap[m.featureName];
+          const summary = getFeatureSummary(m);
           const summaryText = summary ? `\n   ↳ Summary: ${summary}` : '';
           plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryText}\n`;
         });
@@ -769,7 +798,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         healthyList.forEach(m => {
           const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
           const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-          const summary = featureSummaryMap[m.featureName];
+          const summary = getFeatureSummary(m);
           const summaryText = summary ? `\n   ↳ Summary: ${summary}` : '';
           plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryText}\n`;
         });
@@ -781,8 +810,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
       htmlText += `<p style="margin: 0 0 4px 0;">• <b>Coverage</b>: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)</p>`;
       htmlText += `<p style="margin: 0 0 8px 0;">• <b>Status</b>: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)</p>`;
       if (overallGeminiSummary) {
-        const modelBadge = result.modelUsed ? ` <span style="font-size: 10px; background: #e0e7ff; color: #4338ca; padding: 2px 6px; border-radius: 4px; font-family: monospace;">${result.modelUsed}</span>` : '';
-        htmlText += `<div style="background-color: #f1f5f9; border-left: 3px solid #6366f1; padding: 8px 12px; margin: 8px 0 12px 0; border-radius: 6px; font-size: 12.5px; color: #1e293b;">🤖 <b>Gemini Executive Issue Summary${modelBadge}:</b> ${overallGeminiSummary}</div>`;
+        if (result.modelUsed) {
+          const modelBadge = ` <span style="font-size: 10px; background: #e0e7ff; color: #4338ca; padding: 2px 6px; border-radius: 4px; font-family: monospace;">${result.modelUsed}</span>`;
+          htmlText += `<div style="background-color: #f1f5f9; border-left: 3px solid #6366f1; padding: 8px 12px; margin: 8px 0 12px 0; border-radius: 6px; font-size: 12.5px; color: #1e293b;">🤖 <b>Gemini Executive Issue Summary${modelBadge}:</b> ${overallGeminiSummary}</div>`;
+        } else {
+          htmlText += `<div style="background-color: #f1f5f9; border-left: 3px solid #6366f1; padding: 8px 12px; margin: 8px 0 12px 0; border-radius: 6px; font-size: 12.5px; color: #1e293b;">📋 <b>Executive Issue Summary:</b> ${overallGeminiSummary}</div>`;
+        }
       }
 
       if (criticalList.length > 0) {
@@ -791,7 +824,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         criticalList.forEach(m => {
           const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
           const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-          const summary = featureSummaryMap[m.featureName];
+          const summary = getFeatureSummary(m);
           const summaryHtml = summary
             ? `<div style="color: #475569; font-size: 12px; margin-top: 2px; margin-left: 10px;">↳ <i>Summary: ${summary}</i></div>`
             : '';
@@ -806,7 +839,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         warningList.forEach(m => {
           const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
           const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-          const summary = featureSummaryMap[m.featureName];
+          const summary = getFeatureSummary(m);
           const summaryHtml = summary
             ? `<div style="color: #475569; font-size: 12px; margin-top: 2px; margin-left: 10px;">↳ <i>Summary: ${summary}</i></div>`
             : '';
@@ -821,7 +854,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         healthyList.forEach(m => {
           const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
           const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-          const summary = featureSummaryMap[m.featureName];
+          const summary = getFeatureSummary(m);
           const summaryHtml = summary
             ? `<div style="color: #475569; font-size: 12px; margin-top: 2px; margin-left: 10px;">↳ <i>Summary: ${summary}</i></div>`
             : '';
