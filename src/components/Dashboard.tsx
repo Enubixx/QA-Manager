@@ -666,7 +666,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
         const issueSummary = criticalSummaries[idx];
-        const issueHtml = issueSummary ? `<span style="color: #64748b; font-size: 11px;"> — ${issueSummary}</span>` : '';
+        const issueHtml = issueSummary ? `<span style="color: #1e293b; font-size: 12px; font-weight: 600;"> — ${issueSummary}</span>` : '';
         htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${issueHtml}</li>`;
       });
       htmlText += `</ul>`;
@@ -679,7 +679,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
         const issueSummary = warningSummaries[idx];
-        const issueHtml = issueSummary ? `<span style="color: #64748b; font-size: 11px;"> — ${issueSummary}</span>` : '';
+        const issueHtml = issueSummary ? `<span style="color: #1e293b; font-size: 12px; font-weight: 600;"> — ${issueSummary}</span>` : '';
         htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${issueHtml}</li>`;
       });
       htmlText += `</ul>`;
@@ -1741,7 +1741,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                     <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/90 shadow-inner">
                       <table className="w-full text-left text-xs font-sans">
-                        <thead className="bg-slate-900/90 border-b border-slate-800 text-[11px] text-slate-400 uppercase font-semibold">
+                        <thead className="bg-slate-900/90 border-b border-slate-800 text-[11px] text-slate-200 uppercase font-bold tracking-wider">
                           <tr>
                             <th className="py-3 px-4">Feature Name</th>
                             <th className="py-3 px-4">Status</th>
@@ -1754,7 +1754,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             <th className="py-3 px-4">Issues Encountered</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                        <tbody className="divide-y divide-slate-800/60 text-slate-100 font-medium">
                           {featureMetricsList.map(metric => {
                             const issueSummary = getBriefIssueSummarySync(metric.featureName, metric.associatedBugs, metric.yellowCount, metric.redCount);
                             return (
@@ -1780,9 +1780,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 <td className="py-2.5 px-4 text-amber-400 font-bold font-mono whitespace-nowrap">{metric.yellowCount}</td>
                                 <td className="py-2.5 px-4 text-rose-400 font-bold font-mono whitespace-nowrap">{metric.redCount}</td>
                                 <td className="py-2.5 px-4 text-rose-400 font-bold font-mono whitespace-nowrap">{metric.bugCount}</td>
-                                <td className="py-2.5 px-4 text-xs font-sans text-slate-300 max-w-xs truncate" title={issueSummary || 'No issues encountered'}>
+                                <td className="py-2.5 px-4 text-xs font-sans text-slate-100 max-w-xs truncate" title={issueSummary || 'No issues encountered'}>
                                   {issueSummary ? (
-                                    <span className="text-amber-300/90 font-medium">{issueSummary}</span>
+                                    <span className="text-amber-200 font-semibold">{issueSummary}</span>
                                   ) : (
                                     <span className="text-slate-500 font-mono">-</span>
                                   )}
