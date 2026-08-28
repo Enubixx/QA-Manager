@@ -26,27 +26,23 @@ export function saveGeminiApiKey(key: string): void {
 }
 
 /**
- * Synthesizes raw QA notes into a punchy, short, complete status phrase (5-9 words max).
+ * Synthesizes raw QA notes into a natural, complete status sentence (10-14 words).
  */
 export function nlpCleanReword(notes: string[], featureName: string): string {
   const reworded = notes.map(note => {
     let text = note.trim();
     text = text.replace(/^(bug|issue|defect|error|problem|note|encountered|found|description):\s*/i, '');
     
-    if (/force\s+quit|close\s+out|active\s+test/i.test(text)) return 'Force quit fails to close active session';
-    if (/button|unclickable|can'?t\s+click/i.test(text)) return 'Unresponsive UI touch target on tap';
-    if (/session|token|logged\s+out/i.test(text)) return 'Session token lost on app restart';
-    if (/payment|checkout|gateway/i.test(text)) return 'Payment gateway submission timeout';
-    if (/timeout|time\s*out/i.test(text)) return 'Network connection payload timeout';
-    if (/rotate|orientation|landscape/i.test(text)) return 'Orientation layout responsiveness defect';
-    if (/audio|sound|bluetooth/i.test(text)) return 'Media playback audio sync latency';
-    if (/slow|lag|delay|freeze/i.test(text)) return 'Performance frame-drop latency';
-    if (/crash|force\s+close/i.test(text)) return 'Application runtime force-close crash';
+    if (/force\s+quit|close\s+out|active\s+test/i.test(text)) return 'Active test session fails to close when force quitting the app';
+    if (/button|unclickable|can'?t\s+click/i.test(text)) return 'UI touch target remains unresponsive on user interaction';
+    if (/session|token|logged\s+out/i.test(text)) return 'Session token is lost on app restart';
+    if (/payment|checkout|gateway/i.test(text)) return 'Payment gateway submission times out on network requests';
+    if (/timeout|time\s*out/i.test(text)) return 'Network connection request payload times out';
+    if (/rotate|orientation|landscape/i.test(text)) return 'Screen orientation change causes layout responsiveness defects';
+    if (/audio|sound|bluetooth/i.test(text)) return 'Media playback experiences audio sync latency';
+    if (/slow|lag|delay|freeze/i.test(text)) return 'Performance frame-drop latency occurs during interaction';
+    if (/crash|force\s+close/i.test(text)) return 'Application experiences runtime force-close crash';
 
-    const words = text.split(/\s+/);
-    if (words.length > 7) {
-      return words.slice(0, 7).join(' ');
-    }
     return text.charAt(0).toUpperCase() + text.slice(1);
   });
 
@@ -56,7 +52,7 @@ export function nlpCleanReword(notes: string[], featureName: string): string {
 }
 
 /**
- * Summarizes and rewords all reported bugs for a feature using Gemini AI into a punchy 5-9 word summary.
+ * Summarizes and rewords all reported bugs for a feature into a clear, complete, natural sentence (10-14 words).
  */
 export async function summarizeFeatureBugsWithGemini(
   featureName: string,
@@ -96,10 +92,10 @@ Reported Bugs (Step Title & Description):
 ${bugDetailsList.join('\n')}
 
 Instructions:
-1. Summarize the reported bug step titles and descriptions above into ONE ultra-punchy, short phrase of 5 to 9 words maximum.
-2. Synthesize long descriptions into a clean, concise statement (e.g. "Force quit fails to close active session", "Payment gateway times out on 3G network").
-3. DO NOT write a long sentence. Keep it punchy, executive, and under 9 words.
-4. Return ONLY the single reworded 5-9 word summary string. Do not add intro text, quotes, or markdown bullets.`,
+1. Read the reported bug step titles and descriptions above and summarize what failed into ONE clear, natural, complete executive summary sentence (around 10 to 14 words).
+2. Ensure the sentence makes complete sense and clearly explains what failed without cutting off or using truncation/ellipsis (...).
+3. Do not write a long paragraph. Write 1 natural, complete sentence.
+4. Return ONLY the single reworded summary sentence. Do not add intro text, quotes, or markdown bullets.`,
       });
 
       const text = (response.text || '').trim().replace(/^["']|["']$/g, '');

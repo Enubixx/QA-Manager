@@ -666,7 +666,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
         const issueSummary = criticalSummaries[idx];
-        const issueHtml = issueSummary ? `<span style="color: #1e293b; font-size: 12px; font-weight: 600;"> — ${issueSummary}</span>` : '';
+        const issueHtml = issueSummary ? `<span style="color: #475569; font-size: 11.5px; font-weight: 500;"> — ${issueSummary}</span>` : '';
         htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${issueHtml}</li>`;
       });
       htmlText += `</ul>`;
@@ -679,7 +679,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
         const issueSummary = warningSummaries[idx];
-        const issueHtml = issueSummary ? `<span style="color: #1e293b; font-size: 12px; font-weight: 600;"> — ${issueSummary}</span>` : '';
+        const issueHtml = issueSummary ? `<span style="color: #475569; font-size: 11.5px; font-weight: 500;"> — ${issueSummary}</span>` : '';
         htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${issueHtml}</li>`;
       });
       htmlText += `</ul>`;
