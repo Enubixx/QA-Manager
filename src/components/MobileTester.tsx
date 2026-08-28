@@ -86,44 +86,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     return map;
   }, [archivedRuns, testRuns, devices, todayStr]);
 
-  // Fallback defaults for seamless mobile experience
-  const effectiveDevices = useMemo(() => {
-    const list: DeviceProfile[] = [...devices];
-    populatedDevices.forEach(pDevName => {
-      if (!list.some(d => d.name.toLowerCase().trim() === pDevName.toLowerCase().trim())) {
-        list.push({
-          id: `dev-${pDevName.toLowerCase().replace(/\s+/g, '-')}`,
-          name: pDevName,
-          isReady: true,
-          quotas: []
-        });
-      }
-    });
-    if (list.length === 0) {
-      ['Google Pixel 8', 'Samsung Galaxy S24', 'iPhone 15 Pro'].forEach(defName => {
-        list.push({
-          id: `dev-${defName.toLowerCase().replace(/\s+/g, '-')}`,
-          name: defName,
-          isReady: true,
-          quotas: []
-        });
-      });
-    }
-    return list;
-  }, [devices, populatedDevices]);
-
-  const effectiveTesters = useMemo(() => {
-    const list: TesterProfile[] = [...testers];
-    if (list.length === 0) {
-      return [
-        { id: 't-1', name: 'Kevin Huang', role: 'Lead QA' },
-        { id: 't-2', name: 'Sarah Miller', role: 'Senior Mobile Tester' },
-        { id: 't-3', name: 'Alex Rivera', role: 'QA Engineer' }
-      ];
-    }
-    return list;
-  }, [testers]);
-
   // Find active run specifically for THIS device & plan
   let activeRun = testRuns.find(r => 
     r.planId === currentPlan?.id && 
@@ -155,10 +117,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     };
   }
 
-  // Selectable devices: Ready, not locked by another active run, and quota not exhausted today
+  // Selectable devices: Strictly devices created on Web Dashboard that are Ready, not locked, and quota not exhausted today
   const selectableDevices = useMemo(() => {
-    if (!currentPlan) return effectiveDevices;
-    return effectiveDevices.filter(dev => {
+    if (!currentPlan) return devices;
+    return devices.filter(dev => {
       if (!dev.isReady) return false;
       if (dev.activeRunId && dev.activeRunId !== activeRun?.id) return false;
 
@@ -169,7 +131,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       }
       return true;
     });
-  }, [effectiveDevices, currentPlan, todayRunsMap, activeRun]);
+  }, [devices, currentPlan, todayRunsMap, activeRun]);
 
   // Clear legacy localStorage tester info so sessions require setup on fresh launch
   useEffect(() => {
@@ -1133,19 +1095,25 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                     <User className="w-3.5 h-3.5 text-indigo-400" />
                     Select QA Tester
                   </label>
-                  <select
-                    value={inputReporterName}
-                    onChange={e => setInputReporterName(e.target.value)}
-                    className="w-full liquid-glass-input rounded-2xl px-4 py-3 text-xs text-white bg-slate-900 border border-slate-700/80 focus:outline-none focus:border-indigo-500 font-bold cursor-pointer"
-                    required
-                  >
-                    <option value="" disabled>Choose Tester Profile...</option>
-                    {effectiveTesters.map(t => (
-                      <option key={t.id} value={t.name}>
-                        👤 {t.name} ({t.role || 'QA Tester'})
-                      </option>
-                    ))}
-                  </select>
+                  {testers.length > 0 ? (
+                    <select
+                      value={inputReporterName}
+                      onChange={e => setInputReporterName(e.target.value)}
+                      className="w-full liquid-glass-input rounded-2xl px-4 py-3 text-xs text-white bg-slate-900 border border-slate-700/80 focus:outline-none focus:border-indigo-500 font-bold cursor-pointer"
+                      required
+                    >
+                      <option value="" disabled>Choose Tester Profile...</option>
+                      {testers.map(t => (
+                        <option key={t.id} value={t.name}>
+                          👤 {t.name} ({t.role || 'QA Tester'})
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div className="p-3 bg-amber-500/15 border border-amber-500/30 rounded-2xl text-amber-200 text-xs font-semibold text-center leading-relaxed">
+                      ⚠️ No QA tester profiles created yet. Register tester profiles on the Web Dashboard.
+                    </div>
+                  )}
                 </div>
 
                 {/* Target Device Select Field */}
@@ -1154,32 +1122,38 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                     <Smartphone className="w-3.5 h-3.5 text-purple-400" />
                     Select Target Device
                   </label>
-                  <select
-                    value={inputDeviceName}
-                    onChange={e => setInputDeviceName(e.target.value)}
-                    className="w-full liquid-glass-input rounded-2xl px-4 py-3 text-xs text-white bg-slate-900 border border-slate-700/80 focus:outline-none focus:border-purple-500 font-bold cursor-pointer"
-                    required
-                  >
-                    <option value="" disabled>Choose Mobile Device...</option>
-                    {selectableDevices.map(dev => {
-                      const quota = dev.quotas?.find(q => q.planId === currentPlan?.id);
-                      const doneToday = (todayRunsMap[dev.id] && todayRunsMap[dev.id][currentPlan?.id || '']) || 0;
-                      const remaining = quota ? Math.max(0, quota.targetRunsPerDay - doneToday) : null;
-                      
-                      let label = `📱 ${dev.name}`;
-                      if (remaining !== null) {
-                        label += ` — (⚡ ${remaining} run${remaining > 1 ? 's' : ''} left today)`;
-                      } else {
-                        label += ` — (Ready)`;
-                      }
+                  {selectableDevices.length > 0 ? (
+                    <select
+                      value={inputDeviceName}
+                      onChange={e => setInputDeviceName(e.target.value)}
+                      className="w-full liquid-glass-input rounded-2xl px-4 py-3 text-xs text-white bg-slate-900 border border-slate-700/80 focus:outline-none focus:border-purple-500 font-bold cursor-pointer"
+                      required
+                    >
+                      <option value="" disabled>Choose Mobile Device...</option>
+                      {selectableDevices.map(dev => {
+                        const quota = dev.quotas?.find(q => q.planId === currentPlan?.id);
+                        const doneToday = (todayRunsMap[dev.id] && todayRunsMap[dev.id][currentPlan?.id || '']) || 0;
+                        const remaining = quota ? Math.max(0, quota.targetRunsPerDay - doneToday) : null;
+                        
+                        let label = `📱 ${dev.name}`;
+                        if (remaining !== null) {
+                          label += ` — (⚡ ${remaining} run${remaining > 1 ? 's' : ''} left today)`;
+                        } else {
+                          label += ` — (Ready)`;
+                        }
 
-                      return (
-                        <option key={dev.id} value={dev.name}>
-                          {label}
-                        </option>
-                      );
-                    })}
-                  </select>
+                        return (
+                          <option key={dev.id} value={dev.name}>
+                            {label}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  ) : (
+                    <div className="p-3 bg-amber-500/15 border border-amber-500/30 rounded-2xl text-amber-200 text-xs font-semibold text-center leading-relaxed">
+                      ⚠️ No ready devices available. Register devices and set plan quotas on the Web Dashboard.
+                    </div>
+                  )}
                 </div>
 
               </div>

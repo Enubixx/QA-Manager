@@ -80,11 +80,7 @@ export function App() {
       const saved = localStorage.getItem('qa_devices_list');
       if (saved) return JSON.parse(saved);
     } catch (e) {}
-    return [
-      { id: 'dev-1', name: 'Google Pixel 8', isReady: true, quotas: [] },
-      { id: 'dev-2', name: 'Samsung Galaxy S24', isReady: true, quotas: [] },
-      { id: 'dev-3', name: 'iPhone 15 Pro', isReady: true, quotas: [] },
-    ];
+    return [];
   });
 
   // User-populated QA tester profiles list
@@ -93,10 +89,7 @@ export function App() {
       const saved = localStorage.getItem('qa_testers_list');
       if (saved) return JSON.parse(saved);
     } catch (e) {}
-    return [
-      { id: 'tester-1', name: 'Kevin Huang', role: 'QA Lead' },
-      { id: 'tester-2', name: 'Sarah Miller', role: 'Mobile Tester' },
-    ];
+    return [];
   });
 
   // User-populated devices list
