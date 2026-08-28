@@ -3091,21 +3091,35 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <div className="space-y-1.5">
               <label className="text-[11px] font-bold text-slate-300 flex items-center justify-between">
                 <span>Gemini Model</span>
-                <span className="text-[10px] text-purple-400 font-semibold">Latest AI Versions</span>
+                <span className="text-[10px] text-purple-400 font-semibold">Customizable</span>
               </label>
-              <select
-                value={tempModel}
-                onChange={e => setTempModel(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 focus:border-purple-500 rounded-xl px-3 py-2 text-xs text-white font-sans focus:outline-none cursor-pointer"
-              >
-                {GEMINI_MODELS.map(m => (
-                  <option key={m.id} value={m.id} className="bg-slate-900 text-slate-200">
-                    {m.name}
-                  </option>
-                ))}
-              </select>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="e.g. gemini-2.0-flash"
+                  value={tempModel}
+                  onChange={e => setTempModel(e.target.value)}
+                  className="flex-1 bg-slate-950 border border-slate-800 focus:border-purple-500 rounded-xl px-3 py-2 text-xs text-white font-mono placeholder-slate-600 focus:outline-none"
+                />
+                <select
+                  value={GEMINI_MODELS.some(m => m.id === tempModel) ? tempModel : 'custom'}
+                  onChange={e => {
+                    if (e.target.value !== 'custom') {
+                      setTempModel(e.target.value);
+                    }
+                  }}
+                  className="bg-slate-900 border border-slate-800 focus:border-purple-500 rounded-xl px-2.5 py-2 text-xs text-purple-300 font-medium focus:outline-none cursor-pointer"
+                >
+                  {GEMINI_MODELS.map(m => (
+                    <option key={m.id} value={m.id} className="bg-slate-900 text-slate-200">
+                      {m.id}
+                    </option>
+                  ))}
+                  <option value="custom" className="bg-slate-900 text-slate-400">Custom...</option>
+                </select>
+              </div>
               <p className="text-[10.5px] text-slate-400">
-                {GEMINI_MODELS.find(m => m.id === tempModel)?.description}
+                Default: <code className="text-purple-300 font-mono">gemini-2.0-flash</code>. You can choose a preset or type any model ID.
               </p>
             </div>
 
