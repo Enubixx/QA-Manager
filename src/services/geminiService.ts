@@ -33,8 +33,8 @@ export function nlpCleanReword(notes: string[], featureName: string): string {
 
   const cleaned = notes.map(note => {
     let text = (note || '').trim();
-    // Strip leading time strings like "1.38 pm.", "10:15 AM:", "14:30 -"
-    text = text.replace(/^(\d{1,2}[:.]\d{2}\s*(?:am|pm)?[:.-]?\s*)/i, '');
+    // Strip leading time strings like "1.38 pm.", "[10:15 AM]", "14:30 -", "at 2:00 PM,"
+    text = text.replace(/^(?:\[?\d{1,2}[:.]\d{2}\s*(?:am|pm)?\]?[:.-]?\s*|at\s+\d{1,2}[:.]\d{2}\s*(?:am|pm)?[:,-]?\s*)/i, '');
     // Remove typical prefixes
     text = text.replace(/^(bug|issue|defect|error|problem|note|encountered|found|description):\s*/i, '');
     
@@ -68,7 +68,7 @@ export async function summarizeFeatureBugsWithGemini(
 ): Promise<string> {
   const bugDetailsList = bugs.map(b => {
     let notePart = (b.note || '').trim();
-    notePart = notePart.replace(/^(\d{1,2}[:.]\d{2}\s*(?:am|pm)?[:.-]?\s*)/i, '');
+    notePart = notePart.replace(/^(?:\[?\d{1,2}[:.]\d{2}\s*(?:am|pm)?\]?[:.-]?\s*|at\s+\d{1,2}[:.]\d{2}\s*(?:am|pm)?[:,-]?\s*)/i, '');
     const titlePart = b.stepTitle ? `${b.stepTitle}: ` : '';
     return `- ${titlePart}${notePart}`;
   });
@@ -98,13 +98,13 @@ Feature Tested: "${featureName}"
 Reported Bugs (Step Title & Description):
 ${bugDetailsList.join('\n')}
 
-GOAL: Provide a clear, highly accurate, and concise 1-sentence or short phrase summary (5 to 12 words) explaining the primary bug(s) encountered for this feature.
+GOAL: Provide a clear, highly accurate, and concise 1-sentence summary (5 to 15 words) explaining the primary bug(s) encountered for this feature.
 
 CRITICAL REQUIREMENTS:
-1. ACCURACY & LOGIC FIRST: The summary MUST directly and faithfully reflect the actual reported bugs above. Do NOT hallucinate technical terms or failures that were not explicitly in the bug logs.
-2. MAKE CLEAR SENSE: Ensure the summary is grammatically sound, coherent, and makes complete logical sense to a human reader.
+1. ACCURACY & LOGIC FIRST: The summary MUST directly and faithfully reflect the actual reported bugs above. Focus strictly on the core issue, defect, or unexpected behavior. Do NOT include timestamps or conversational artifacts.
+2. MAKE COMPLETE SENSE: Ensure the summary is grammatically sound, clear, and makes complete logical sense to a human reader.
 3. DOUBLE-CHECK: Before returning, double-check your summary against the reported bugs to verify it is 100% accurate and coherent.
-4. Return ONLY the final summary string. Do not add intro text, quotes, or markdown bullets.`,
+4. Return ONLY the final summary string. Do not add intro text, quotes, prefixes, or markdown bullets.`,
       });
 
       const text = (response.text || '').trim().replace(/^["']|["']$/g, '');

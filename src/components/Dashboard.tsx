@@ -698,6 +698,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const allBugs = featureMetricsList.flatMap(m => m.associatedBugs || []);
     const overallGeminiSummary = await summarizeOverallBugsWithGemini(allBugs.length > 0 ? allBugs : bugLogs);
 
+    // Fetch Gemini summaries asynchronously for all feature points that have linked bugs
+    const featuresWithBugs = featureMetricsList.filter(m => (m.bugCount > 0 || (m.associatedBugs && m.associatedBugs.length > 0)));
+    const featureSummaryMap: Record<string, string> = {};
+    await Promise.all(
+      featuresWithBugs.map(async (m) => {
+        const summary = await summarizeFeatureBugsWithGemini(m.featureName, m.associatedBugs, m.yellowCount, m.redCount);
+        if (summary) {
+          featureSummaryMap[m.featureName] = summary;
+        }
+      })
+    );
+
     // Plain text format
     let plainText = `📊 CUJ Report (${new Date().toLocaleDateString()})\n`;
     plainText += `• Coverage: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)\n`;
@@ -710,9 +722,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
     if (criticalList.length > 0) {
       plainText += `🔴 Critical CUJs:\n`;
       criticalList.forEach(m => {
-        const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
+        const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})\n`;
+        const summary = featureSummaryMap[m.featureName];
+        const summaryText = summary ? `\n   ↳ Summary: ${summary}` : '';
+        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryText}\n`;
       });
       plainText += `\n`;
     }
@@ -720,9 +734,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
     if (warningList.length > 0) {
       plainText += `🟡 Degraded CUJs:\n`;
       warningList.forEach(m => {
-        const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
+        const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})\n`;
+        const summary = featureSummaryMap[m.featureName];
+        const summaryText = summary ? `\n   ↳ Summary: ${summary}` : '';
+        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryText}\n`;
       });
       plainText += `\n`;
     }
@@ -730,8 +746,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
     if (healthyList.length > 0) {
       plainText += `🟢 Healthy CUJs:\n`;
       healthyList.forEach(m => {
+        const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail})\n`;
+        const summary = featureSummaryMap[m.featureName];
+        const summaryText = summary ? `\n   ↳ Summary: ${summary}` : '';
+        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryText}\n`;
       });
     }
 
@@ -748,9 +767,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
       htmlText += `<p style="margin: 8px 0 4px 0; color: #dc2626; font-weight: 700;">🔴 Critical CUJs:</p>`;
       htmlText += `<ul style="margin: 0 0 8px 0; padding-left: 18px;">`;
       criticalList.forEach(m => {
-        const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
+        const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})</li>`;
+        const summary = featureSummaryMap[m.featureName];
+        const summaryHtml = summary
+          ? `<div style="color: #475569; font-size: 12px; margin-top: 2px; margin-left: 10px;">↳ <i>Summary: ${summary}</i></div>`
+          : '';
+        htmlText += `<li style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</li>`;
       });
       htmlText += `</ul>`;
     }
@@ -759,9 +782,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
       htmlText += `<p style="margin: 8px 0 4px 0; color: #d97706; font-weight: 700;">🟡 Degraded CUJs:</p>`;
       htmlText += `<ul style="margin: 0 0 8px 0; padding-left: 18px;">`;
       warningList.forEach(m => {
-        const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
+        const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})</li>`;
+        const summary = featureSummaryMap[m.featureName];
+        const summaryHtml = summary
+          ? `<div style="color: #475569; font-size: 12px; margin-top: 2px; margin-left: 10px;">↳ <i>Summary: ${summary}</i></div>`
+          : '';
+        htmlText += `<li style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</li>`;
       });
       htmlText += `</ul>`;
     }
@@ -770,8 +797,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
       htmlText += `<p style="margin: 8px 0 4px 0; color: #16a34a; font-weight: 700;">🟢 Healthy CUJs:</p>`;
       htmlText += `<ul style="margin: 0 0 4px 0; padding-left: 18px;">`;
       healthyList.forEach(m => {
+        const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail})</li>`;
+        const summary = featureSummaryMap[m.featureName];
+        const summaryHtml = summary
+          ? `<div style="color: #475569; font-size: 12px; margin-top: 2px; margin-left: 10px;">↳ <i>Summary: ${summary}</i></div>`
+          : '';
+        htmlText += `<li style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</li>`;
       });
       htmlText += `</ul>`;
     }
