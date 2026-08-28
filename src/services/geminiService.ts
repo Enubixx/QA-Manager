@@ -52,7 +52,7 @@ export function nlpCleanReword(notes: string[], featureName: string): string {
 }
 
 /**
- * Summarizes and rewords all reported bugs for a feature using Gemini AI with full bug context.
+ * Summarizes and rewords all reported bugs for a feature using Gemini AI based ONLY on Title & Full Description.
  */
 export async function summarizeFeatureBugsWithGemini(
   featureName: string,
@@ -60,13 +60,11 @@ export async function summarizeFeatureBugsWithGemini(
   yellowCount: number = 0,
   redCount: number = 0
 ): Promise<string> {
-  // Extract full contextual descriptions for every bug
+  // Extract ONLY Step Title and Full Description (no device, no severity, no extra labels)
   const bugDetailsList = bugs.map(b => {
-    const titlePart = b.stepTitle ? `Step "${b.stepTitle}": ` : '';
-    const severityPart = b.severity ? `[${b.severity.toUpperCase()} SEVERITY] ` : '';
-    const notePart = b.note ? b.note.trim() : 'No details provided';
-    const devicePart = b.deviceName ? ` (Device: ${b.deviceName})` : '';
-    return `- ${severityPart}${titlePart}${notePart}${devicePart}`;
+    const titlePart = b.stepTitle ? `${b.stepTitle}: ` : '';
+    const notePart = b.note ? b.note.trim() : '';
+    return `- ${titlePart}${notePart}`;
   });
 
   if (bugDetailsList.length === 0) {
@@ -90,14 +88,14 @@ export async function summarizeFeatureBugsWithGemini(
         model: 'gemini-2.5-flash',
         contents: `You are a senior QA Lead summarizing test results for executive reporting.
 
-Feature under test: "${featureName}"
-Reported Defects & Bug Logs:
+Feature: "${featureName}"
+Reported Bugs (Step Title & Description):
 ${bugDetailsList.join('\n')}
 
 Instructions:
-1. Read the full bug notes above and summarize what actually failed into ONE single clear, natural, professional executive sentence.
-2. Explain the core bug behavior clearly without truncation, ellipsis (...), or awkward phrasing.
-3. Keep it to 1 concise sentence (max ~15-20 words).
+1. Read the reported bug step titles and descriptions above and reword them into ONE single clear, natural, executive summary sentence.
+2. Focus strictly on summarizing what failed based on the step title and description. Do not include device names, severities, or step labels.
+3. Keep it to 1 concise, complete sentence (max ~15-20 words).
 4. Return ONLY the single reworded summary sentence. Do not add intro text, quotes, or markdown bullets.`,
       });
 
