@@ -1,51 +1,62 @@
 import { GoogleGenAI } from '@google/genai';
 import { BugLog } from '../types';
 
-const env = (import.meta as any).env || {};
-const apiKey = env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env?.VITE_GEMINI_API_KEY : '') || '';
-
-const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 const summaryCache = new Map<string, string>();
 
 /**
- * Intelligent Rewording Engine: Transforms informal, raw tester notes into clean,
- * executive 3-6 word status descriptions (e.g. "Button unclickable after rotate" -> "Unresponsive UI target on orientation change").
+ * Gets stored Gemini API Key from localStorage or environment
  */
-export function rewordBugNoteToExecutiveStatus(note: string, featureName: string): string {
-  let cleaned = note.toLowerCase().trim();
-  cleaned = cleaned.replace(/^(bug|issue|defect|error|problem|note|encountered|found):\s*/i, '');
-
-  const rules: [RegExp, string][] = [
-    [/button\s+unclickable|can'?t\s+click|button\s+not\s+working|unclickable/i, 'Unresponsive UI touch target'],
-    [/session\s+token|token\s+lost|token\s+expired|logged\s+out/i, 'Session token persistence failure'],
-    [/force\s+quit|app\s+crashed|crashed|force\s+close|crash/i, 'Application runtime crash'],
-    [/black\s+screen|blank\s+screen|screen\s+went\s+black/i, 'Display render black-screen glitch'],
-    [/rotate|orientation|landscape|portrait/i, 'Orientation layout responsiveness defect'],
-    [/payment|checkout|gateway|stripe/i, 'Payment gateway transaction failure'],
-    [/timeout|time\s*out|timed\s*out/i, 'Network payload connection timeout'],
-    [/audio|sound|bluetooth|headset|speaker|latency/i, 'Media playback audio sync latency'],
-    [/slow|lag|delay|freeze|sluggish|perf/i, 'Performance frame-drop latency'],
-    [/api|fetch|server\s+error|500|404/i, 'API service endpoint failure'],
-    [/cart|total|calculation|price|amount/i, 'Cart total calculation discrepancy'],
-    [/login|auth|password|credentials/i, 'Authentication credential defect'],
-    [/validation|email|input|field/i, 'Form input validation defect']
-  ];
-
-  for (const [pattern, replacement] of rules) {
-    if (pattern.test(cleaned)) {
-      return replacement;
-    }
-  }
-
-  // NLP synthesis fallback: Capitalize key action words into a clean phrase
-  const words = cleaned.split(/\s+/).filter(w => w.length > 2 && !['the', 'and', 'for', 'with', 'when', 'that', 'this'].includes(w));
-  if (words.length === 0) return `${featureName} defect`;
-  const shortPhrase = words.slice(0, 4).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-  return `${shortPhrase} defect`;
+export function getStoredGeminiApiKey(): string {
+  try {
+    const saved = localStorage.getItem('qa_gemini_api_key');
+    if (saved) return saved.trim();
+  } catch (e) {}
+  const env = (import.meta as any).env || {};
+  return env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env?.VITE_GEMINI_API_KEY : '') || '';
 }
 
 /**
- * Summarizes and rewords all reported bugs for a feature using Gemini AI (or fast NLP rewriter).
+ * Saves Gemini API Key to localStorage
+ */
+export function saveGeminiApiKey(key: string): void {
+  try {
+    localStorage.setItem('qa_gemini_api_key', key.trim());
+    summaryCache.clear();
+  } catch (e) {}
+}
+
+/**
+ * Clean Local NLP Reword (No appending "Defect" or producing gibberish)
+ */
+export function nlpCleanReword(notes: string[], featureName: string): string {
+  const reworded = notes.map(note => {
+    let text = note.trim();
+    text = text.replace(/^(bug|issue|defect|error|problem|note|encountered|found):\s*/i, '');
+    
+    if (/force\s+quit|close\s+out|active\s+test/i.test(text)) return 'Active session cleanup on force quit';
+    if (/button|unclickable|can'?t\s+click/i.test(text)) return 'Unresponsive UI touch target';
+    if (/session|token|logged\s+out/i.test(text)) return 'Session token persistence failure';
+    if (/payment|checkout|gateway/i.test(text)) return 'Payment gateway transaction failure';
+    if (/timeout|time\s*out/i.test(text)) return 'Network connection payload timeout';
+    if (/rotate|orientation|landscape/i.test(text)) return 'Orientation layout responsiveness defect';
+    if (/audio|sound|bluetooth/i.test(text)) return 'Media playback audio sync latency';
+    if (/slow|lag|delay|freeze/i.test(text)) return 'Performance frame-drop latency';
+    if (/crash|force\s+close/i.test(text)) return 'Application runtime crash';
+
+    // If it's a descriptive sentence, capitalize and summarize neatly
+    if (text.length > 55) {
+      return text.slice(0, 52) + '...';
+    }
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  });
+
+  const unique = Array.from(new Set(reworded));
+  if (unique.length === 1) return unique[0];
+  return unique.slice(0, 2).join(' & ');
+}
+
+/**
+ * Summarizes and rewords all reported bugs for a feature using Gemini AI (or fast clean NLP fallback).
  */
 export async function summarizeFeatureBugsWithGemini(
   featureName: string,
@@ -65,46 +76,43 @@ export async function summarizeFeatureBugsWithGemini(
     return '';
   }
 
-  const cacheKey = `${featureName}:${notes.sort().join('||')}`;
+  const userApiKey = getStoredGeminiApiKey();
+  const cacheKey = `${userApiKey}:${featureName}:${notes.sort().join('||')}`;
   if (summaryCache.has(cacheKey)) {
     return summaryCache.get(cacheKey)!;
   }
 
-  // Intelligent Local NLP Rewriter
-  const nlpRewordedSummary = () => {
-    const rewordedList = notes.map(n => rewordBugNoteToExecutiveStatus(n, featureName));
-    const unique = Array.from(new Set(rewordedList));
-    if (unique.length === 1) return unique[0];
-    return unique.slice(0, 2).join(' & ');
-  };
-
-  if (!ai) {
-    const res = nlpRewordedSummary();
-    summaryCache.set(cacheKey, res);
-    return res;
-  }
-
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: `You are a senior QA Lead. Reword and synthesize the following informal QA tester bug notes for feature "${featureName}" into a SINGLE executive 3 to 6 word status summary (e.g. "Unresponsive UI target on orientation change", "Session token persistence failure", "Payment gateway connection timeout").
+  if (userApiKey) {
+    try {
+      const genAI = new GoogleGenAI({ apiKey: userApiKey });
+      const response = await genAI.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: `You are a senior QA Lead. Read the following reported bug notes for feature "${featureName}" and reword them into a SINGLE clean, professional, executive status phrase of 3 to 6 words.
 
 Raw reported bug notes:
 ${notes.map(n => `- ${n}`).join('\n')}
 
-Return ONLY the single reworded 3-6 word summary string. Do not use quotes, intro text, or extra words.`,
-    });
+Example good rewording outputs:
+- "Active session cleanup on force quit"
+- "Gateway payment submit timeout"
+- "Mobile screen rotation touch target glitch"
 
-    const text = (response.text || '').trim().replace(/^["']|["']$/g, '');
-    const finalResult = text || nlpRewordedSummary();
-    summaryCache.set(cacheKey, finalResult);
-    return finalResult;
-  } catch (err) {
-    console.warn('Gemini AI summarization failed, using local NLP rewriter:', err);
-    const res = nlpRewordedSummary();
-    summaryCache.set(cacheKey, res);
-    return res;
+Return ONLY the single reworded 3-6 word summary string. Do not use quotes, intro text, or extra words.`,
+      });
+
+      const text = (response.text || '').trim().replace(/^["']|["']$/g, '');
+      if (text) {
+        summaryCache.set(cacheKey, text);
+        return text;
+      }
+    } catch (err) {
+      console.warn('Gemini API call failed:', err);
+    }
   }
+
+  const fallback = nlpCleanReword(notes, featureName);
+  summaryCache.set(cacheKey, fallback);
+  return fallback;
 }
 
 /**
@@ -128,17 +136,14 @@ export function getBriefIssueSummarySync(
     return '';
   }
 
-  const cacheKey = `${featureName}:${notes.sort().join('||')}`;
+  const userApiKey = getStoredGeminiApiKey();
+  const cacheKey = `${userApiKey}:${featureName}:${notes.sort().join('||')}`;
   if (summaryCache.has(cacheKey)) {
     return summaryCache.get(cacheKey)!;
   }
 
-  // Trigger background Gemini AI fetch to replace cache when ready
+  // Trigger background Gemini AI fetch to populate cache
   summarizeFeatureBugsWithGemini(featureName, bugs, yellowCount, redCount);
 
-  // Return immediate local NLP reworded summary
-  const rewordedList = notes.map(n => rewordBugNoteToExecutiveStatus(n, featureName));
-  const unique = Array.from(new Set(rewordedList));
-  if (unique.length === 1) return unique[0];
-  return unique.slice(0, 2).join(' & ');
+  return nlpCleanReword(notes, featureName);
 }

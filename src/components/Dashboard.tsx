@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog } from '../types';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV } from '../utils/exportUtils';
-import { summarizeFeatureBugsWithGemini, getBriefIssueSummarySync } from '../services/geminiService';
+import { summarizeFeatureBugsWithGemini, getBriefIssueSummarySync, getStoredGeminiApiKey, saveGeminiApiKey } from '../services/geminiService';
 import { toBlob } from 'html-to-image';
 
 interface DashboardProps {
@@ -1553,6 +1553,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2.5">
+                  {/* Gemini AI Key Settings Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const currentKey = getStoredGeminiApiKey();
+                      const inputKey = prompt('Enter your Gemini API Key for AI bug rewording:', currentKey);
+                      if (inputKey !== null) {
+                        saveGeminiApiKey(inputKey);
+                        alert(inputKey.trim() ? 'Gemini API Key saved! AI will now summarize & reword all reported bugs.' : 'Gemini API Key cleared. Using local AI rewriter.');
+                      }
+                    }}
+                    className="no-capture px-3 h-9 bg-purple-950/60 hover:bg-purple-900/80 text-purple-300 border border-purple-500/40 rounded-2xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all shadow-md hover:scale-[1.02] active:scale-[0.98]"
+                    title="Configure Gemini API Key to enable Gemini AI bug note rewording"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
+                    <span className="leading-none">{getStoredGeminiApiKey() ? 'Gemini Active' : 'Set Gemini Key'}</span>
+                  </button>
+
                   {/* Copy Text Summary Button */}
                   <button
                     type="button"
