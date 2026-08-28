@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota } from '../types';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard } from '../utils/exportUtils';
-import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, getStoredGeminiApiKey, saveGeminiApiKey } from '../services/geminiService';
+import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel } from '../services/geminiService';
 import { toBlob } from 'html-to-image';
 
 interface DashboardProps {
@@ -170,6 +170,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [isGeneratingSummary, setIsGeneratingSummary] = useState<boolean>(false);
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState<boolean>(false);
   const [tempApiKey, setTempApiKey] = useState<string>(() => getStoredGeminiApiKey());
+  const [tempModel, setTempModel] = useState<string>(() => getStoredGeminiModel());
   const [isVisualSnapshotModalOpen, setIsVisualSnapshotModalOpen] = useState<boolean>(false);
   const [selectedImagePreviewUrl, setSelectedImagePreviewUrl] = useState<string | null>(null);
 
@@ -720,15 +721,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
       }));
 
       // Spin up dedicated subtask prompt to Gemini
-      const { overallSummary: overallGeminiSummary, featureSummaries: featureSummaryMap } =
-        await generateBatchExecutiveSummaryWithGemini(featuresPayload, allBugs.length > 0 ? allBugs : bugLogs);
+      const result = await generateBatchExecutiveSummaryWithGemini(featuresPayload, allBugs.length > 0 ? allBugs : bugLogs);
+      const overallGeminiSummary = result.overallSummary;
+      const featureSummaryMap = result.featureSummaries;
+
+      if (result.error && getStoredGeminiApiKey()) {
+        console.warn('Gemini executive summary notice:', result.error);
+      }
 
       // Plain text format
       let plainText = `📊 CUJ Report (${new Date().toLocaleDateString()})\n`;
       plainText += `• Coverage: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)\n`;
       plainText += `• Status: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)\n`;
       if (overallGeminiSummary) {
-        plainText += `• Gemini Issue Overview: ${overallGeminiSummary}\n`;
+        const modelTag = result.modelUsed ? ` [${result.modelUsed}]` : '';
+        plainText += `• Gemini Issue Overview${modelTag}: ${overallGeminiSummary}\n`;
       }
       plainText += `\n`;
 
@@ -773,7 +780,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
       htmlText += `<p style="margin: 0 0 4px 0;">• <b>Coverage</b>: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)</p>`;
       htmlText += `<p style="margin: 0 0 8px 0;">• <b>Status</b>: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)</p>`;
       if (overallGeminiSummary) {
-        htmlText += `<div style="background-color: #f1f5f9; border-left: 3px solid #6366f1; padding: 8px 12px; margin: 8px 0 12px 0; border-radius: 6px; font-size: 12.5px; color: #1e293b;">🤖 <b>Gemini Executive Issue Summary:</b> ${overallGeminiSummary}</div>`;
+        const modelBadge = result.modelUsed ? ` <span style="font-size: 10px; background: #e0e7ff; color: #4338ca; padding: 2px 6px; border-radius: 4px; font-family: monospace;">${result.modelUsed}</span>` : '';
+        htmlText += `<div style="background-color: #f1f5f9; border-left: 3px solid #6366f1; padding: 8px 12px; margin: 8px 0 12px 0; border-radius: 6px; font-size: 12.5px; color: #1e293b;">🤖 <b>Gemini Executive Issue Summary${modelBadge}:</b> ${overallGeminiSummary}</div>`;
       }
 
       if (criticalList.length > 0) {
@@ -3055,6 +3063,28 @@ export const Dashboard: React.FC<DashboardProps> = ({
               />
             </div>
 
+            {/* Model Selector */}
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-bold text-slate-300 flex items-center justify-between">
+                <span>Gemini Model</span>
+                <span className="text-[10px] text-purple-400 font-semibold">Latest AI Versions</span>
+              </label>
+              <select
+                value={tempModel}
+                onChange={e => setTempModel(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 focus:border-purple-500 rounded-xl px-3 py-2 text-xs text-white font-sans focus:outline-none cursor-pointer"
+              >
+                {GEMINI_MODELS.map(m => (
+                  <option key={m.id} value={m.id} className="bg-slate-900 text-slate-200">
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[10.5px] text-slate-400">
+                {GEMINI_MODELS.find(m => m.id === tempModel)?.description}
+              </p>
+            </div>
+
             <div className="flex items-center justify-end gap-2 pt-3 border-t border-white/10">
               <button
                 type="button"
@@ -3072,6 +3102,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   if (tempApiKey.trim()) {
                     saveGeminiApiKey(tempApiKey.trim());
                   }
+                  saveGeminiModel(tempModel);
                   setIsApiKeyModalOpen(false);
                   handleExecuteCopyReport(false);
                 }}
