@@ -712,9 +712,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       criticalList.forEach(m => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        const issueSummary = getBriefIssueSummarySync(m.featureName, m.associatedBugs, m.yellowCount, m.redCount);
-        const summaryStr = issueSummary ? ` — Issue: ${issueSummary}` : '';
-        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryStr}\n`;
+        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})\n`;
       });
       plainText += `\n`;
     }
@@ -724,9 +722,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       warningList.forEach(m => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        const issueSummary = getBriefIssueSummarySync(m.featureName, m.associatedBugs, m.yellowCount, m.redCount);
-        const summaryStr = issueSummary ? ` — Issue: ${issueSummary}` : '';
-        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryStr}\n`;
+        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})\n`;
       });
       plainText += `\n`;
     }
@@ -754,9 +750,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       criticalList.forEach(m => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        const issueSummary = getBriefIssueSummarySync(m.featureName, m.associatedBugs, m.yellowCount, m.redCount);
-        const summaryStr = issueSummary ? ` &mdash; <i style="color: #64748b;">Issue: ${issueSummary}</i>` : '';
-        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryStr}</li>`;
+        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})</li>`;
       });
       htmlText += `</ul>`;
     }
@@ -767,9 +761,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       warningList.forEach(m => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        const issueSummary = getBriefIssueSummarySync(m.featureName, m.associatedBugs, m.yellowCount, m.redCount);
-        const summaryStr = issueSummary ? ` &mdash; <i style="color: #64748b;">Issue: ${issueSummary}</i>` : '';
-        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryStr}</li>`;
+        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})</li>`;
       });
       htmlText += `</ul>`;
     }

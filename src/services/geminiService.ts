@@ -33,6 +33,8 @@ export function nlpCleanReword(notes: string[], featureName: string): string {
 
   const cleaned = notes.map(note => {
     let text = (note || '').trim();
+    // Strip leading time strings like "1.38 pm.", "10:15 AM:", "14:30 -"
+    text = text.replace(/^(\d{1,2}[:.]\d{2}\s*(?:am|pm)?[:.-]?\s*)/i, '');
     // Remove typical prefixes
     text = text.replace(/^(bug|issue|defect|error|problem|note|encountered|found|description):\s*/i, '');
     
@@ -65,8 +67,9 @@ export async function summarizeFeatureBugsWithGemini(
   redCount: number = 0
 ): Promise<string> {
   const bugDetailsList = bugs.map(b => {
+    let notePart = (b.note || '').trim();
+    notePart = notePart.replace(/^(\d{1,2}[:.]\d{2}\s*(?:am|pm)?[:.-]?\s*)/i, '');
     const titlePart = b.stepTitle ? `${b.stepTitle}: ` : '';
-    const notePart = b.note ? b.note.trim() : '';
     return `- ${titlePart}${notePart}`;
   });
 
