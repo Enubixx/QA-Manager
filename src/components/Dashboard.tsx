@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog } from '../types';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV } from '../utils/exportUtils';
-import { getBriefIssueSummary } from '../utils/aiSummaryUtils';
+import { summarizeFeatureBugsWithGemini, getBriefIssueSummarySync } from '../services/geminiService';
 import { toBlob } from 'html-to-image';
 
 interface DashboardProps {
@@ -606,6 +606,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const warningList = featureMetricsList.filter(m => m.status === 'warning');
     const healthyList = featureMetricsList.filter(m => m.status === 'healthy');
 
+    // Summarize issues using Gemini AI (with fast fallback)
+    const criticalSummaries = await Promise.all(
+      criticalList.map(m => summarizeFeatureBugsWithGemini(m.featureName, m.associatedBugs, m.yellowCount, m.redCount))
+    );
+    const warningSummaries = await Promise.all(
+      warningList.map(m => summarizeFeatureBugsWithGemini(m.featureName, m.associatedBugs, m.yellowCount, m.redCount))
+    );
+
     // Plain text fallback (for markdown / terminal textboxes)
     let plainText = `📊 QA Quality Report (${new Date().toLocaleDateString()})\n`;
     plainText += `• Overall Score: ${avgHealthScore}% • ${riskStatus}\n`;
@@ -614,10 +622,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
     if (criticalList.length > 0) {
       plainText += `🔴 Critical Features:\n`;
-      criticalList.forEach(m => {
+      criticalList.forEach((m, idx) => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        const issueSummary = getBriefIssueSummary(m.associatedBugs, m.yellowCount, m.redCount);
+        const issueSummary = criticalSummaries[idx];
         const issueSuffix = issueSummary ? ` — ${issueSummary}` : '';
         plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${issueSuffix}\n`;
       });
@@ -626,10 +634,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
     if (warningList.length > 0) {
       plainText += `🟡 Degraded Features:\n`;
-      warningList.forEach(m => {
+      warningList.forEach((m, idx) => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        const issueSummary = getBriefIssueSummary(m.associatedBugs, m.yellowCount, m.redCount);
+        const issueSummary = warningSummaries[idx];
         const issueSuffix = issueSummary ? ` — ${issueSummary}` : '';
         plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${issueSuffix}\n`;
       });
@@ -654,10 +662,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
     if (criticalList.length > 0) {
       htmlText += `<p style="margin: 8px 0 4px 0; color: #dc2626; font-weight: 700;">🔴 Critical Features:</p>`;
       htmlText += `<ul style="margin: 0 0 8px 0; padding-left: 18px;">`;
-      criticalList.forEach(m => {
+      criticalList.forEach((m, idx) => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        const issueSummary = getBriefIssueSummary(m.associatedBugs, m.yellowCount, m.redCount);
+        const issueSummary = criticalSummaries[idx];
         const issueHtml = issueSummary ? `<span style="color: #64748b; font-size: 11px;"> — ${issueSummary}</span>` : '';
         htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${issueHtml}</li>`;
       });
@@ -667,10 +675,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
     if (warningList.length > 0) {
       htmlText += `<p style="margin: 8px 0 4px 0; color: #d97706; font-weight: 700;">🟡 Degraded Features:</p>`;
       htmlText += `<ul style="margin: 0 0 8px 0; padding-left: 18px;">`;
-      warningList.forEach(m => {
+      warningList.forEach((m, idx) => {
         const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
         const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        const issueSummary = getBriefIssueSummary(m.associatedBugs, m.yellowCount, m.redCount);
+        const issueSummary = warningSummaries[idx];
         const issueHtml = issueSummary ? `<span style="color: #64748b; font-size: 11px;"> — ${issueSummary}</span>` : '';
         htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${issueHtml}</li>`;
       });
@@ -1730,7 +1738,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         </thead>
                         <tbody className="divide-y divide-slate-800/60 text-slate-300">
                           {featureMetricsList.map(metric => {
-                            const issueSummary = getBriefIssueSummary(metric.associatedBugs, metric.yellowCount, metric.redCount);
+                            const issueSummary = getBriefIssueSummarySync(metric.featureName, metric.associatedBugs, metric.yellowCount, metric.redCount);
                             return (
                               <tr key={metric.featureName} className="hover:bg-slate-900/50 transition">
                                 <td className="py-2.5 px-4 font-bold text-white whitespace-nowrap">{metric.featureName}</td>
