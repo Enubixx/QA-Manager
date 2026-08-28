@@ -3,7 +3,7 @@ import { Dashboard } from './components/Dashboard';
 import { PlanBuilder } from './components/PlanBuilder';
 import { MobileTester } from './components/MobileTester';
 import { SAMPLE_PLANS, SAMPLE_RUNS, SAMPLE_BUG_LOGS } from './data/mockData';
-import { TestPlan, TestRun, BugLog } from './types';
+import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile } from './types';
 import {
   fetchAllSupabaseData,
   syncTestPlanToSupabase,
@@ -16,6 +16,10 @@ import {
   deleteBugLogFromSupabase,
   syncPopulatedFeatureToSupabase,
   deletePopulatedFeatureFromSupabase,
+  syncDeviceToSupabase,
+  deleteDeviceFromSupabase,
+  syncTesterToSupabase,
+  deleteTesterFromSupabase,
   subscribeToSupabaseRealtime,
 } from './services/supabaseService';
 import { isSupabaseConfigured } from './lib/supabase';
@@ -70,6 +74,31 @@ export function App() {
     return [];
   });
 
+  // User-populated device profiles list (with readiness & plan quotas)
+  const [devices, setDevices] = useState<DeviceProfile[]>(() => {
+    try {
+      const saved = localStorage.getItem('qa_devices_list');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return [
+      { id: 'dev-1', name: 'Google Pixel 8', isReady: true, quotas: [] },
+      { id: 'dev-2', name: 'Samsung Galaxy S24', isReady: true, quotas: [] },
+      { id: 'dev-3', name: 'iPhone 15 Pro', isReady: true, quotas: [] },
+    ];
+  });
+
+  // User-populated QA tester profiles list
+  const [testers, setTesters] = useState<TesterProfile[]>(() => {
+    try {
+      const saved = localStorage.getItem('qa_testers_list');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return [
+      { id: 'tester-1', name: 'Kevin Huang', role: 'QA Lead' },
+      { id: 'tester-2', name: 'Sarah Miller', role: 'Mobile Tester' },
+    ];
+  });
+
   // User-populated devices list
   const [populatedDevices, setPopulatedDevices] = useState<string[]>(() => {
     const saved = localStorage.getItem('qa_populated_devices');
@@ -103,6 +132,12 @@ export function App() {
       if (cloudData.bugLogs) setBugLogs(cloudData.bugLogs);
       if (cloudData.populatedFeatures && cloudData.populatedFeatures.length > 0) {
         setPopulatedFeatures(cloudData.populatedFeatures);
+      }
+      if (cloudData.devices && cloudData.devices.length > 0) {
+        setDevices(cloudData.devices);
+      }
+      if (cloudData.testers && cloudData.testers.length > 0) {
+        setTesters(cloudData.testers);
       }
     }
   };
@@ -530,6 +565,44 @@ export function App() {
     });
   };
 
+  const handleSaveDevice = (device: DeviceProfile) => {
+    setDevices(prev => {
+      const exists = prev.some(d => d.id === device.id);
+      const next = exists ? prev.map(d => d.id === device.id ? device : d) : [...prev, device];
+      localStorage.setItem('qa_devices_list', JSON.stringify(next));
+      return next;
+    });
+    syncDeviceToSupabase(device);
+  };
+
+  const handleDeleteDevice = (deviceId: string) => {
+    setDevices(prev => {
+      const next = prev.filter(d => d.id !== deviceId);
+      localStorage.setItem('qa_devices_list', JSON.stringify(next));
+      return next;
+    });
+    deleteDeviceFromSupabase(deviceId);
+  };
+
+  const handleSaveTester = (tester: TesterProfile) => {
+    setTesters(prev => {
+      const exists = prev.some(t => t.id === tester.id);
+      const next = exists ? prev.map(t => t.id === tester.id ? tester : t) : [...prev, tester];
+      localStorage.setItem('qa_testers_list', JSON.stringify(next));
+      return next;
+    });
+    syncTesterToSupabase(tester);
+  };
+
+  const handleDeleteTesterProfile = (testerId: string) => {
+    setTesters(prev => {
+      const next = prev.filter(t => t.id !== testerId);
+      localStorage.setItem('qa_testers_list', JSON.stringify(next));
+      return next;
+    });
+    deleteTesterFromSupabase(testerId);
+  };
+
   const handleOpenMobileView = (planId?: string) => {
     if (planId) {
       setSelectedPlanId(planId);
@@ -586,6 +659,8 @@ export function App() {
               testRuns={testRuns}
               bugLogs={bugLogs}
               populatedFeatures={populatedFeatures}
+              devices={devices}
+              testers={testers}
               onSelectPlanToBuild={handleCreatePlanClick}
               onOpenMobileView={handleOpenMobileView}
               onDeletePlan={handleDeletePlan}
@@ -600,6 +675,10 @@ export function App() {
               onDeleteTestRun={handleDeleteTestRun}
               onDeleteTester={handleDeleteTester}
               onResetActiveDay={handleResetActiveDay}
+              onSaveDevice={handleSaveDevice}
+              onDeleteDevice={handleDeleteDevice}
+              onSaveTester={handleSaveTester}
+              onDeleteTesterProfile={handleDeleteTesterProfile}
               archivedRuns={archivedRuns}
             />
           </div>
@@ -628,6 +707,9 @@ export function App() {
               testRuns={testRuns}
               archivedRuns={archivedRuns}
               bugLogs={bugLogs}
+              devices={devices}
+              testers={testers}
+              onSaveDevice={handleSaveDevice}
               selectedPlanId={selectedPlanId}
               populatedDevices={populatedDevices}
               onAddPopulatedDevice={handleAddPopulatedDevice}

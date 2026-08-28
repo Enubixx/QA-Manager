@@ -53,3 +53,23 @@ export interface TestRun {
   completedAt?: string;
   durationMs?: number;
 }
+
+export interface DevicePlanQuota {
+  planId: string;
+  targetRunsPerDay: number;
+}
+
+export interface DeviceProfile {
+  id: string;
+  name: string;
+  isReady: boolean;
+  quotas: DevicePlanQuota[];
+  activeRunId?: string;
+  activeTesterName?: string;
+}
+
+export interface TesterProfile {
+  id: string;
+  name: string;
+  role?: string;
+}

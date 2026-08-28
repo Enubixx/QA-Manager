@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { TestPlan, TestRun, BugLog } from '../types';
+import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile } from '../types';
 
 export const fetchAllSupabaseData = async () => {
   if (!supabase || !isSupabaseConfigured) return null;
@@ -13,7 +13,16 @@ export const fetchAllSupabaseData = async () => {
       supabase.from('populated_features').select('*'),
     ]);
 
-    const testPlans: TestPlan[] = (plansRes.data || []).map(item => ({
+    let devicesRes: any = { data: [] };
+    let testersRes: any = { data: [] };
+    try {
+      devicesRes = await supabase.from('devices').select('*');
+    } catch (e) {}
+    try {
+      testersRes = await supabase.from('testers').select('*');
+    } catch (e) {}
+
+    const testPlans: TestPlan[] = (plansRes.data || []).map((item: any) => ({
       id: item.id,
       name: item.name || '',
       description: item.description || '',
@@ -34,7 +43,7 @@ export const fetchAllSupabaseData = async () => {
       return item.created_at || undefined;
     };
 
-    const testRuns: TestRun[] = (runsRes.data || []).map(item => {
+    const testRuns: TestRun[] = (runsRes.data || []).map((item: any) => {
       const devIdFromId = item.id.includes('-dev-') ? 'dev-' + item.id.split('-dev-')[1] : undefined;
       return {
         id: item.id,
@@ -53,7 +62,7 @@ export const fetchAllSupabaseData = async () => {
       };
     });
 
-    const archivedRuns: TestRun[] = (archivedRes.data || []).map(item => {
+    const archivedRuns: TestRun[] = (archivedRes.data || []).map((item: any) => {
       const devIdFromId = item.id.includes('-dev-') ? 'dev-' + item.id.split('-dev-')[1] : undefined;
       return {
         id: item.id,
@@ -72,7 +81,7 @@ export const fetchAllSupabaseData = async () => {
       };
     });
 
-    const bugLogs: BugLog[] = (bugsRes.data || []).map(item => ({
+    const bugLogs: BugLog[] = (bugsRes.data || []).map((item: any) => ({
       id: item.id,
       testRunId: item.test_run_id,
       planId: item.plan_id,
@@ -88,7 +97,22 @@ export const fetchAllSupabaseData = async () => {
       formattedTime: item.formatted_time || new Date().toLocaleTimeString(),
     }));
 
-    const populatedFeatures: string[] = (featuresRes.data || []).map(item => item.feature_name);
+    const populatedFeatures: string[] = (featuresRes.data || []).map((item: any) => item.feature_name);
+
+    const devices: DeviceProfile[] = (devicesRes.data || []).map((item: any) => ({
+      id: item.id,
+      name: item.name || '',
+      isReady: item.is_ready ?? true,
+      quotas: item.quotas || [],
+      activeRunId: item.active_run_id || undefined,
+      activeTesterName: item.active_tester_name || undefined,
+    }));
+
+    const testers: TesterProfile[] = (testersRes.data || []).map((item: any) => ({
+      id: item.id,
+      name: item.name || '',
+      role: item.role || '',
+    }));
 
     return {
       testPlans,
@@ -96,6 +120,8 @@ export const fetchAllSupabaseData = async () => {
       archivedRuns,
       bugLogs,
       populatedFeatures,
+      devices,
+      testers,
     };
   } catch (err) {
     console.error('Error fetching Supabase data:', err);
@@ -217,6 +243,53 @@ export const syncPopulatedFeatureToSupabase = async (featureName: string) => {
 export const deletePopulatedFeatureFromSupabase = async (featureName: string) => {
   if (!supabase || !isSupabaseConfigured) return;
   await supabase.from('populated_features').delete().eq('feature_name', featureName);
+};
+
+export const syncDeviceToSupabase = async (device: DeviceProfile) => {
+  if (!supabase || !isSupabaseConfigured) return;
+  try {
+    await supabase.from('devices').upsert({
+      id: device.id,
+      name: device.name,
+      is_ready: device.isReady,
+      quotas: device.quotas,
+      active_run_id: device.activeRunId || null,
+      active_tester_name: device.activeTesterName || null,
+    });
+  } catch (err) {
+    console.error('syncDeviceToSupabase error:', err);
+  }
+};
+
+export const deleteDeviceFromSupabase = async (deviceId: string) => {
+  if (!supabase || !isSupabaseConfigured) return;
+  try {
+    await supabase.from('devices').delete().eq('id', deviceId);
+  } catch (err) {
+    console.error('deleteDeviceFromSupabase error:', err);
+  }
+};
+
+export const syncTesterToSupabase = async (tester: TesterProfile) => {
+  if (!supabase || !isSupabaseConfigured) return;
+  try {
+    await supabase.from('testers').upsert({
+      id: tester.id,
+      name: tester.name,
+      role: tester.role || '',
+    });
+  } catch (err) {
+    console.error('syncTesterToSupabase error:', err);
+  }
+};
+
+export const deleteTesterFromSupabase = async (testerId: string) => {
+  if (!supabase || !isSupabaseConfigured) return;
+  try {
+    await supabase.from('testers').delete().eq('id', testerId);
+  } catch (err) {
+    console.error('deleteTesterFromSupabase error:', err);
+  }
 };
 
 export const subscribeToSupabaseRealtime = (onChangeCallback: () => void) => {

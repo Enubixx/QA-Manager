@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { TestPlan, TestRun, BugLog } from '../types';
+import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile } from '../types';
 import { CheckCircle2, Clock, Bug, Smartphone, RefreshCw, Send, Check, Layers, ChevronDown, AlertTriangle, XCircle, ArrowRight, User, Download, Edit3, Trash2, Tag, Image, Camera, X } from 'lucide-react';
 import { exportTestRunToCSV } from '../utils/exportUtils';
 
@@ -9,6 +9,9 @@ interface MobileTesterProps {
   testRuns: TestRun[];
   archivedRuns?: TestRun[];
   bugLogs?: BugLog[];
+  devices?: DeviceProfile[];
+  testers?: TesterProfile[];
+  onSaveDevice?: (device: DeviceProfile) => void;
   selectedPlanId: string;
   populatedDevices: string[];
   onAddPopulatedDevice: (device: string) => void;
@@ -25,6 +28,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   testRuns,
   archivedRuns = [],
   bugLogs = [],
+  devices = [],
+  testers = [],
+  onSaveDevice,
   selectedPlanId,
   populatedDevices,
   onAddPopulatedDevice,
@@ -49,6 +55,50 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   };
 
   const deviceId = getDeviceId();
+
+  const todayStr = useMemo(() => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }, []);
+
+  // Compute completed runs per device and plan for today
+  const todayRunsMap = useMemo(() => {
+    const map: Record<string, Record<string, number>> = {};
+    const allRuns = [...archivedRuns, ...testRuns];
+    allRuns.forEach(run => {
+      if (run.status !== 'completed' || !run.completedAt) return;
+      const d = new Date(run.completedAt);
+      const runDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      if (runDate !== todayStr) return;
+
+      devices.forEach(dev => {
+        const matchesId = run.deviceId && (dev.id === run.deviceId || run.deviceId.includes(dev.id));
+        const matchesName = run.deviceName && dev.name.toLowerCase().trim() === run.deviceName.toLowerCase().trim();
+        if (matchesId || matchesName) {
+          if (!map[dev.id]) map[dev.id] = {};
+          map[dev.id][run.planId] = (map[dev.id][run.planId] || 0) + 1;
+        }
+      });
+    });
+    return map;
+  }, [archivedRuns, testRuns, devices, todayStr]);
+
+  // Selectable devices: Ready, not locked by another active run, quota > 0, remaining runs > 0
+  const selectableDevices = useMemo(() => {
+    if (!currentPlan) return [];
+    return devices.filter(dev => {
+      if (!dev.isReady) return false;
+
+      const quota = dev.quotas?.find(q => q.planId === currentPlan.id);
+      if (!quota || quota.targetRunsPerDay <= 0) return false;
+
+      const doneToday = (todayRunsMap[dev.id] && todayRunsMap[dev.id][currentPlan.id]) || 0;
+      return doneToday < quota.targetRunsPerDay;
+    });
+  }, [devices, currentPlan, todayRunsMap]);
 
   // Find active run specifically for THIS device & plan
   let activeRun = testRuns.find(r => 
@@ -232,6 +282,16 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       startedAt: (activeRun.status === 'not_started' || !activeRun.startedAt) ? new Date().toISOString() : activeRun.startedAt
     };
 
+    // Lock device in real-time if device is registered
+    const matchedDev = devices.find(d => d.name.toLowerCase().trim() === trimmedDevice.toLowerCase().trim() || d.id === trimmedDevice);
+    if (matchedDev && onSaveDevice) {
+      onSaveDevice({
+        ...matchedDev,
+        activeRunId: updatedRun.id,
+        activeTesterName: trimmedReporter
+      });
+    }
+
     onUpdateRun(updatedRun);
     setShowSetupModal(false);
   };
@@ -291,6 +351,17 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
     if (isDone) {
       setCompletedRunSummary(updatedRun);
+      const activeDevName = activeRun.deviceName;
+      const matchedDev = devices.find(d => (activeDevName && d.name.toLowerCase().trim() === activeDevName.toLowerCase().trim()) || d.activeRunId === activeRun.id);
+      if (matchedDev && onSaveDevice) {
+        onSaveDevice({
+          ...matchedDev,
+          activeRunId: undefined,
+          activeTesterName: undefined
+        });
+      }
+      setBugSuccessMessage(`🎉 Run complete! ${activeDevName || 'Device'} progress updated for today.`);
+      setTimeout(() => setBugSuccessMessage(null), 4000);
     }
 
     onUpdateRun(updatedRun);
@@ -1016,34 +1087,66 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
               <div className="liquid-glass-panel rounded-3xl p-5 space-y-4 border-white/15 shadow-2xl">
                 
+                {/* Reporter Select or Input */}
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
                     <User className="w-3.5 h-3.5 text-indigo-400" />
                     Reporter Name
                   </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Alex Rivera"
-                    value={inputReporterName}
-                    onChange={e => setInputReporterName(e.target.value)}
-                    className="w-full liquid-glass-input rounded-2xl px-4 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none font-medium"
-                    required
-                  />
+                  {testers.length > 0 ? (
+                    <select
+                      value={inputReporterName}
+                      onChange={e => setInputReporterName(e.target.value)}
+                      className="w-full liquid-glass-input rounded-2xl px-4 py-2.5 text-xs text-white bg-slate-950 focus:outline-none font-medium"
+                      required
+                    >
+                      <option value="" disabled>Select QA Tester...</option>
+                      {testers.map(t => (
+                        <option key={t.id} value={t.name}>{t.name} ({t.role || 'Tester'})</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      placeholder="e.g. Alex Rivera"
+                      value={inputReporterName}
+                      onChange={e => setInputReporterName(e.target.value)}
+                      className="w-full liquid-glass-input rounded-2xl px-4 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none font-medium"
+                      required
+                    />
+                  )}
                 </div>
 
+                {/* Device Select or Quota Warning */}
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
                     <Smartphone className="w-3.5 h-3.5 text-purple-400" />
-                    Device Model
+                    Target Device
                   </label>
-                  <input
-                    type="text"
-                    placeholder="Enter device model..."
-                    value={inputDeviceName}
-                    onChange={e => setInputDeviceName(e.target.value)}
-                    className="w-full liquid-glass-input rounded-2xl px-4 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none font-medium"
-                    required
-                  />
+                  {selectableDevices.length > 0 ? (
+                    <select
+                      value={inputDeviceName}
+                      onChange={e => setInputDeviceName(e.target.value)}
+                      className="w-full liquid-glass-input rounded-2xl px-4 py-2.5 text-xs text-white bg-slate-950 focus:outline-none font-medium"
+                      required
+                    >
+                      <option value="" disabled>Select Ready Device with Quota...</option>
+                      {selectableDevices.map(dev => {
+                        const quota = dev.quotas?.find(q => q.planId === currentPlan?.id);
+                        const doneToday = (todayRunsMap[dev.id] && todayRunsMap[dev.id][currentPlan?.id || '']) || 0;
+                        const remaining = quota ? Math.max(0, quota.targetRunsPerDay - doneToday) : 0;
+                        return (
+                          <option key={dev.id} value={dev.name}>
+                            {dev.name} (⚡ {remaining} run{remaining > 1 ? 's' : ''} left today)
+                          </option>
+                        );
+                      })}
+                    </select>
+                  ) : (
+                    <div className="p-3 bg-amber-500/20 text-amber-200 border border-amber-500/30 rounded-2xl text-[11px] font-medium leading-normal text-center">
+                      ⚠️ No Ready devices available with remaining daily quota for "{currentPlan?.name}". Configure quotas on the Manager Dashboard.
+                    </div>
+                  )}
                 </div>
 
               </div>

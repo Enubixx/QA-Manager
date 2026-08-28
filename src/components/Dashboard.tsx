@@ -1,6 +1,6 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { TestPlan, TestRun, BugLog } from '../types';
+import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota } from '../types';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV } from '../utils/exportUtils';
 import { summarizeFeatureBugsWithGemini, getBriefIssueSummarySync, getStoredGeminiApiKey, saveGeminiApiKey } from '../services/geminiService';
@@ -11,6 +11,8 @@ interface DashboardProps {
   testRuns: TestRun[];
   bugLogs: BugLog[];
   populatedFeatures?: string[];
+  devices?: DeviceProfile[];
+  testers?: TesterProfile[];
   onSelectPlanToBuild: () => void;
   onOpenMobileView: (planId?: string) => void;
   onDeletePlan: (planId: string) => void;
@@ -25,6 +27,10 @@ interface DashboardProps {
   onDeleteTestRun?: (runId: string) => void;
   onDeleteTester?: (testerName: string) => void;
   onResetActiveDay?: (dateStr: string) => void;
+  onSaveDevice?: (device: DeviceProfile) => void;
+  onDeleteDevice?: (deviceId: string) => void;
+  onSaveTester?: (tester: TesterProfile) => void;
+  onDeleteTesterProfile?: (testerId: string) => void;
   archivedRuns?: TestRun[];
 }
 
@@ -54,6 +60,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
   testRuns,
   bugLogs,
   populatedFeatures = [],
+  devices = [],
+  testers = [],
   archivedRuns = [],
   onSelectPlanToBuild,
   onOpenMobileView,
@@ -68,13 +76,63 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onDeleteFeature,
   onDeleteTestRun,
   onDeleteTester,
-  onResetActiveDay
+  onResetActiveDay,
+  onSaveDevice,
+  onDeleteDevice,
+  onSaveTester,
+  onDeleteTesterProfile
 }) => {
   const defaultTodayStr = getLocalDateStr(new Date());
-  const [activeTab, setActiveTab] = useState<'overview' | 'qa-status' | 'features' | 'bugs'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'qa-status' | 'devices-people' | 'features' | 'bugs'>('overview');
   const [activeKpiCard, setActiveKpiCard] = useState<'plans' | 'features' | 'runs' | 'bugs'>('plans');
   const [selectedQaDate, setSelectedQaDate] = useState<string>(defaultTodayStr);
   const [expandedTesters, setExpandedTesters] = useState<Record<string, boolean>>({});
+
+  const [newDeviceName, setNewDeviceName] = useState('');
+  const [newPersonName, setNewPersonName] = useState('');
+  const [newPersonRole, setNewPersonRole] = useState('Mobile Tester');
+  const [quotaPlanMap, setQuotaPlanMap] = useState<Record<string, string>>({});
+  const [quotaRunsMap, setQuotaRunsMap] = useState<Record<string, number>>({});
+
+  // Calculate completed runs today per device ID and plan ID
+  const todayRunsMap = useMemo(() => {
+    const todayStr = getLocalDateStr(new Date());
+    const map: Record<string, Record<string, number>> = {};
+    const allRuns = [...archivedRuns, ...testRuns];
+    
+    allRuns.forEach(run => {
+      if (run.status !== 'completed' || !run.completedAt) return;
+      const runDate = getLocalDateStr(run.completedAt);
+      if (runDate !== todayStr) return;
+      
+      const devId = run.deviceId || (run.deviceName ? `dev-${run.deviceName.toLowerCase().replace(/\s+/g, '-')}` : '');
+      const devName = run.deviceName?.toLowerCase().trim();
+      
+      devices.forEach(d => {
+        const matchesId = devId && (d.id === devId || devId.includes(d.id));
+        const matchesName = devName && d.name.toLowerCase().trim() === devName;
+        if (matchesId || matchesName) {
+          if (!map[d.id]) map[d.id] = {};
+          map[d.id][run.planId] = (map[d.id][run.planId] || 0) + 1;
+        }
+      });
+    });
+    return map;
+  }, [archivedRuns, testRuns, devices]);
+
+  const fleetProgress = useMemo(() => {
+    let totalTarget = 0;
+    let totalCompleted = 0;
+    devices.forEach(dev => {
+      dev.quotas.forEach(q => {
+        totalTarget += q.targetRunsPerDay;
+        const doneToday = (todayRunsMap[dev.id] && todayRunsMap[dev.id][q.planId]) || 0;
+        totalCompleted += Math.min(doneToday, q.targetRunsPerDay);
+      });
+    });
+    const pct = totalTarget > 0 ? Math.round((totalCompleted / totalTarget) * 100) : 0;
+    return { totalCompleted, totalTarget, pct };
+  }, [devices, todayRunsMap]);
 
   const toggleTesterExpand = (testerName: string) => {
     setExpandedTesters(prev => ({
@@ -990,6 +1048,424 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
 
       </div>
+
+      {/* Main Tab Navigation Bar */}
+      <div className="flex items-center gap-2 border-b border-slate-800/80 pb-3 overflow-x-auto">
+        <button
+          onClick={() => setActiveTab('overview')}
+          className={`px-4 py-2 rounded-2xl text-xs font-extrabold flex items-center gap-2 transition-all ${
+            activeTab === 'overview'
+              ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
+              : 'bg-slate-900/60 text-slate-400 hover:text-white hover:bg-slate-800/60 border border-slate-800'
+          }`}
+        >
+          <ListChecks className="w-4 h-4" />
+          <span>Overview</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('devices-people')}
+          className={`px-4 py-2 rounded-2xl text-xs font-extrabold flex items-center gap-2 transition-all ${
+            activeTab === 'devices-people'
+              ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/30'
+              : 'bg-slate-900/60 text-slate-400 hover:text-white hover:bg-slate-800/60 border border-slate-800'
+          }`}
+        >
+          <Smartphone className="w-4 h-4" />
+          <span>Devices & Quotas</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('qa-status')}
+          className={`px-4 py-2 rounded-2xl text-xs font-extrabold flex items-center gap-2 transition-all ${
+            activeTab === 'qa-status'
+              ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
+              : 'bg-slate-900/60 text-slate-400 hover:text-white hover:bg-slate-800/60 border border-slate-800'
+          }`}
+        >
+          <UserCheck className="w-4 h-4" />
+          <span>Tester Profiles</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('features')}
+          className={`px-4 py-2 rounded-2xl text-xs font-extrabold flex items-center gap-2 transition-all ${
+            activeTab === 'features'
+              ? 'bg-amber-600 text-white shadow-lg shadow-amber-600/30'
+              : 'bg-slate-900/60 text-slate-400 hover:text-white hover:bg-slate-800/60 border border-slate-800'
+          }`}
+        >
+          <Activity className="w-4 h-4" />
+          <span>CUJ Quality Report</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('bugs')}
+          className={`px-4 py-2 rounded-2xl text-xs font-extrabold flex items-center gap-2 transition-all ${
+            activeTab === 'bugs'
+              ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/30'
+              : 'bg-slate-900/60 text-slate-400 hover:text-white hover:bg-slate-800/60 border border-slate-800'
+          }`}
+        >
+          <Bug className="w-4 h-4" />
+          <span>Bugs ({totalBugs})</span>
+        </button>
+      </div>
+
+      {/* Tab 5: Devices & People (Quotas & Fleet Readiness) */}
+      {activeTab === 'devices-people' && (
+        <div className="space-y-8 animate-liquid-fade">
+          
+          {/* Fleet Daily Quota Overview Badge Banner */}
+          <div className="liquid-glass-panel rounded-3xl p-6 bg-gradient-to-r from-purple-950/70 via-slate-900/80 to-indigo-950/70 border-purple-500/20 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <Smartphone className="w-5 h-5 text-purple-400" />
+                <h3 className="text-lg font-black text-white tracking-tight">Fleet Daily Quota Progress</h3>
+              </div>
+              <p className="text-xs text-slate-300">
+                Preset device targets enforce daily test run quotas on mobile devices.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-6">
+              <div className="text-right">
+                <div className="text-2xl font-black text-purple-300 font-mono">
+                  {fleetProgress.totalCompleted} / {fleetProgress.totalTarget} <span className="text-xs text-slate-400 font-sans font-normal">runs completed</span>
+                </div>
+                <div className="text-xs font-bold text-slate-400">{fleetProgress.pct}% Fleet Goal Reached</div>
+              </div>
+              
+              <button
+                type="button"
+                onClick={() => {
+                  if (confirm('Reset daily run progress counters for all devices?')) {
+                    if (onResetActiveDay) onResetActiveDay(getLocalDateStr(new Date()));
+                  }
+                }}
+                className="px-4 py-2 bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 border border-purple-400/40 rounded-2xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md active:scale-95"
+              >
+                <RefreshCw className="w-3.5 h-3.5 text-purple-400" />
+                <span>Reset Daily Progress</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            
+            {/* Left Col (2-cols wide): Registered Devices & Plan Quotas */}
+            <div className="lg:col-span-2 space-y-6">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-extrabold text-white flex items-center gap-2">
+                  <Smartphone className="w-4 h-4 text-purple-400" />
+                  <span>Registered Devices ({devices.length})</span>
+                </h3>
+              </div>
+
+              {/* Add Device Form */}
+              <div className="liquid-glass-card rounded-2xl p-4 border border-white/10 flex items-center gap-3">
+                <input
+                  type="text"
+                  placeholder="Enter device model or name (e.g. Google Pixel 8)..."
+                  value={newDeviceName}
+                  onChange={e => setNewDeviceName(e.target.value)}
+                  className="flex-1 bg-slate-950/80 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 font-medium"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!newDeviceName.trim()) return;
+                    const newDev: DeviceProfile = {
+                      id: `dev-${Date.now()}`,
+                      name: newDeviceName.trim(),
+                      isReady: true,
+                      quotas: []
+                    };
+                    if (onSaveDevice) onSaveDevice(newDev);
+                    setNewDeviceName('');
+                  }}
+                  className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md active:scale-95"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Device</span>
+                </button>
+              </div>
+
+              {/* Devices Cards List */}
+              <div className="space-y-4">
+                {devices.length === 0 ? (
+                  <div className="liquid-glass-card rounded-2xl p-8 text-center text-slate-400 text-xs font-medium">
+                    No devices registered. Add a device above to set daily test quotas.
+                  </div>
+                ) : (
+                  devices.map(device => {
+                    const selectedPlanForDev = quotaPlanMap[device.id] || (testPlans[0]?.id || '');
+                    const selectedRunsForDev = quotaRunsMap[device.id] || 3;
+
+                    return (
+                      <div key={device.id} className="liquid-glass-panel rounded-2xl p-5 border border-white/10 space-y-4 bg-slate-900/60 shadow-lg">
+                        
+                        {/* Device Card Header */}
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className="p-2.5 rounded-xl bg-purple-500/20 text-purple-300 border border-purple-400/30">
+                              <Smartphone className="w-5 h-5" />
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h4 className="text-sm font-extrabold text-white">{device.name}</h4>
+                                {device.activeRunId && (
+                                  <span className="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-extrabold flex items-center gap-1 animate-pulse">
+                                    <Timer className="w-3 h-3" />
+                                    <span>In Use by {device.activeTesterName || 'Tester'}</span>
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-[11px] text-slate-400 font-mono">ID: {device.id}</span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-3">
+                            {/* Readiness Toggle Button */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const updated: DeviceProfile = { ...device, isReady: !device.isReady };
+                                if (onSaveDevice) onSaveDevice(updated);
+                              }}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 border transition-all ${
+                                device.isReady
+                                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
+                                  : 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
+                              }`}
+                            >
+                              {device.isReady ? (
+                                <>
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                                  <span>Ready</span>
+                                </>
+                              ) : (
+                                <>
+                                  <XCircle className="w-3.5 h-3.5 text-rose-400" />
+                                  <span>Maintenance</span>
+                                </>
+                              )}
+                            </button>
+
+                            {/* Delete Device */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (confirm(`Delete device "${device.name}"?`)) {
+                                  if (onDeleteDevice) onDeleteDevice(device.id);
+                                }
+                              }}
+                              className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
+                              title="Delete Device"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Quotas List for this device */}
+                        <div className="bg-slate-950/70 rounded-xl p-3.5 border border-slate-800 space-y-3">
+                          <div className="text-xs font-bold text-slate-300 flex items-center justify-between">
+                            <span>Daily Test Plan Quotas</span>
+                            <span className="text-[10px] text-purple-400 font-mono font-normal">Controls Mobile Selector Availability</span>
+                          </div>
+
+                          {device.quotas.length === 0 ? (
+                            <div className="text-[11px] text-slate-500 italic">No plan quotas set for this device. Assign a plan below.</div>
+                          ) : (
+                            <div className="space-y-2">
+                              {device.quotas.map(quota => {
+                                const plan = testPlans.find(p => p.id === quota.planId);
+                                const doneToday = (todayRunsMap[device.id] && todayRunsMap[device.id][quota.planId]) || 0;
+                                const remaining = Math.max(0, quota.targetRunsPerDay - doneToday);
+                                const pct = Math.min(100, Math.round((doneToday / quota.targetRunsPerDay) * 100));
+
+                                return (
+                                  <div key={quota.planId} className="bg-slate-900/80 rounded-lg p-2.5 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                                    <div className="flex-1 space-y-1">
+                                      <div className="flex items-center justify-between font-bold">
+                                        <span className="text-white">{plan?.name || `Plan (${quota.planId})`}</span>
+                                        <span className="text-slate-300 font-mono">
+                                          {doneToday} / {quota.targetRunsPerDay} done
+                                          {remaining > 0 ? (
+                                            <span className="text-purple-400 ml-1.5 font-sans font-extrabold">({remaining} remaining ⚡)</span>
+                                          ) : (
+                                            <span className="text-emerald-400 ml-1.5 font-sans font-extrabold">(Quota Reached ✅)</span>
+                                          )}
+                                        </span>
+                                      </div>
+
+                                      {/* Progress Bar */}
+                                      <div className="w-full h-1.5 bg-slate-950 rounded-full overflow-hidden">
+                                        <div
+                                          className={`h-full transition-all duration-500 ${remaining === 0 ? 'bg-emerald-400' : 'bg-purple-500'}`}
+                                          style={{ width: `${pct}%` }}
+                                        />
+                                      </div>
+                                    </div>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const nextQuotas = device.quotas.filter(q => q.planId !== quota.planId);
+                                        if (onSaveDevice) onSaveDevice({ ...device, quotas: nextQuotas });
+                                      }}
+                                      className="p-1 text-slate-500 hover:text-rose-400 self-end sm:self-center transition-colors"
+                                      title="Remove Quota"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+
+                          {/* Add/Edit Quota Inline Form */}
+                          {testPlans.length > 0 && (
+                            <div className="pt-2 border-t border-slate-800/60 flex flex-wrap items-center gap-2">
+                              <select
+                                value={selectedPlanForDev}
+                                onChange={e => setQuotaPlanMap(prev => ({ ...prev, [device.id]: e.target.value }))}
+                                className="bg-slate-900 border border-slate-800 text-xs text-white rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-purple-500"
+                              >
+                                {testPlans.map(p => (
+                                  <option key={p.id} value={p.id}>{p.name}</option>
+                                ))}
+                              </select>
+
+                              <div className="flex items-center gap-1">
+                                <span className="text-[11px] text-slate-400">Target Runs/Day:</span>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max="50"
+                                  value={selectedRunsForDev}
+                                  onChange={e => setQuotaRunsMap(prev => ({ ...prev, [device.id]: parseInt(e.target.value) || 1 }))}
+                                  className="w-16 bg-slate-900 border border-slate-800 text-xs text-white font-mono rounded-lg px-2 py-1 focus:outline-none focus:border-purple-500 text-center"
+                                />
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!selectedPlanForDev) return;
+                                  const existingIdx = device.quotas.findIndex(q => q.planId === selectedPlanForDev);
+                                  let nextQuotas = [...device.quotas];
+                                  if (existingIdx >= 0) {
+                                    nextQuotas[existingIdx] = { planId: selectedPlanForDev, targetRunsPerDay: selectedRunsForDev };
+                                  } else {
+                                    nextQuotas.push({ planId: selectedPlanForDev, targetRunsPerDay: selectedRunsForDev });
+                                  }
+                                  if (onSaveDevice) onSaveDevice({ ...device, quotas: nextQuotas });
+                                }}
+                                className="px-3 py-1 bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 border border-purple-400/40 text-xs font-bold rounded-lg transition-all"
+                              >
+                                + Set Quota
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            {/* Right Col (1-col wide): Registered QA Testers */}
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-extrabold text-white flex items-center gap-2">
+                  <UserCheck className="w-4 h-4 text-emerald-400" />
+                  <span>QA Testers ({testers.length})</span>
+                </h3>
+              </div>
+
+              {/* Add Person Form */}
+              <div className="liquid-glass-card rounded-2xl p-4 border border-white/10 space-y-3">
+                <input
+                  type="text"
+                  placeholder="Tester Name (e.g. Kevin Huang)..."
+                  value={newPersonName}
+                  onChange={e => setNewPersonName(e.target.value)}
+                  className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
+                />
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="Role (e.g. Lead QA)..."
+                    value={newPersonRole}
+                    onChange={e => setNewPersonRole(e.target.value)}
+                    className="flex-1 bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!newPersonName.trim()) return;
+                      const newTester: TesterProfile = {
+                        id: `tester-${Date.now()}`,
+                        name: newPersonName.trim(),
+                        role: newPersonRole.trim() || 'Mobile Tester'
+                      };
+                      if (onSaveTester) onSaveTester(newTester);
+                      setNewPersonName('');
+                    }}
+                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-extrabold flex items-center gap-1 transition-all shadow-md active:scale-95"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Testers List */}
+              <div className="space-y-3">
+                {testers.length === 0 ? (
+                  <div className="liquid-glass-card rounded-2xl p-6 text-center text-slate-400 text-xs italic">
+                    No QA testers registered. Add testers above.
+                  </div>
+                ) : (
+                  testers.map(tester => (
+                    <div key={tester.id} className="liquid-glass-panel rounded-xl p-3.5 border border-white/10 flex items-center justify-between bg-slate-900/60">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-300 font-bold text-xs flex items-center justify-center border border-emerald-400/30">
+                          {tester.name.charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <div className="text-xs font-extrabold text-white">{tester.name}</div>
+                          <div className="text-[11px] text-slate-400">{tester.role || 'Mobile Tester'}</div>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (confirm(`Remove tester "${tester.name}"?`)) {
+                            if (onDeleteTesterProfile) onDeleteTesterProfile(tester.id);
+                          }
+                        }}
+                        className="p-1 text-slate-500 hover:text-rose-400 transition-colors"
+                        title="Delete Tester"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+      )}
 
       {/* Tab 1: Overview - Test Plans & Active Runs */}
       {activeTab === 'overview' && (
