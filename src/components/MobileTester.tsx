@@ -117,12 +117,25 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     };
   }
 
-  // Selectable devices: Strictly devices created on Web Dashboard that are Ready, not locked, and quota not exhausted today
+  const [inputReporterName, setInputReporterName] = useState(() => sessionStorage.getItem('qa_tester_name') || '');
+  const [inputDeviceName, setInputDeviceName] = useState(() => sessionStorage.getItem('qa_device_name') || '');
+
+  // Selectable devices: Ready, not locked by another tester's active in-progress run, and quota not exhausted today
   const selectableDevices = useMemo(() => {
     if (!currentPlan) return devices;
+    const currentSavedDevName = sessionStorage.getItem('qa_device_name') || inputDeviceName || '';
+
     return devices.filter(dev => {
       if (!dev.isReady) return false;
-      if (dev.activeRunId && dev.activeRunId !== activeRun?.id) return false;
+
+      // Lock out ONLY if locked by another tester's active, in-progress run
+      if (dev.activeRunId && dev.activeRunId !== activeRun?.id) {
+        const matchingRun = testRuns.find(r => r.id === dev.activeRunId);
+        const isSelfDevice = currentSavedDevName && dev.name.toLowerCase().trim() === currentSavedDevName.toLowerCase().trim();
+        if (matchingRun && matchingRun.status === 'in_progress' && !isSelfDevice) {
+          return false;
+        }
+      }
 
       const quota = dev.quotas?.find(q => q.planId === currentPlan.id);
       if (quota && quota.targetRunsPerDay > 0) {
@@ -131,7 +144,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       }
       return true;
     });
-  }, [devices, currentPlan, todayRunsMap, activeRun]);
+  }, [devices, currentPlan, todayRunsMap, activeRun, testRuns, inputDeviceName]);
 
   // Clear legacy localStorage tester info so sessions require setup on fresh launch
   useEffect(() => {
@@ -156,9 +169,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     const savedDevice = sessionStorage.getItem('qa_device_name');
     return !savedName || !savedDevice || !activeRun?.testerName || !activeRun?.deviceName;
   });
-
-  const [inputReporterName, setInputReporterName] = useState(() => sessionStorage.getItem('qa_tester_name') || '');
-  const [inputDeviceName, setInputDeviceName] = useState(() => sessionStorage.getItem('qa_device_name') || '');
 
   const steps = currentPlan?.steps || [];
   const currentStepIndex = activeRun?.currentStepIndex || 0;
