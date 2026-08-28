@@ -206,3 +206,124 @@ CRITICAL REQUIREMENTS:
   summaryCache.set(cacheKey, fallback);
   return fallback;
 }
+
+export interface ExecutiveQAResult {
+  overallSummary: string;
+  featureSummaries: Record<string, string>;
+}
+
+export interface FeaturePayload {
+  featureName: string;
+  status: string;
+  healthScorePct: number;
+  greenCount: number;
+  totalStepsExecuted: number;
+  bugCount: number;
+  bugs: BugLog[];
+}
+
+/**
+ * Dedicated subtask that extracts all bugs and their features, prompts Gemini with full context,
+ * and returns high-quality, structured executive summaries for both overall session and per feature.
+ */
+export async function generateBatchExecutiveSummaryWithGemini(
+  features: FeaturePayload[],
+  allBugs: BugLog[] = []
+): Promise<ExecutiveQAResult> {
+  const featuresWithBugs = features.filter(f => f.bugCount > 0 || (f.bugs && f.bugs.length > 0));
+
+  if (featuresWithBugs.length === 0 && allBugs.length === 0) {
+    return {
+      overallSummary: '',
+      featureSummaries: {}
+    };
+  }
+
+  // Format all defect logs cleanly grouped by feature
+  const formattedFeaturesList = featuresWithBugs.map(f => {
+    const bugNotes = (f.bugs || []).map(b => {
+      let text = (b.note || '').trim();
+      text = text.replace(/^(?:\[?\d{1,2}[:.]\d{2}\s*(?:am|pm)?\]?[:.-]?\s*|at\s+\d{1,2}[:.]\d{2}\s*(?:am|pm)?[:,-]?\s*)/i, '');
+      text = text.replace(/^(bug|issue|defect|error|problem|note|encountered|found|description):\s*/i, '');
+      const step = b.stepTitle ? ` [Step: ${b.stepTitle}]` : '';
+      return `    - ${step} ${text}`;
+    }).filter(Boolean);
+
+    return `Feature: "${f.featureName}" (Pass Rate: ${f.healthScorePct}%, Bugs Logged: ${f.bugCount})\n${bugNotes.join('\n')}`;
+  }).join('\n\n');
+
+  const userApiKey = getStoredGeminiApiKey();
+
+  if (userApiKey) {
+    try {
+      const genAI = new GoogleGenAI({ apiKey: userApiKey });
+      const prompt = `You are a Principal QA Engineer distilling field defect logs to produce a clear, highly accurate executive summary.
+
+TEST EXECUTION DEFECT DATA:
+${formattedFeaturesList}
+
+GOAL:
+Produce an executive-ready, coherent, accurate, and sensible summary of the issues encountered during testing.
+
+CRITICAL INSTRUCTIONS:
+1. ACCURACY & SENSE FIRST: Every summary must be 100% faithful to the actual bugs described in the notes above. Do NOT hallucinate technical errors (such as timeouts, payload failures, or token drops) unless they were explicitly reported.
+2. NO TIMESTAMPS OR VOICE LOG CHAT: Strip away any timestamps (like "1.38 pm"), tester names, or conversational voice transcripts. Focus purely on the core functional failure or defect.
+3. CONCISE & PROFESSIONAL:
+   - "overallSummary": A crisp, high-level 1 to 2 sentence executive overview (under 35 words) summarizing the main friction points across the entire test session.
+   - "featureSummaries": For each feature with bugs, provide a crisp 1-sentence summary (5 to 15 words) explaining the primary defect(s) for that feature.
+4. RETURN FORMAT:
+   Return valid JSON with this exact structure:
+   {
+     "overallSummary": "...",
+     "featureSummaries": {
+       "Feature Name": "..."
+     }
+   }
+`;
+
+      const response = await genAI.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          temperature: 0.2
+        }
+      });
+
+      const text = (response.text || '').trim();
+      if (text) {
+        const parsed = JSON.parse(text);
+        const overall = typeof parsed.overallSummary === 'string' ? parsed.overallSummary.trim() : '';
+        const featureMap: Record<string, string> = {};
+        if (parsed.featureSummaries && typeof parsed.featureSummaries === 'object') {
+          for (const [k, v] of Object.entries(parsed.featureSummaries)) {
+            if (typeof v === 'string') {
+              featureMap[k] = v.trim();
+            }
+          }
+        }
+        return {
+          overallSummary: overall,
+          featureSummaries: featureMap
+        };
+      }
+    } catch (err) {
+      console.warn('Gemini batch executive summary API call failed:', err);
+    }
+  }
+
+  // Clean fallback when API key is missing or call fails
+  const fallbackFeatureMap: Record<string, string> = {};
+  featuresWithBugs.forEach(f => {
+    const notes = (f.bugs || []).map(b => b.note).filter(Boolean);
+    fallbackFeatureMap[f.featureName] = nlpCleanReword(notes, f.featureName);
+  });
+
+  const allNotes = allBugs.map(b => b.note).filter(Boolean);
+  const fallbackOverall = allNotes.length > 0 ? nlpCleanReword(allNotes, 'Overall') : '';
+
+  return {
+    overallSummary: fallbackOverall,
+    featureSummaries: fallbackFeatureMap
+  };
+}

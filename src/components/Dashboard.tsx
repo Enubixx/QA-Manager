@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota } from '../types';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard } from '../utils/exportUtils';
-import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, getBriefIssueSummarySync, getStoredGeminiApiKey, saveGeminiApiKey } from '../services/geminiService';
+import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, getStoredGeminiApiKey, saveGeminiApiKey } from '../services/geminiService';
 import { toBlob } from 'html-to-image';
 
 interface DashboardProps {
@@ -167,6 +167,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [copiedReport, setCopiedReport] = useState<boolean>(false);
   const [copiedImage, setCopiedImage] = useState<boolean>(false);
   const [copiedBugs, setCopiedBugs] = useState<boolean>(false);
+  const [isGeneratingSummary, setIsGeneratingSummary] = useState<boolean>(false);
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState<boolean>(false);
+  const [tempApiKey, setTempApiKey] = useState<string>(() => getStoredGeminiApiKey());
   const [isVisualSnapshotModalOpen, setIsVisualSnapshotModalOpen] = useState<boolean>(false);
   const [selectedImagePreviewUrl, setSelectedImagePreviewUrl] = useState<string | null>(null);
 
@@ -683,152 +686,169 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const totalStepsAcrossFeatures = featureMetricsList.reduce((acc, f) => acc + f.totalStepsExecuted, 0);
   const totalBugsAcrossFeatures = featureMetricsList.reduce((acc, f) => acc + f.bugCount, 0);
 
-  const handleCopyReportToClipboard = async () => {
-    const riskStatus = criticalFeaturesCount > 0 || avgHealthScore < 80
-      ? '🔴 High Risk'
-      : warningFeaturesCount > 0 || avgHealthScore < 95
-      ? '🟡 Moderate Risk'
-      : '🟢 System Healthy';
-
-    const criticalList = featureMetricsList.filter(m => m.status === 'critical');
-    const warningList = featureMetricsList.filter(m => m.status === 'warning');
-    const healthyList = featureMetricsList.filter(m => m.status === 'healthy');
-
-    // Fetch overall Gemini bug summary across features if bugs exist
-    const allBugs = featureMetricsList.flatMap(m => m.associatedBugs || []);
-    const overallGeminiSummary = await summarizeOverallBugsWithGemini(allBugs.length > 0 ? allBugs : bugLogs);
-
-    // Fetch Gemini summaries asynchronously for all feature points that have linked bugs
-    const featuresWithBugs = featureMetricsList.filter(m => (m.bugCount > 0 || (m.associatedBugs && m.associatedBugs.length > 0)));
-    const featureSummaryMap: Record<string, string> = {};
-    await Promise.all(
-      featuresWithBugs.map(async (m) => {
-        const summary = await summarizeFeatureBugsWithGemini(m.featureName, m.associatedBugs, m.yellowCount, m.redCount);
-        if (summary) {
-          featureSummaryMap[m.featureName] = summary;
-        }
-      })
-    );
-
-    // Plain text format
-    let plainText = `📊 CUJ Report (${new Date().toLocaleDateString()})\n`;
-    plainText += `• Coverage: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)\n`;
-    plainText += `• Status: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)\n`;
-    if (overallGeminiSummary) {
-      plainText += `• Gemini Issue Overview: ${overallGeminiSummary}\n`;
-    }
-    plainText += `\n`;
-
-    if (criticalList.length > 0) {
-      plainText += `🔴 Critical CUJs:\n`;
-      criticalList.forEach(m => {
-        const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
-        const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        const summary = featureSummaryMap[m.featureName];
-        const summaryText = summary ? `\n   ↳ Summary: ${summary}` : '';
-        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryText}\n`;
-      });
-      plainText += `\n`;
+  const handleExecuteCopyReport = async (skipKeyCheck: boolean = false) => {
+    if (!skipKeyCheck && !getStoredGeminiApiKey()) {
+      setTempApiKey(getStoredGeminiApiKey());
+      setIsApiKeyModalOpen(true);
+      return;
     }
 
-    if (warningList.length > 0) {
-      plainText += `🟡 Degraded CUJs:\n`;
-      warningList.forEach(m => {
-        const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
-        const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        const summary = featureSummaryMap[m.featureName];
-        const summaryText = summary ? `\n   ↳ Summary: ${summary}` : '';
-        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryText}\n`;
-      });
-      plainText += `\n`;
-    }
-
-    if (healthyList.length > 0) {
-      plainText += `🟢 Healthy CUJs:\n`;
-      healthyList.forEach(m => {
-        const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
-        const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        const summary = featureSummaryMap[m.featureName];
-        const summaryText = summary ? `\n   ↳ Summary: ${summary}` : '';
-        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryText}\n`;
-      });
-    }
-
-    // Rich HTML format (for Slack, Teams, Google Docs, Word, Apple Notes, Email)
-    let htmlText = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5;">`;
-    htmlText += `<p style="margin: 0 0 6px 0;">📊 <b>CUJ Report</b> (${new Date().toLocaleDateString()})</p>`;
-    htmlText += `<p style="margin: 0 0 4px 0;">• <b>Coverage</b>: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)</p>`;
-    htmlText += `<p style="margin: 0 0 8px 0;">• <b>Status</b>: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)</p>`;
-    if (overallGeminiSummary) {
-      htmlText += `<div style="background-color: #f1f5f9; border-left: 3px solid #6366f1; padding: 8px 12px; margin: 8px 0 12px 0; border-radius: 6px; font-size: 12.5px; color: #1e293b;">🤖 <b>Gemini Executive Issue Summary:</b> ${overallGeminiSummary}</div>`;
-    }
-
-    if (criticalList.length > 0) {
-      htmlText += `<p style="margin: 8px 0 4px 0; color: #dc2626; font-weight: 700;">🔴 Critical CUJs:</p>`;
-      htmlText += `<ul style="margin: 0 0 8px 0; padding-left: 18px;">`;
-      criticalList.forEach(m => {
-        const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
-        const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        const summary = featureSummaryMap[m.featureName];
-        const summaryHtml = summary
-          ? `<div style="color: #475569; font-size: 12px; margin-top: 2px; margin-left: 10px;">↳ <i>Summary: ${summary}</i></div>`
-          : '';
-        htmlText += `<li style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</li>`;
-      });
-      htmlText += `</ul>`;
-    }
-
-    if (warningList.length > 0) {
-      htmlText += `<p style="margin: 8px 0 4px 0; color: #d97706; font-weight: 700;">🟡 Degraded CUJs:</p>`;
-      htmlText += `<ul style="margin: 0 0 8px 0; padding-left: 18px;">`;
-      warningList.forEach(m => {
-        const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
-        const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        const summary = featureSummaryMap[m.featureName];
-        const summaryHtml = summary
-          ? `<div style="color: #475569; font-size: 12px; margin-top: 2px; margin-left: 10px;">↳ <i>Summary: ${summary}</i></div>`
-          : '';
-        htmlText += `<li style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</li>`;
-      });
-      htmlText += `</ul>`;
-    }
-
-    if (healthyList.length > 0) {
-      htmlText += `<p style="margin: 8px 0 4px 0; color: #16a34a; font-weight: 700;">🟢 Healthy CUJs:</p>`;
-      htmlText += `<ul style="margin: 0 0 4px 0; padding-left: 18px;">`;
-      healthyList.forEach(m => {
-        const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
-        const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-        const summary = featureSummaryMap[m.featureName];
-        const summaryHtml = summary
-          ? `<div style="color: #475569; font-size: 12px; margin-top: 2px; margin-left: 10px;">↳ <i>Summary: ${summary}</i></div>`
-          : '';
-        htmlText += `<li style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</li>`;
-      });
-      htmlText += `</ul>`;
-    }
-
-    htmlText += `</div>`;
+    if (isGeneratingSummary) return;
+    setIsGeneratingSummary(true);
 
     try {
-      if (navigator.clipboard && window.ClipboardItem) {
-        const textBlob = new Blob([plainText], { type: 'text/plain' });
-        const htmlBlob = new Blob([htmlText], { type: 'text/html' });
-        await navigator.clipboard.write([
-          new ClipboardItem({
-            'text/plain': textBlob,
-            'text/html': htmlBlob,
-          })
-        ]);
-      } else {
+      const riskStatus = criticalFeaturesCount > 0 || avgHealthScore < 80
+        ? '🔴 High Risk'
+        : warningFeaturesCount > 0 || avgHealthScore < 95
+        ? '🟡 Moderate Risk'
+        : '🟢 System Healthy';
+
+      const criticalList = featureMetricsList.filter(m => m.status === 'critical');
+      const warningList = featureMetricsList.filter(m => m.status === 'warning');
+      const healthyList = featureMetricsList.filter(m => m.status === 'healthy');
+
+      // Extract all features & bugs for the dedicated Gemini sub-task
+      const allBugs = featureMetricsList.flatMap(m => m.associatedBugs || []);
+      const featuresPayload = featureMetricsList.map(m => ({
+        featureName: m.featureName,
+        status: m.status,
+        healthScorePct: m.healthScorePct,
+        greenCount: m.greenCount,
+        totalStepsExecuted: m.totalStepsExecuted,
+        bugCount: m.bugCount,
+        bugs: m.associatedBugs || []
+      }));
+
+      // Spin up dedicated subtask prompt to Gemini
+      const { overallSummary: overallGeminiSummary, featureSummaries: featureSummaryMap } =
+        await generateBatchExecutiveSummaryWithGemini(featuresPayload, allBugs.length > 0 ? allBugs : bugLogs);
+
+      // Plain text format
+      let plainText = `📊 CUJ Report (${new Date().toLocaleDateString()})\n`;
+      plainText += `• Coverage: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)\n`;
+      plainText += `• Status: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)\n`;
+      if (overallGeminiSummary) {
+        plainText += `• Gemini Issue Overview: ${overallGeminiSummary}\n`;
+      }
+      plainText += `\n`;
+
+      if (criticalList.length > 0) {
+        plainText += `🔴 Critical CUJs:\n`;
+        criticalList.forEach(m => {
+          const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
+          const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
+          const summary = featureSummaryMap[m.featureName];
+          const summaryText = summary ? `\n   ↳ Summary: ${summary}` : '';
+          plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryText}\n`;
+        });
+        plainText += `\n`;
+      }
+
+      if (warningList.length > 0) {
+        plainText += `🟡 Degraded CUJs:\n`;
+        warningList.forEach(m => {
+          const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
+          const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
+          const summary = featureSummaryMap[m.featureName];
+          const summaryText = summary ? `\n   ↳ Summary: ${summary}` : '';
+          plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryText}\n`;
+        });
+        plainText += `\n`;
+      }
+
+      if (healthyList.length > 0) {
+        plainText += `🟢 Healthy CUJs:\n`;
+        healthyList.forEach(m => {
+          const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
+          const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
+          const summary = featureSummaryMap[m.featureName];
+          const summaryText = summary ? `\n   ↳ Summary: ${summary}` : '';
+          plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryText}\n`;
+        });
+      }
+
+      // Rich HTML format (for Slack, Teams, Google Docs, Word, Apple Notes, Email)
+      let htmlText = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5;">`;
+      htmlText += `<p style="margin: 0 0 6px 0;">📊 <b>CUJ Report</b> (${new Date().toLocaleDateString()})</p>`;
+      htmlText += `<p style="margin: 0 0 4px 0;">• <b>Coverage</b>: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)</p>`;
+      htmlText += `<p style="margin: 0 0 8px 0;">• <b>Status</b>: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)</p>`;
+      if (overallGeminiSummary) {
+        htmlText += `<div style="background-color: #f1f5f9; border-left: 3px solid #6366f1; padding: 8px 12px; margin: 8px 0 12px 0; border-radius: 6px; font-size: 12.5px; color: #1e293b;">🤖 <b>Gemini Executive Issue Summary:</b> ${overallGeminiSummary}</div>`;
+      }
+
+      if (criticalList.length > 0) {
+        htmlText += `<p style="margin: 8px 0 4px 0; color: #dc2626; font-weight: 700;">🔴 Critical CUJs:</p>`;
+        htmlText += `<ul style="margin: 0 0 8px 0; padding-left: 18px;">`;
+        criticalList.forEach(m => {
+          const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
+          const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
+          const summary = featureSummaryMap[m.featureName];
+          const summaryHtml = summary
+            ? `<div style="color: #475569; font-size: 12px; margin-top: 2px; margin-left: 10px;">↳ <i>Summary: ${summary}</i></div>`
+            : '';
+          htmlText += `<li style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</li>`;
+        });
+        htmlText += `</ul>`;
+      }
+
+      if (warningList.length > 0) {
+        htmlText += `<p style="margin: 8px 0 4px 0; color: #d97706; font-weight: 700;">🟡 Degraded CUJs:</p>`;
+        htmlText += `<ul style="margin: 0 0 8px 0; padding-left: 18px;">`;
+        warningList.forEach(m => {
+          const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
+          const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
+          const summary = featureSummaryMap[m.featureName];
+          const summaryHtml = summary
+            ? `<div style="color: #475569; font-size: 12px; margin-top: 2px; margin-left: 10px;">↳ <i>Summary: ${summary}</i></div>`
+            : '';
+          htmlText += `<li style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</li>`;
+        });
+        htmlText += `</ul>`;
+      }
+
+      if (healthyList.length > 0) {
+        htmlText += `<p style="margin: 8px 0 4px 0; color: #16a34a; font-weight: 700;">🟢 Healthy CUJs:</p>`;
+        htmlText += `<ul style="margin: 0 0 4px 0; padding-left: 18px;">`;
+        healthyList.forEach(m => {
+          const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
+          const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
+          const summary = featureSummaryMap[m.featureName];
+          const summaryHtml = summary
+            ? `<div style="color: #475569; font-size: 12px; margin-top: 2px; margin-left: 10px;">↳ <i>Summary: ${summary}</i></div>`
+            : '';
+          htmlText += `<li style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</li>`;
+        });
+        htmlText += `</ul>`;
+      }
+
+      htmlText += `</div>`;
+
+      try {
+        if (navigator.clipboard && window.ClipboardItem) {
+          const textBlob = new Blob([plainText], { type: 'text/plain' });
+          const htmlBlob = new Blob([htmlText], { type: 'text/html' });
+          await navigator.clipboard.write([
+            new ClipboardItem({
+              'text/plain': textBlob,
+              'text/html': htmlBlob,
+            })
+          ]);
+        } else {
+          await navigator.clipboard.writeText(plainText);
+        }
+      } catch (err) {
         await navigator.clipboard.writeText(plainText);
       }
-    } catch (err) {
-      await navigator.clipboard.writeText(plainText);
-    }
 
-    setCopiedReport(true);
-    setTimeout(() => setCopiedReport(false), 2000);
+      setCopiedReport(true);
+      setTimeout(() => setCopiedReport(false), 2500);
+    } finally {
+      setIsGeneratingSummary(false);
+    }
+  };
+
+  const handleCopyReportToClipboard = () => {
+    handleExecuteCopyReport(false);
   };
 
   const handleCopyVisualImageToClipboard = async () => {
@@ -2066,24 +2086,49 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2.5">
-                  {/* Copy Text Summary Button */}
+                  {/* Copy Text Summary Button (with dedicated AI Subtask state) */}
                   <button
                     type="button"
+                    disabled={isGeneratingSummary}
                     onClick={handleCopyReportToClipboard}
-                    className="no-capture px-3.5 h-9 bg-gradient-to-r from-purple-500/20 to-indigo-500/20 hover:from-purple-500/30 hover:to-indigo-500/30 text-purple-200 border border-purple-400/40 rounded-2xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all shadow-md hover:scale-[1.02] active:scale-[0.98]"
-                    title="Copy formatted text report to clipboard for chat spaces or documents"
+                    className={`no-capture px-3.5 h-9 rounded-2xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all shadow-md border ${
+                      isGeneratingSummary
+                        ? 'bg-purple-600/30 text-purple-200 border-purple-400/60 cursor-wait animate-pulse'
+                        : 'bg-gradient-to-r from-purple-500/20 to-indigo-500/20 hover:from-purple-500/30 hover:to-indigo-500/30 text-purple-200 border-purple-400/40 hover:scale-[1.02] active:scale-[0.98]'
+                    }`}
+                    title="Extract bugs and generate AI summary report"
                   >
-                    {copiedReport ? (
+                    {isGeneratingSummary ? (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5 text-purple-300 animate-spin flex-shrink-0" />
+                        <span className="leading-none text-purple-200">AI Summarizing...</span>
+                      </>
+                    ) : copiedReport ? (
                       <>
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
                         <span className="text-emerald-300 font-bold leading-none">Copied!</span>
                       </>
                     ) : (
                       <>
-                        <Copy className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
+                        <Sparkles className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
                         <span className="leading-none">Copy Summary</span>
                       </>
                     )}
+                  </button>
+
+                  {/* Gemini API Key Config Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTempApiKey(getStoredGeminiApiKey());
+                      setIsApiKeyModalOpen(true);
+                    }}
+                    className="no-capture px-2.5 h-9 bg-slate-900/60 hover:bg-slate-800/80 text-slate-300 hover:text-white border border-white/10 rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm"
+                    title="Configure Gemini API Key for AI Summaries"
+                  >
+                    <Sparkles className={`w-3 h-3 ${getStoredGeminiApiKey() ? 'text-emerald-400' : 'text-amber-400'}`} />
+                    <span className="hidden sm:inline text-[11px] font-mono">Gemini AI</span>
+                    <span className={`w-1.5 h-1.5 rounded-full ${getStoredGeminiApiKey() ? 'bg-emerald-400 shadow-sm shadow-emerald-400/50' : 'bg-amber-400'}`} />
                   </button>
 
                   {/* Export PNG Image Button */}
@@ -2948,6 +2993,93 @@ export const Dashboard: React.FC<DashboardProps> = ({
             >
               ← Back
             </button>
+          </div>
+        </div>,
+        document.getElementById('modal-portal') || document.body
+      )}
+
+      {/* Gemini AI Key Configuration Modal Portal */}
+      {isApiKeyModalOpen && createPortal(
+        <div
+          onClick={() => setIsApiKeyModalOpen(false)}
+          className="fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md"
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="liquid-glass-panel rounded-3xl p-6 max-w-md w-full border border-purple-500/30 shadow-2xl bg-slate-900/95 space-y-4 text-left animate-in fade-in zoom-in-95 duration-200"
+          >
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-purple-500/20 text-purple-300 rounded-xl border border-purple-500/30">
+                  <Sparkles className="w-4 h-4 text-purple-400" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-black text-white">Gemini AI Summarization Key</h4>
+                  <p className="text-[11px] text-slate-400 font-medium">Power executive QA summaries with Gemini</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsApiKeyModalOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="text-xs text-slate-300 leading-relaxed space-y-2">
+              <p>
+                To generate accurate executive defect summaries without conversational noise, enter your Gemini API Key.
+              </p>
+              <p className="text-[11px] text-slate-400">
+                Keys are stored locally in your browser (<code className="text-purple-300 font-mono">localStorage</code>). You can generate a free key at{' '}
+                <a
+                  href="https://aistudio.google.com/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-purple-400 underline font-semibold hover:text-purple-300"
+                >
+                  Google AI Studio
+                </a>.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-bold text-slate-300 block">Gemini API Key</label>
+              <input
+                type="password"
+                placeholder="AIzaSy..."
+                value={tempApiKey}
+                onChange={e => setTempApiKey(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 focus:border-purple-500 rounded-xl px-3 py-2 text-xs text-white font-mono placeholder-slate-600 focus:outline-none"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-white/10">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsApiKeyModalOpen(false);
+                  handleExecuteCopyReport(true); // run standard summary without key
+                }}
+                className="px-3.5 py-2 text-xs font-semibold text-slate-400 hover:text-white transition"
+              >
+                Skip / Use Standard
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (tempApiKey.trim()) {
+                    saveGeminiApiKey(tempApiKey.trim());
+                  }
+                  setIsApiKeyModalOpen(false);
+                  handleExecuteCopyReport(false);
+                }}
+                className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-extrabold shadow-lg shadow-purple-500/20 active:scale-95 transition"
+              >
+                Save & Run AI Summary
+              </button>
+            </div>
           </div>
         </div>,
         document.getElementById('modal-portal') || document.body
