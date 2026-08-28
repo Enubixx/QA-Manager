@@ -728,6 +728,7 @@ export function App() {
               onAddPopulatedDevice={handleAddPopulatedDevice}
               onSelectPlan={setSelectedPlanId}
               onUpdateRun={handleUpdateRun}
+              onDeleteRun={handleDeleteTestRun}
               onLogBug={handleLogBug}
               onDeleteBug={handleDeleteBug}
               onRestartRun={handleRestartRun}

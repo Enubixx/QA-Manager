@@ -17,6 +17,7 @@ interface MobileTesterProps {
   onAddPopulatedDevice: (device: string) => void;
   onSelectPlan: (planId: string) => void;
   onUpdateRun: (updatedRun: TestRun) => void;
+  onDeleteRun?: (runId: string) => void;
   onLogBug: (bug: BugLog) => void;
   onDeleteBug: (bugId: string) => void;
   onRestartRun: (planId: string) => void;
@@ -36,6 +37,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   onAddPopulatedDevice,
   onSelectPlan,
   onUpdateRun,
+  onDeleteRun,
   onLogBug,
   onDeleteBug,
   onRestartRun,
@@ -212,6 +214,44 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   // Selected Status for current step
   const [selectedStatus, setSelectedStatus] = useState<'green' | 'yellow' | 'red' | null>(null);
+
+  // Quit & Release Session Confirmation Modal state
+  const [showQuitConfirmModal, setShowQuitConfirmModal] = useState(false);
+
+  const handleQuitAndReleaseSession = () => {
+    // 1. Release active lock on target device
+    const currentDeviceName = sessionStorage.getItem('qa_device_name') || activeRun?.deviceName || inputDeviceName;
+    if (currentDeviceName && onSaveDevice) {
+      const matchedDev = devices.find(d => 
+        d.name.toLowerCase().trim() === currentDeviceName.toLowerCase().trim() ||
+        (activeRun && d.activeRunId === activeRun.id)
+      );
+      if (matchedDev) {
+        onSaveDevice({
+          ...matchedDev,
+          activeRunId: undefined,
+          activeTesterName: undefined
+        });
+      }
+    }
+
+    // 2. Delete active uncompleted run session to restore test quota
+    if (activeRun && onDeleteRun) {
+      onDeleteRun(activeRun.id);
+    }
+
+    // 3. Clear session storage & reset setup state
+    sessionStorage.removeItem('qa_tester_name');
+    sessionStorage.removeItem('qa_device_name');
+    setInputReporterName('');
+    setInputDeviceName('');
+    setCompletedRunSummary(null);
+    setSelectedStatus(null);
+    setShowQuitConfirmModal(false);
+
+    // 4. Return to setup screen
+    setShowSetupModal(true);
+  };
 
   // Bug Modal state
   const [showBugModal, setShowBugModal] = useState(false);
@@ -610,10 +650,23 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               Field QA Tester
             </span>
           </div>
-          <span className="text-emerald-400 flex items-center gap-1.5 font-sans font-bold bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20 text-[10px]">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-            Live Session
-          </span>
+          <div className="flex items-center gap-2">
+            {!showSetupModal && activeRun && activeRun.status !== 'completed' && (
+              <button
+                type="button"
+                onClick={() => setShowQuitConfirmModal(true)}
+                className="px-2.5 py-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 rounded-xl text-xs font-extrabold flex items-center gap-1 transition shadow-sm active:scale-95 cursor-pointer"
+                title="Quit test session, release device lock, and restore test quota"
+              >
+                <XCircle className="w-3.5 h-3.5 text-rose-400" />
+                <span>Quit & Release</span>
+              </button>
+            )}
+            <span className="text-emerald-400 flex items-center gap-1.5 font-sans font-bold bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20 text-[10px]">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              Live Session
+            </span>
+          </div>
         </div>
 
         {/* Mobile Navigation Tabs (Configured Test Plans vs Logged Bugs) */}
@@ -1106,6 +1159,35 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
             >
               Back to Test Plans
             </button>
+          </div>
+        )}
+
+        {/* Quit Test Session Confirmation Modal */}
+        {showQuitConfirmModal && (
+          <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-2xl p-6 flex flex-col items-center justify-center text-center z-[110] animate-in fade-in duration-200 rounded-[44px]">
+            <div className="p-4 bg-rose-500/20 text-rose-400 rounded-full border border-rose-500/40 mb-4 shadow-xl shadow-rose-500/20">
+              <XCircle className="w-10 h-10 text-rose-400" />
+            </div>
+            <h3 className="text-xl font-extrabold text-white mb-2 tracking-tight">Quit Session & Release Device?</h3>
+            <p className="text-xs text-slate-300 max-w-xs mb-6 leading-relaxed font-medium">
+              This will abort your active test walkthrough, release <span className="text-purple-300 font-bold font-mono">{activeRun?.deviceName || 'Target Device'}</span> lock, delete this uncompleted session, and restore today's test quota.
+            </p>
+            <div className="flex items-center gap-3 w-full max-w-xs">
+              <button
+                type="button"
+                onClick={() => setShowQuitConfirmModal(false)}
+                className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-2xl border border-slate-700 active:scale-95 transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleQuitAndReleaseSession}
+                className="flex-1 py-3 bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 text-white font-extrabold text-xs rounded-2xl shadow-xl shadow-rose-500/30 border border-white/20 active:scale-95 transition-all cursor-pointer"
+              >
+                Quit & Release
+              </button>
+            </div>
           </div>
         )}
 
