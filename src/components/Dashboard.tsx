@@ -602,23 +602,47 @@ export const Dashboard: React.FC<DashboardProps> = ({
       ? '🟡 Moderate Risk'
       : '🟢 System Healthy';
 
+    const criticalList = featureMetricsList.filter(m => m.status === 'critical');
+    const warningList = featureMetricsList.filter(m => m.status === 'warning');
+    const healthyList = featureMetricsList.filter(m => m.status === 'healthy');
+
     // Plain text fallback (for markdown / terminal textboxes)
     let plainText = `📊 QA Quality Report (${new Date().toLocaleDateString()})\n`;
     plainText += `• Overall Score: ${avgHealthScore}% • ${riskStatus}\n`;
     plainText += `• Coverage: ${totalFeaturesCount} features (${totalStepsAcrossFeatures} steps)\n`;
     plainText += `• Status: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)\n\n`;
-    plainText += `Feature Breakdown:\n`;
 
-    featureMetricsList.forEach(m => {
-      const statusIcon = m.status === 'healthy' ? '🟢 Healthy' : m.status === 'warning' ? '🟡 Degraded' : '🔴 Critical';
-      const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
-      const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-      
-      const issueSummary = getBriefIssueSummary(m.associatedBugs, m.yellowCount, m.redCount);
-      const issueSuffix = issueSummary ? ` — Issues: ${issueSummary}` : '';
+    if (criticalList.length > 0) {
+      plainText += `🔴 Critical Features:\n`;
+      criticalList.forEach(m => {
+        const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
+        const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
+        const issueSummary = getBriefIssueSummary(m.associatedBugs, m.yellowCount, m.redCount);
+        const issueSuffix = issueSummary ? ` — ${issueSummary}` : '';
+        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${issueSuffix}\n`;
+      });
+      plainText += `\n`;
+    }
 
-      plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText}) • ${statusIcon}${issueSuffix}\n`;
-    });
+    if (warningList.length > 0) {
+      plainText += `🟡 Degraded Features:\n`;
+      warningList.forEach(m => {
+        const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
+        const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
+        const issueSummary = getBriefIssueSummary(m.associatedBugs, m.yellowCount, m.redCount);
+        const issueSuffix = issueSummary ? ` — ${issueSummary}` : '';
+        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${issueSuffix}\n`;
+      });
+      plainText += `\n`;
+    }
+
+    if (healthyList.length > 0) {
+      plainText += `🟢 Healthy Features:\n`;
+      healthyList.forEach(m => {
+        const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
+        plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail})\n`;
+      });
+    }
 
     // Rich HTML format (for Slack, Teams, Google Docs, Word, Apple Notes, Email)
     let htmlText = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5;">`;
@@ -626,20 +650,44 @@ export const Dashboard: React.FC<DashboardProps> = ({
     htmlText += `<p style="margin: 0 0 4px 0;">• <b>Overall Score</b>: ${avgHealthScore}% • ${riskStatus}</p>`;
     htmlText += `<p style="margin: 0 0 4px 0;">• <b>Coverage</b>: ${totalFeaturesCount} features (${totalStepsAcrossFeatures} steps)</p>`;
     htmlText += `<p style="margin: 0 0 10px 0;">• <b>Status</b>: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)</p>`;
-    htmlText += `<p style="margin: 0 0 6px 0;"><b>Feature Breakdown</b>:</p>`;
-    htmlText += `<ul style="margin: 0; padding-left: 18px;">`;
 
-    featureMetricsList.forEach(m => {
-      const statusIcon = m.status === 'healthy' ? '🟢 Healthy' : m.status === 'warning' ? '🟡 Degraded' : '🔴 Critical';
-      const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
-      const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
+    if (criticalList.length > 0) {
+      htmlText += `<p style="margin: 8px 0 4px 0; color: #dc2626; font-weight: 700;">🔴 Critical Features:</p>`;
+      htmlText += `<ul style="margin: 0 0 8px 0; padding-left: 18px;">`;
+      criticalList.forEach(m => {
+        const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
+        const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
+        const issueSummary = getBriefIssueSummary(m.associatedBugs, m.yellowCount, m.redCount);
+        const issueHtml = issueSummary ? `<span style="color: #64748b; font-size: 11px;"> — ${issueSummary}</span>` : '';
+        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${issueHtml}</li>`;
+      });
+      htmlText += `</ul>`;
+    }
 
-      const issueSummary = getBriefIssueSummary(m.associatedBugs, m.yellowCount, m.redCount);
-      const issueHtml = issueSummary ? `<span style="color: #64748b; font-size: 11px;"> — Issues: ${issueSummary}</span>` : '';
+    if (warningList.length > 0) {
+      htmlText += `<p style="margin: 8px 0 4px 0; color: #d97706; font-weight: 700;">🟡 Degraded Features:</p>`;
+      htmlText += `<ul style="margin: 0 0 8px 0; padding-left: 18px;">`;
+      warningList.forEach(m => {
+        const bugText = m.bugCount > 0 ? `, ${m.bugCount} bugs` : '';
+        const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
+        const issueSummary = getBriefIssueSummary(m.associatedBugs, m.yellowCount, m.redCount);
+        const issueHtml = issueSummary ? `<span style="color: #64748b; font-size: 11px;"> — ${issueSummary}</span>` : '';
+        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${issueHtml}</li>`;
+      });
+      htmlText += `</ul>`;
+    }
 
-      htmlText += `<li style="margin-bottom: 4px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText}) • ${statusIcon}${issueHtml}</li>`;
-    });
-    htmlText += `</ul></div>`;
+    if (healthyList.length > 0) {
+      htmlText += `<p style="margin: 8px 0 4px 0; color: #16a34a; font-weight: 700;">🟢 Healthy Features:</p>`;
+      htmlText += `<ul style="margin: 0 0 4px 0; padding-left: 18px;">`;
+      healthyList.forEach(m => {
+        const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
+        htmlText += `<li style="margin-bottom: 3px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail})</li>`;
+      });
+      htmlText += `</ul>`;
+    }
+
+    htmlText += `</div>`;
 
     try {
       if (navigator.clipboard && window.ClipboardItem) {
