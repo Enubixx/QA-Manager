@@ -40,6 +40,15 @@ interface FeatureMetric {
   associatedBugs?: BugLog[];
 }
 
+const getLocalDateStr = (dateInput?: string | Date) => {
+  const d = dateInput ? new Date(dateInput) : new Date();
+  if (isNaN(d.getTime())) return '';
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 export const Dashboard: React.FC<DashboardProps> = ({
   testPlans,
   testRuns,
@@ -61,7 +70,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onDeleteTester,
   onResetActiveDay
 }) => {
-  const defaultTodayStr = new Date().toISOString().split('T')[0];
+  const defaultTodayStr = getLocalDateStr(new Date());
   const [activeTab, setActiveTab] = useState<'overview' | 'qa-status' | 'features' | 'bugs'>('overview');
   const [activeKpiCard, setActiveKpiCard] = useState<'plans' | 'features' | 'runs' | 'bugs'>('plans');
   const [selectedQaDate, setSelectedQaDate] = useState<string>(defaultTodayStr);
@@ -268,8 +277,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return Object.values(datesMap).sort((a, b) => b.dateStr.localeCompare(a.dateStr));
   }, [completedRuns, bugLogs, todayStr]);
 
-  // Aggregate step results from FULLY COMPLETED runs for the selected Daily Session Date
-  completedRuns.forEach(run => {
+  // Aggregate step results from ALL runs (active & completed) for the selected Daily Session Date
+  const allRunsList = [...archivedRuns, ...testRuns];
+  allRunsList.forEach(run => {
     const plan = testPlans.find(p => p.id === run.planId);
     if (!plan) return;
     plan.steps.forEach(step => {
@@ -278,8 +288,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       // Filter by selected Daily QA Session Date (unless 'all' is selected)
       if (selectedDailySessionDate !== 'all') {
-        const stepDate = res.timestamp ? res.timestamp.slice(0, 10) : '';
-        if (stepDate !== selectedDailySessionDate) return;
+        const stepDate = res.timestamp ? getLocalDateStr(res.timestamp) : getLocalDateStr(run.startedAt || new Date());
+        if (stepDate && stepDate !== selectedDailySessionDate) return;
       }
 
       const featureName = step.feature || 'General';
@@ -308,8 +318,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
   // Aggregate bug counts for the selected Daily Session Date
   bugLogs.forEach(bug => {
     if (selectedDailySessionDate !== 'all') {
-      const bugDate = bug.timestamp ? bug.timestamp.slice(0, 10) : '';
-      if (bugDate !== selectedDailySessionDate) return;
+      const bugDate = bug.timestamp ? getLocalDateStr(bug.timestamp) : '';
+      if (bugDate && bugDate !== selectedDailySessionDate) return;
     }
 
     const featureName = bug.feature || 'General';
@@ -331,6 +341,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
       featureMetricsMap[featureName].associatedBugs = [];
     }
     featureMetricsMap[featureName].associatedBugs!.push(bug);
+  });
+
+  // Re-calculate health score & status per feature
+  Object.values(featureMetricsMap).forEach(metric => {
+    const total = metric.totalStepsExecuted;
+    if (total > 0) {
+      metric.healthScorePct = Math.round((metric.greenCount / total) * 100);
+    } else {
+      metric.healthScorePct = metric.bugCount > 0 ? 50 : 100;
+    }
+
+    if (metric.bugCount >= 3 || metric.redCount > 0 || metric.healthScorePct < 75) {
+      metric.status = 'critical';
+    } else if (metric.bugCount > 0 || metric.yellowCount > 0 || metric.healthScorePct < 95) {
+      metric.status = 'warning';
+    } else {
+      metric.status = 'healthy';
+    }
   });
 
   // Historical Quality Evolution Timeline Points (Only fully finished runs)
