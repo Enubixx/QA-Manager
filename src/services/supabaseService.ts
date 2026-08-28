@@ -115,14 +115,20 @@ export const fetchAllSupabaseData = async () => {
 
     rawFeaturesData.forEach((item: any) => {
       const name = item.feature_name || '';
-      if (name.startsWith('__CONFIG_DEVICES__:')) {
+      if (name.startsWith('__GLOBAL_DEVICES_CONFIG__:') || name.startsWith('__CONFIG_DEVICES__:')) {
         try {
-          const parsed = JSON.parse(name.replace('__CONFIG_DEVICES__:', ''));
+          const jsonStr = name.startsWith('__GLOBAL_DEVICES_CONFIG__:')
+            ? name.replace('__GLOBAL_DEVICES_CONFIG__:', '')
+            : name.replace('__CONFIG_DEVICES__:', '');
+          const parsed = JSON.parse(jsonStr);
           if (Array.isArray(parsed)) devices = parsed;
         } catch (e) {}
-      } else if (name.startsWith('__CONFIG_TESTERS__:')) {
+      } else if (name.startsWith('__GLOBAL_TESTERS_CONFIG__:') || name.startsWith('__CONFIG_TESTERS__:')) {
         try {
-          const parsed = JSON.parse(name.replace('__CONFIG_TESTERS__:', ''));
+          const jsonStr = name.startsWith('__GLOBAL_TESTERS_CONFIG__:')
+            ? name.replace('__GLOBAL_TESTERS_CONFIG__:', '')
+            : name.replace('__CONFIG_TESTERS__:', '');
+          const parsed = JSON.parse(jsonStr);
           if (Array.isArray(parsed)) testers = parsed;
         } catch (e) {}
       } else {
@@ -311,8 +317,10 @@ export const deleteTesterFromSupabase = async (testerId: string) => {
 export const syncDevicesListToCloud = async (devices: DeviceProfile[]) => {
   if (!supabase || !isSupabaseConfigured) return;
   try {
+    await supabase.from('populated_features').delete().like('feature_name', '__GLOBAL_DEVICES_CONFIG__%');
+    await supabase.from('populated_features').delete().like('feature_name', '__CONFIG_DEVICES__%');
     await supabase.from('populated_features').upsert({
-      feature_name: '__CONFIG_DEVICES__:' + JSON.stringify(devices)
+      feature_name: '__GLOBAL_DEVICES_CONFIG__:' + JSON.stringify(devices)
     });
   } catch (err) {
     console.error('syncDevicesListToCloud error:', err);
@@ -322,8 +330,10 @@ export const syncDevicesListToCloud = async (devices: DeviceProfile[]) => {
 export const syncTestersListToCloud = async (testers: TesterProfile[]) => {
   if (!supabase || !isSupabaseConfigured) return;
   try {
+    await supabase.from('populated_features').delete().like('feature_name', '__GLOBAL_TESTERS_CONFIG__%');
+    await supabase.from('populated_features').delete().like('feature_name', '__CONFIG_TESTERS__%');
     await supabase.from('populated_features').upsert({
-      feature_name: '__CONFIG_TESTERS__:' + JSON.stringify(testers)
+      feature_name: '__GLOBAL_TESTERS_CONFIG__:' + JSON.stringify(testers)
     });
   } catch (err) {
     console.error('syncTestersListToCloud error:', err);
