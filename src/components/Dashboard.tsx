@@ -83,8 +83,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onDeleteTesterProfile
 }) => {
   const defaultTodayStr = getLocalDateStr(new Date());
-  const [activeTab, setActiveTab] = useState<'overview' | 'qa-status' | 'devices-people' | 'features' | 'bugs'>('overview');
-  const [activeKpiCard, setActiveKpiCard] = useState<'plans' | 'features' | 'runs' | 'bugs'>('plans');
+  const [activeTab, setActiveTab] = useState<'overview' | 'devices' | 'testers' | 'features' | 'bugs'>('overview');
   const [selectedQaDate, setSelectedQaDate] = useState<string>(defaultTodayStr);
   const [expandedTesters, setExpandedTesters] = useState<Record<string, boolean>>({});
 
@@ -928,192 +927,143 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       </div>
 
-      {/* Metrics Banner & View Switcher (Interactive Liquid Glass KPI Header Cards) */}
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+      {/* Unified Top Navigation KPI Cards Row */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         
-        {/* Card 1: Test Plans View Switcher */}
+        {/* Card 1: Overview / Test Plans */}
         <div
-          onClick={() => {
-            setActiveKpiCard('plans');
-            setActiveTab('overview');
-          }}
-          className={`liquid-glass-card rounded-3xl p-5 flex items-center justify-between cursor-pointer transition-all duration-300 ${
-            activeKpiCard === 'plans'
-              ? 'bg-indigo-500/25 border-indigo-400/80 ring-2 ring-indigo-400/60 shadow-[0_0_30px_rgba(99,102,241,0.3)] scale-[1.02]'
+          onClick={() => setActiveTab('overview')}
+          className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-300 ${
+            activeTab === 'overview'
+              ? 'bg-indigo-500/25 border-indigo-400/80 ring-2 ring-indigo-400/60 shadow-lg scale-[1.02]'
               : 'opacity-75 hover:opacity-100 hover:scale-[1.01] hover:border-white/30'
           }`}
-          title="Click to view Test Plans"
+          title="Click to view Configured Test Plans & Active Runs"
         >
           <div>
-            <div className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-              <span>Configured Test Plans</span>
-              {activeKpiCard === 'plans' && <span className="w-2 h-2 rounded-full bg-indigo-400 animate-pulse"></span>}
+            <div className="text-[11px] font-extrabold text-slate-300 flex items-center gap-1.5">
+              <span>Test Plans</span>
+              {activeTab === 'overview' && <span className="w-2 h-2 rounded-full bg-indigo-400 animate-pulse"></span>}
             </div>
-            <div className="text-2xl font-black text-white mt-1 font-mono tracking-tight">{totalPlans}</div>
+            <div className="text-xl font-black text-white mt-1 font-mono tracking-tight">{totalPlans}</div>
           </div>
-          <div className={`p-3 rounded-2xl border transition-all ${
-            activeKpiCard === 'plans'
-              ? 'bg-indigo-500 text-white border-indigo-300 shadow-lg shadow-indigo-500/50'
+          <div className={`p-2.5 rounded-xl border transition-all ${
+            activeTab === 'overview'
+              ? 'bg-indigo-500 text-white border-indigo-300 shadow-md shadow-indigo-500/50'
               : 'bg-indigo-500/20 text-indigo-300 border-indigo-400/30 backdrop-blur-md'
           }`}>
-            <ListChecks className="w-5 h-5" />
+            <ListChecks className="w-4 h-4" />
           </div>
         </div>
 
-        {/* Card 2: Feature Health Metrics View Switcher */}
+        {/* Card 2: Devices & Quotas */}
         <div
-          onClick={() => {
-            setActiveKpiCard('features');
-            setActiveTab('features');
-          }}
-          className={`liquid-glass-card rounded-3xl p-5 flex items-center justify-between cursor-pointer transition-all duration-300 ${
-            activeKpiCard === 'features'
-              ? 'bg-purple-500/25 border-purple-400/80 ring-2 ring-purple-400/60 shadow-[0_0_30px_rgba(168,85,247,0.3)] scale-[1.02]'
+          onClick={() => setActiveTab('devices')}
+          className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-300 ${
+            activeTab === 'devices'
+              ? 'bg-purple-500/25 border-purple-400/80 ring-2 ring-purple-400/60 shadow-lg scale-[1.02]'
               : 'opacity-75 hover:opacity-100 hover:scale-[1.01] hover:border-white/30'
           }`}
-          title="Click to view Feature Health Metrics"
+          title="Click to manage Devices & Daily Test Quotas"
         >
           <div>
-            <div className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-              <span>Tracked Features</span>
-              {activeKpiCard === 'features' && <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse"></span>}
+            <div className="text-[11px] font-extrabold text-slate-300 flex items-center gap-1.5">
+              <span>Devices & Quotas</span>
+              {activeTab === 'devices' && <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse"></span>}
             </div>
-            <div className="text-2xl font-black text-purple-300 mt-1 font-mono tracking-tight">{featureMetricsList.length} Features</div>
+            <div className="text-xl font-black text-purple-300 mt-1 font-mono tracking-tight">{devices.length} Devices</div>
           </div>
-          <div className={`p-3 rounded-2xl border transition-all ${
-            activeKpiCard === 'features'
-              ? 'bg-purple-500 text-white border-purple-300 shadow-lg shadow-purple-500/50'
+          <div className={`p-2.5 rounded-xl border transition-all ${
+            activeTab === 'devices'
+              ? 'bg-purple-500 text-white border-purple-300 shadow-md shadow-purple-500/50'
               : 'bg-purple-500/20 text-purple-300 border-purple-400/30 backdrop-blur-md'
           }`}>
-            <Tag className="w-5 h-5" />
+            <Smartphone className="w-4 h-4" />
           </div>
         </div>
 
-        {/* Card 3: QA Status View Switcher */}
+        {/* Card 3: QA Testers */}
         <div
-          onClick={() => {
-            setActiveKpiCard('runs');
-            setActiveTab('qa-status');
-          }}
-          className={`liquid-glass-card rounded-3xl p-5 flex items-center justify-between cursor-pointer transition-all duration-300 ${
-            activeKpiCard === 'runs'
-              ? 'bg-emerald-500/25 border-emerald-400/80 ring-2 ring-emerald-400/60 shadow-[0_0_30px_rgba(16,185,129,0.3)] scale-[1.02]'
+          onClick={() => setActiveTab('testers')}
+          className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-300 ${
+            activeTab === 'testers'
+              ? 'bg-emerald-500/25 border-emerald-400/80 ring-2 ring-emerald-400/60 shadow-lg scale-[1.02]'
               : 'opacity-75 hover:opacity-100 hover:scale-[1.01] hover:border-white/30'
           }`}
-          title="Click to view QA Status & Tester Daily Metrics"
+          title="Click to view & create QA Tester Profiles"
         >
           <div>
-            <div className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-              <span>QA Status</span>
-              {activeKpiCard === 'runs' && <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>}
+            <div className="text-[11px] font-extrabold text-slate-300 flex items-center gap-1.5">
+              <span>QA Testers</span>
+              {activeTab === 'testers' && <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>}
             </div>
-            <div className="text-2xl font-black text-emerald-300 mt-1 font-mono tracking-tight">{testerProfilesMap.length} Testers</div>
+            <div className="text-xl font-black text-emerald-300 mt-1 font-mono tracking-tight">{testers.length} Testers</div>
           </div>
-          <div className={`p-3 rounded-2xl border transition-all ${
-            activeKpiCard === 'runs'
-              ? 'bg-emerald-500 text-white border-emerald-300 shadow-lg shadow-emerald-500/50'
+          <div className={`p-2.5 rounded-xl border transition-all ${
+            activeTab === 'testers'
+              ? 'bg-emerald-500 text-white border-emerald-300 shadow-md shadow-emerald-500/50'
               : 'bg-emerald-500/20 text-emerald-300 border-emerald-400/30 backdrop-blur-md'
           }`}>
-            <UserCheck className="w-5 h-5" />
+            <UserCheck className="w-4 h-4" />
           </div>
         </div>
 
-        {/* Card 4: Total Bugs View Switcher */}
+        {/* Card 4: CUJ Quality Report */}
         <div
-          onClick={() => {
-            setActiveKpiCard('bugs');
-            setActiveTab('bugs');
-          }}
-          className={`liquid-glass-card rounded-3xl p-5 flex items-center justify-between cursor-pointer transition-all duration-300 ${
-            activeKpiCard === 'bugs'
-              ? 'bg-rose-500/25 border-rose-400/80 ring-2 ring-rose-400/60 shadow-[0_0_30px_rgba(244,63,94,0.3)] scale-[1.02]'
+          onClick={() => setActiveTab('features')}
+          className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-300 ${
+            activeTab === 'features'
+              ? 'bg-amber-500/25 border-amber-400/80 ring-2 ring-amber-400/60 shadow-lg scale-[1.02]'
               : 'opacity-75 hover:opacity-100 hover:scale-[1.01] hover:border-white/30'
           }`}
-          title="Click to view Bugs Feed"
+          title="Click to view CUJ Quality Report"
         >
           <div>
-            <div className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-              <span>Total Bugs</span>
-              {activeKpiCard === 'bugs' && <span className="w-2 h-2 rounded-full bg-rose-400 animate-pulse"></span>}
+            <div className="text-[11px] font-extrabold text-slate-300 flex items-center gap-1.5">
+              <span>CUJ Report</span>
+              {activeTab === 'features' && <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>}
             </div>
-            <div className="text-2xl font-black text-rose-300 mt-1 font-mono tracking-tight">{totalBugs}</div>
+            <div className="text-xl font-black text-amber-300 mt-1 font-mono tracking-tight">{featureMetricsList.length} CUJs</div>
           </div>
-          <div className={`p-3 rounded-2xl border transition-all ${
-            activeKpiCard === 'bugs'
-              ? 'bg-rose-500 text-white border-rose-300 shadow-lg shadow-rose-500/50'
+          <div className={`p-2.5 rounded-xl border transition-all ${
+            activeTab === 'features'
+              ? 'bg-amber-500 text-white border-amber-300 shadow-md shadow-amber-500/50'
+              : 'bg-amber-500/20 text-amber-300 border-amber-400/30 backdrop-blur-md'
+          }`}>
+            <Activity className="w-4 h-4" />
+          </div>
+        </div>
+
+        {/* Card 5: Bugs Feed */}
+        <div
+          onClick={() => setActiveTab('bugs')}
+          className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-300 ${
+            activeTab === 'bugs'
+              ? 'bg-rose-500/25 border-rose-400/80 ring-2 ring-rose-400/60 shadow-lg scale-[1.02]'
+              : 'opacity-75 hover:opacity-100 hover:scale-[1.01] hover:border-white/30'
+          }`}
+          title="Click to view Reported Bugs"
+        >
+          <div>
+            <div className="text-[11px] font-extrabold text-slate-300 flex items-center gap-1.5">
+              <span>Bugs Feed</span>
+              {activeTab === 'bugs' && <span className="w-2 h-2 rounded-full bg-rose-400 animate-pulse"></span>}
+            </div>
+            <div className="text-xl font-black text-rose-300 mt-1 font-mono tracking-tight">{totalBugs} Bugs</div>
+          </div>
+          <div className={`p-2.5 rounded-xl border transition-all ${
+            activeTab === 'bugs'
+              ? 'bg-rose-500 text-white border-rose-300 shadow-md shadow-rose-500/50'
               : 'bg-rose-500/20 text-rose-300 border-rose-400/30 backdrop-blur-md'
           }`}>
-            <Bug className="w-5 h-5" />
+            <Bug className="w-4 h-4" />
           </div>
         </div>
 
       </div>
 
-      {/* Main Tab Navigation Bar */}
-      <div className="flex items-center gap-2 border-b border-slate-800/80 pb-3 overflow-x-auto">
-        <button
-          onClick={() => setActiveTab('overview')}
-          className={`px-4 py-2 rounded-2xl text-xs font-extrabold flex items-center gap-2 transition-all ${
-            activeTab === 'overview'
-              ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
-              : 'bg-slate-900/60 text-slate-400 hover:text-white hover:bg-slate-800/60 border border-slate-800'
-          }`}
-        >
-          <ListChecks className="w-4 h-4" />
-          <span>Overview</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('devices-people')}
-          className={`px-4 py-2 rounded-2xl text-xs font-extrabold flex items-center gap-2 transition-all ${
-            activeTab === 'devices-people'
-              ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/30'
-              : 'bg-slate-900/60 text-slate-400 hover:text-white hover:bg-slate-800/60 border border-slate-800'
-          }`}
-        >
-          <Smartphone className="w-4 h-4" />
-          <span>Devices & Quotas</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('qa-status')}
-          className={`px-4 py-2 rounded-2xl text-xs font-extrabold flex items-center gap-2 transition-all ${
-            activeTab === 'qa-status'
-              ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
-              : 'bg-slate-900/60 text-slate-400 hover:text-white hover:bg-slate-800/60 border border-slate-800'
-          }`}
-        >
-          <UserCheck className="w-4 h-4" />
-          <span>Tester Profiles</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('features')}
-          className={`px-4 py-2 rounded-2xl text-xs font-extrabold flex items-center gap-2 transition-all ${
-            activeTab === 'features'
-              ? 'bg-amber-600 text-white shadow-lg shadow-amber-600/30'
-              : 'bg-slate-900/60 text-slate-400 hover:text-white hover:bg-slate-800/60 border border-slate-800'
-          }`}
-        >
-          <Activity className="w-4 h-4" />
-          <span>CUJ Quality Report</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('bugs')}
-          className={`px-4 py-2 rounded-2xl text-xs font-extrabold flex items-center gap-2 transition-all ${
-            activeTab === 'bugs'
-              ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/30'
-              : 'bg-slate-900/60 text-slate-400 hover:text-white hover:bg-slate-800/60 border border-slate-800'
-          }`}
-        >
-          <Bug className="w-4 h-4" />
-          <span>Bugs ({totalBugs})</span>
-        </button>
-      </div>
-
-      {/* Tab 5: Devices & People (Quotas & Fleet Readiness) */}
-      {activeTab === 'devices-people' && (
+      {/* Tab 2: Devices & Daily Target Quotas */}
+      {activeTab === 'devices' && (
         <div className="space-y-8 animate-liquid-fade">
           
           {/* Fleet Daily Quota Overview Badge Banner */}
@@ -1151,310 +1101,340 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </div>
           </div>
 
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-extrabold text-white flex items-center gap-2">
+                <Smartphone className="w-4 h-4 text-purple-400" />
+                <span>Registered Devices ({devices.length})</span>
+              </h3>
+            </div>
+
+            {/* Add Device Form */}
+            <div className="liquid-glass-card rounded-2xl p-4 border border-white/10 flex items-center gap-3">
+              <input
+                type="text"
+                placeholder="Enter device model or name (e.g. Google Pixel 8)..."
+                value={newDeviceName}
+                onChange={e => setNewDeviceName(e.target.value)}
+                className="flex-1 bg-slate-950/80 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 font-medium"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (!newDeviceName.trim()) return;
+                  const newDev: DeviceProfile = {
+                    id: `dev-${Date.now()}`,
+                    name: newDeviceName.trim(),
+                    isReady: true,
+                    quotas: []
+                  };
+                  if (onSaveDevice) onSaveDevice(newDev);
+                  setNewDeviceName('');
+                }}
+                className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md active:scale-95"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Device</span>
+              </button>
+            </div>
+
+            {/* Devices Cards List */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {devices.length === 0 ? (
+                <div className="md:col-span-2 liquid-glass-card rounded-2xl p-8 text-center text-slate-400 text-xs font-medium">
+                  No devices registered. Add a device above to set daily test quotas.
+                </div>
+              ) : (
+                devices.map(device => {
+                  const selectedPlanForDev = quotaPlanMap[device.id] || (testPlans[0]?.id || '');
+                  const selectedRunsForDev = quotaRunsMap[device.id] || 3;
+
+                  return (
+                    <div key={device.id} className="liquid-glass-panel rounded-2xl p-5 border border-white/10 space-y-4 bg-slate-900/60 shadow-lg">
+                      
+                      {/* Device Card Header */}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2.5 rounded-xl bg-purple-500/20 text-purple-300 border border-purple-400/30">
+                            <Smartphone className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h4 className="text-sm font-extrabold text-white">{device.name}</h4>
+                              {device.activeRunId && (
+                                <span className="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-extrabold flex items-center gap-1 animate-pulse">
+                                  <Timer className="w-3 h-3" />
+                                  <span>In Use by {device.activeTesterName || 'Tester'}</span>
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[11px] text-slate-400 font-mono">ID: {device.id}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {/* Readiness Toggle Button */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const updated: DeviceProfile = { ...device, isReady: !device.isReady };
+                              if (onSaveDevice) onSaveDevice(updated);
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 border transition-all ${
+                              device.isReady
+                                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
+                                : 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
+                            }`}
+                          >
+                            {device.isReady ? (
+                              <>
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                                <span>Ready</span>
+                              </>
+                            ) : (
+                              <>
+                                <XCircle className="w-3.5 h-3.5 text-rose-400" />
+                                <span>Maintenance</span>
+                              </>
+                            )}
+                          </button>
+
+                          {/* Delete Device */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (confirm(`Delete device "${device.name}"?`)) {
+                                if (onDeleteDevice) onDeleteDevice(device.id);
+                              }
+                            }}
+                            className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
+                            title="Delete Device"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Quotas List for this device */}
+                      <div className="bg-slate-950/70 rounded-xl p-3.5 border border-slate-800 space-y-3">
+                        <div className="text-xs font-bold text-slate-300 flex items-center justify-between">
+                          <span>Daily Test Plan Quotas</span>
+                          <span className="text-[10px] text-purple-400 font-mono font-normal">Controls Mobile Availability</span>
+                        </div>
+
+                        {device.quotas.length === 0 ? (
+                          <div className="text-[11px] text-slate-500 italic">No plan quotas set for this device. Assign a plan below.</div>
+                        ) : (
+                          <div className="space-y-2">
+                            {device.quotas.map(quota => {
+                              const plan = testPlans.find(p => p.id === quota.planId);
+                              const doneToday = (todayRunsMap[device.id] && todayRunsMap[device.id][quota.planId]) || 0;
+                              const remaining = Math.max(0, quota.targetRunsPerDay - doneToday);
+                              const pct = Math.min(100, Math.round((doneToday / quota.targetRunsPerDay) * 100));
+
+                              return (
+                                <div key={quota.planId} className="bg-slate-900/80 rounded-lg p-2.5 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                                  <div className="flex-1 space-y-1">
+                                    <div className="flex items-center justify-between font-bold">
+                                      <span className="text-white">{plan?.name || `Plan (${quota.planId})`}</span>
+                                      <span className="text-slate-300 font-mono">
+                                        {doneToday} / {quota.targetRunsPerDay} done
+                                        {remaining > 0 ? (
+                                          <span className="text-purple-400 ml-1.5 font-sans font-extrabold">({remaining} remaining ⚡)</span>
+                                        ) : (
+                                          <span className="text-emerald-400 ml-1.5 font-sans font-extrabold">(Quota Reached ✅)</span>
+                                        )}
+                                      </span>
+                                    </div>
+
+                                    {/* Progress Bar */}
+                                    <div className="w-full h-1.5 bg-slate-950 rounded-full overflow-hidden">
+                                      <div
+                                        className={`h-full transition-all duration-500 ${remaining === 0 ? 'bg-emerald-400' : 'bg-purple-500'}`}
+                                        style={{ width: `${pct}%` }}
+                                      />
+                                    </div>
+                                  </div>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const nextQuotas = device.quotas.filter(q => q.planId !== quota.planId);
+                                      if (onSaveDevice) onSaveDevice({ ...device, quotas: nextQuotas });
+                                    }}
+                                    className="p-1 text-slate-500 hover:text-rose-400 self-end sm:self-center transition-colors"
+                                    title="Remove Quota"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* Add/Edit Quota Inline Form */}
+                        {testPlans.length > 0 && (
+                          <div className="pt-2 border-t border-slate-800/60 flex flex-wrap items-center gap-2">
+                            <select
+                              value={selectedPlanForDev}
+                              onChange={e => setQuotaPlanMap(prev => ({ ...prev, [device.id]: e.target.value }))}
+                              className="bg-slate-900 border border-slate-800 text-xs text-white rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-purple-500"
+                            >
+                              {testPlans.map(p => (
+                                <option key={p.id} value={p.id}>{p.name}</option>
+                              ))}
+                            </select>
+
+                            <div className="flex items-center gap-1">
+                              <span className="text-[11px] text-slate-400">Target Runs/Day:</span>
+                              <input
+                                type="number"
+                                min="1"
+                                max="50"
+                                value={selectedRunsForDev}
+                                onChange={e => setQuotaRunsMap(prev => ({ ...prev, [device.id]: parseInt(e.target.value) || 1 }))}
+                                className="w-16 bg-slate-900 border border-slate-800 text-xs text-white font-mono rounded-lg px-2 py-1 focus:outline-none focus:border-purple-500 text-center"
+                              />
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!selectedPlanForDev) return;
+                                const existingIdx = device.quotas.findIndex(q => q.planId === selectedPlanForDev);
+                                let nextQuotas = [...device.quotas];
+                                if (existingIdx >= 0) {
+                                  nextQuotas[existingIdx] = { planId: selectedPlanForDev, targetRunsPerDay: selectedRunsForDev };
+                                } else {
+                                  nextQuotas.push({ planId: selectedPlanForDev, targetRunsPerDay: selectedRunsForDev });
+                                }
+                                if (onSaveDevice) onSaveDevice({ ...device, quotas: nextQuotas });
+                              }}
+                              className="px-3 py-1 bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 border border-purple-400/40 text-xs font-bold rounded-lg transition-all"
+                            >
+                              + Set Quota
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+        </div>
+      )}
+
+      {/* Tab 3: QA Testers & Tester Profiles */}
+      {activeTab === 'testers' && (
+        <div className="space-y-8 animate-liquid-fade">
+          
+          {/* Header Banner */}
+          <div className="liquid-glass-panel rounded-3xl p-6 bg-gradient-to-r from-emerald-950/70 via-slate-900/80 to-teal-950/70 border-emerald-500/20 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <UserCheck className="w-5 h-5 text-emerald-400" />
+                <h3 className="text-lg font-black text-white tracking-tight">QA Tester Profiles</h3>
+              </div>
+              <p className="text-xs text-slate-300">
+                Pre-register testers so field engineers can instantly select their name on mobile apps.
+              </p>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             
-            {/* Left Col (2-cols wide): Registered Devices & Plan Quotas */}
-            <div className="lg:col-span-2 space-y-6">
-              <div className="flex items-center justify-between">
-                <h3 className="text-base font-extrabold text-white flex items-center gap-2">
-                  <Smartphone className="w-4 h-4 text-purple-400" />
-                  <span>Registered Devices ({devices.length})</span>
-                </h3>
-              </div>
+            {/* Left Form: Add Tester Profile */}
+            <div className="space-y-6">
+              <h3 className="text-base font-extrabold text-white flex items-center gap-2">
+                <Plus className="w-4 h-4 text-emerald-400" />
+                <span>Create Tester Profile</span>
+              </h3>
 
-              {/* Add Device Form */}
-              <div className="liquid-glass-card rounded-2xl p-4 border border-white/10 flex items-center gap-3">
-                <input
-                  type="text"
-                  placeholder="Enter device model or name (e.g. Google Pixel 8)..."
-                  value={newDeviceName}
-                  onChange={e => setNewDeviceName(e.target.value)}
-                  className="flex-1 bg-slate-950/80 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 font-medium"
-                />
+              <div className="liquid-glass-panel rounded-3xl p-5 border border-white/10 space-y-4 bg-slate-900/60 shadow-xl">
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">Full Name</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Kevin Huang..."
+                    value={newPersonName}
+                    onChange={e => setNewPersonName(e.target.value)}
+                    className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">Role / Specialization</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Lead QA / Mobile Specialist..."
+                    value={newPersonRole}
+                    onChange={e => setNewPersonRole(e.target.value)}
+                    className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
+                  />
+                </div>
+
                 <button
                   type="button"
                   onClick={() => {
-                    if (!newDeviceName.trim()) return;
-                    const newDev: DeviceProfile = {
-                      id: `dev-${Date.now()}`,
-                      name: newDeviceName.trim(),
-                      isReady: true,
-                      quotas: []
+                    if (!newPersonName.trim()) return;
+                    const newTester: TesterProfile = {
+                      id: `tester-${Date.now()}`,
+                      name: newPersonName.trim(),
+                      role: newPersonRole.trim() || 'Mobile Tester'
                     };
-                    if (onSaveDevice) onSaveDevice(newDev);
-                    setNewDeviceName('');
+                    if (onSaveTester) onSaveTester(newTester);
+                    setNewPersonName('');
                   }}
-                  className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md active:scale-95"
+                  className="w-full py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all shadow-md active:scale-95"
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  <span>Add Device</span>
+                  <span>Save Tester Profile</span>
                 </button>
-              </div>
-
-              {/* Devices Cards List */}
-              <div className="space-y-4">
-                {devices.length === 0 ? (
-                  <div className="liquid-glass-card rounded-2xl p-8 text-center text-slate-400 text-xs font-medium">
-                    No devices registered. Add a device above to set daily test quotas.
-                  </div>
-                ) : (
-                  devices.map(device => {
-                    const selectedPlanForDev = quotaPlanMap[device.id] || (testPlans[0]?.id || '');
-                    const selectedRunsForDev = quotaRunsMap[device.id] || 3;
-
-                    return (
-                      <div key={device.id} className="liquid-glass-panel rounded-2xl p-5 border border-white/10 space-y-4 bg-slate-900/60 shadow-lg">
-                        
-                        {/* Device Card Header */}
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className="p-2.5 rounded-xl bg-purple-500/20 text-purple-300 border border-purple-400/30">
-                              <Smartphone className="w-5 h-5" />
-                            </div>
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <h4 className="text-sm font-extrabold text-white">{device.name}</h4>
-                                {device.activeRunId && (
-                                  <span className="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-extrabold flex items-center gap-1 animate-pulse">
-                                    <Timer className="w-3 h-3" />
-                                    <span>In Use by {device.activeTesterName || 'Tester'}</span>
-                                  </span>
-                                )}
-                              </div>
-                              <span className="text-[11px] text-slate-400 font-mono">ID: {device.id}</span>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-3">
-                            {/* Readiness Toggle Button */}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const updated: DeviceProfile = { ...device, isReady: !device.isReady };
-                                if (onSaveDevice) onSaveDevice(updated);
-                              }}
-                              className={`px-3 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 border transition-all ${
-                                device.isReady
-                                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
-                                  : 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
-                              }`}
-                            >
-                              {device.isReady ? (
-                                <>
-                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                                  <span>Ready</span>
-                                </>
-                              ) : (
-                                <>
-                                  <XCircle className="w-3.5 h-3.5 text-rose-400" />
-                                  <span>Maintenance</span>
-                                </>
-                              )}
-                            </button>
-
-                            {/* Delete Device */}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (confirm(`Delete device "${device.name}"?`)) {
-                                  if (onDeleteDevice) onDeleteDevice(device.id);
-                                }
-                              }}
-                              className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
-                              title="Delete Device"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Quotas List for this device */}
-                        <div className="bg-slate-950/70 rounded-xl p-3.5 border border-slate-800 space-y-3">
-                          <div className="text-xs font-bold text-slate-300 flex items-center justify-between">
-                            <span>Daily Test Plan Quotas</span>
-                            <span className="text-[10px] text-purple-400 font-mono font-normal">Controls Mobile Selector Availability</span>
-                          </div>
-
-                          {device.quotas.length === 0 ? (
-                            <div className="text-[11px] text-slate-500 italic">No plan quotas set for this device. Assign a plan below.</div>
-                          ) : (
-                            <div className="space-y-2">
-                              {device.quotas.map(quota => {
-                                const plan = testPlans.find(p => p.id === quota.planId);
-                                const doneToday = (todayRunsMap[device.id] && todayRunsMap[device.id][quota.planId]) || 0;
-                                const remaining = Math.max(0, quota.targetRunsPerDay - doneToday);
-                                const pct = Math.min(100, Math.round((doneToday / quota.targetRunsPerDay) * 100));
-
-                                return (
-                                  <div key={quota.planId} className="bg-slate-900/80 rounded-lg p-2.5 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-                                    <div className="flex-1 space-y-1">
-                                      <div className="flex items-center justify-between font-bold">
-                                        <span className="text-white">{plan?.name || `Plan (${quota.planId})`}</span>
-                                        <span className="text-slate-300 font-mono">
-                                          {doneToday} / {quota.targetRunsPerDay} done
-                                          {remaining > 0 ? (
-                                            <span className="text-purple-400 ml-1.5 font-sans font-extrabold">({remaining} remaining ⚡)</span>
-                                          ) : (
-                                            <span className="text-emerald-400 ml-1.5 font-sans font-extrabold">(Quota Reached ✅)</span>
-                                          )}
-                                        </span>
-                                      </div>
-
-                                      {/* Progress Bar */}
-                                      <div className="w-full h-1.5 bg-slate-950 rounded-full overflow-hidden">
-                                        <div
-                                          className={`h-full transition-all duration-500 ${remaining === 0 ? 'bg-emerald-400' : 'bg-purple-500'}`}
-                                          style={{ width: `${pct}%` }}
-                                        />
-                                      </div>
-                                    </div>
-
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        const nextQuotas = device.quotas.filter(q => q.planId !== quota.planId);
-                                        if (onSaveDevice) onSaveDevice({ ...device, quotas: nextQuotas });
-                                      }}
-                                      className="p-1 text-slate-500 hover:text-rose-400 self-end sm:self-center transition-colors"
-                                      title="Remove Quota"
-                                    >
-                                      <X className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-
-                          {/* Add/Edit Quota Inline Form */}
-                          {testPlans.length > 0 && (
-                            <div className="pt-2 border-t border-slate-800/60 flex flex-wrap items-center gap-2">
-                              <select
-                                value={selectedPlanForDev}
-                                onChange={e => setQuotaPlanMap(prev => ({ ...prev, [device.id]: e.target.value }))}
-                                className="bg-slate-900 border border-slate-800 text-xs text-white rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-purple-500"
-                              >
-                                {testPlans.map(p => (
-                                  <option key={p.id} value={p.id}>{p.name}</option>
-                                ))}
-                              </select>
-
-                              <div className="flex items-center gap-1">
-                                <span className="text-[11px] text-slate-400">Target Runs/Day:</span>
-                                <input
-                                  type="number"
-                                  min="1"
-                                  max="50"
-                                  value={selectedRunsForDev}
-                                  onChange={e => setQuotaRunsMap(prev => ({ ...prev, [device.id]: parseInt(e.target.value) || 1 }))}
-                                  className="w-16 bg-slate-900 border border-slate-800 text-xs text-white font-mono rounded-lg px-2 py-1 focus:outline-none focus:border-purple-500 text-center"
-                                />
-                              </div>
-
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (!selectedPlanForDev) return;
-                                  const existingIdx = device.quotas.findIndex(q => q.planId === selectedPlanForDev);
-                                  let nextQuotas = [...device.quotas];
-                                  if (existingIdx >= 0) {
-                                    nextQuotas[existingIdx] = { planId: selectedPlanForDev, targetRunsPerDay: selectedRunsForDev };
-                                  } else {
-                                    nextQuotas.push({ planId: selectedPlanForDev, targetRunsPerDay: selectedRunsForDev });
-                                  }
-                                  if (onSaveDevice) onSaveDevice({ ...device, quotas: nextQuotas });
-                                }}
-                                className="px-3 py-1 bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 border border-purple-400/40 text-xs font-bold rounded-lg transition-all"
-                              >
-                                + Set Quota
-                              </button>
-                            </div>
-                          )}
-                        </div>
-
-                      </div>
-                    );
-                  })
-                )}
               </div>
             </div>
 
-            {/* Right Col (1-col wide): Registered QA Testers */}
-            <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <h3 className="text-base font-extrabold text-white flex items-center gap-2">
-                  <UserCheck className="w-4 h-4 text-emerald-400" />
-                  <span>QA Testers ({testers.length})</span>
-                </h3>
-              </div>
+            {/* Right List: Registered Testers Grid */}
+            <div className="lg:col-span-2 space-y-6">
+              <h3 className="text-base font-extrabold text-white flex items-center gap-2">
+                <UserCheck className="w-4 h-4 text-emerald-400" />
+                <span>Registered Testers ({testers.length})</span>
+              </h3>
 
-              {/* Add Person Form */}
-              <div className="liquid-glass-card rounded-2xl p-4 border border-white/10 space-y-3">
-                <input
-                  type="text"
-                  placeholder="Tester Name (e.g. Kevin Huang)..."
-                  value={newPersonName}
-                  onChange={e => setNewPersonName(e.target.value)}
-                  className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
-                />
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    placeholder="Role (e.g. Lead QA)..."
-                    value={newPersonRole}
-                    onChange={e => setNewPersonRole(e.target.value)}
-                    className="flex-1 bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!newPersonName.trim()) return;
-                      const newTester: TesterProfile = {
-                        id: `tester-${Date.now()}`,
-                        name: newPersonName.trim(),
-                        role: newPersonRole.trim() || 'Mobile Tester'
-                      };
-                      if (onSaveTester) onSaveTester(newTester);
-                      setNewPersonName('');
-                    }}
-                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-extrabold flex items-center gap-1 transition-all shadow-md active:scale-95"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Add</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Testers List */}
-              <div className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {testers.length === 0 ? (
-                  <div className="liquid-glass-card rounded-2xl p-6 text-center text-slate-400 text-xs italic">
-                    No QA testers registered. Add testers above.
+                  <div className="sm:col-span-2 liquid-glass-card rounded-2xl p-8 text-center text-slate-400 text-xs italic">
+                    No QA testers registered. Add testers using the form on the left.
                   </div>
                 ) : (
                   testers.map(tester => (
-                    <div key={tester.id} className="liquid-glass-panel rounded-xl p-3.5 border border-white/10 flex items-center justify-between bg-slate-900/60">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-300 font-bold text-xs flex items-center justify-center border border-emerald-400/30">
+                    <div key={tester.id} className="liquid-glass-panel rounded-2xl p-5 border border-white/10 flex items-center justify-between bg-slate-900/60 shadow-lg">
+                      <div className="flex items-center gap-3.5">
+                        <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 text-emerald-300 font-black text-sm flex items-center justify-center border border-emerald-400/40 shadow-inner">
                           {tester.name.charAt(0).toUpperCase()}
                         </div>
                         <div>
-                          <div className="text-xs font-extrabold text-white">{tester.name}</div>
-                          <div className="text-[11px] text-slate-400">{tester.role || 'Mobile Tester'}</div>
+                          <div className="text-sm font-black text-white">{tester.name}</div>
+                          <div className="text-xs text-emerald-400 font-semibold">{tester.role || 'Mobile Tester'}</div>
+                          <div className="text-[10px] text-slate-500 font-mono mt-0.5">ID: {tester.id}</div>
                         </div>
                       </div>
 
                       <button
                         type="button"
                         onClick={() => {
-                          if (confirm(`Remove tester "${tester.name}"?`)) {
+                          if (confirm(`Delete tester profile "${tester.name}"?`)) {
                             if (onDeleteTesterProfile) onDeleteTesterProfile(tester.id);
                           }
                         }}
-                        className="p-1 text-slate-500 hover:text-rose-400 transition-colors"
+                        className="p-2 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-xl transition-colors"
                         title="Delete Tester"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
                   ))
@@ -1466,6 +1446,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
         </div>
       )}
+
 
       {/* Tab 1: Overview - Test Plans & Active Runs */}
       {activeTab === 'overview' && (
@@ -1688,8 +1669,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
 
-      {/* Tab: QA Status - Tester Profiles & Daily Time Tracking */}
-      {activeTab === 'qa-status' && (
+      {/* Tab: QA Testers Performance & Daily Metrics */}
+      {activeTab === 'testers' && (
         <div className="space-y-6 animate-liquid-fade">
           
           {/* Header & Date Filter Bar */}
