@@ -58,7 +58,7 @@ export function saveGeminiModel(model: string): void {
 
 /**
  * Direct native fetch call to Google's Gemini REST API.
- * Ensures 100% browser compatibility without Node SDK or bundler runtime quirks.
+ * Ensures 100% browser compatibility, handles 'models/' prefix, and falls back between v1beta and v1 endpoints.
  */
 async function callGeminiRestApi(
   apiKey: string,
@@ -66,42 +66,62 @@ async function callGeminiRestApi(
   prompt: string,
   asJson: boolean = false
 ): Promise<string> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-  const bodyPayload: any = {
-    contents: [
-      {
-        parts: [{ text: prompt }]
+  const cleanModel = model.replace(/^models\//, '').trim();
+  const endpoints = [
+    `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey.trim()}`,
+    `https://generativelanguage.googleapis.com/v1/models/${cleanModel}:generateContent?key=${apiKey.trim()}`
+  ];
+
+  let lastError = '';
+
+  for (const url of endpoints) {
+    try {
+      const bodyPayload: any = {
+        contents: [
+          {
+            parts: [{ text: prompt }]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.2,
+        }
+      };
+
+      if (asJson) {
+        bodyPayload.generationConfig.responseMimeType = 'application/json';
       }
-    ],
-    generationConfig: {
-      temperature: 0.2,
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(bodyPayload)
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) return text;
+      } else {
+        const errorJson = await response.json().catch(() => null);
+        lastError = errorJson?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+        // If 404 (model not found on this specific API version), try the other endpoint
+        if (response.status === 404) {
+          continue;
+        }
+        // If auth or invalid key error, fail fast
+        throw new Error(lastError);
+      }
+    } catch (err: any) {
+      if (err.message?.includes('API key') || err.message?.includes('PERMISSION_DENIED')) {
+        throw err;
+      }
+      lastError = err?.message || String(err);
     }
-  };
-
-  if (asJson) {
-    bodyPayload.generationConfig.responseMimeType = 'application/json';
   }
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(bodyPayload)
-  });
-
-  if (!response.ok) {
-    const errorJson = await response.json().catch(() => null);
-    const message = errorJson?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
-    throw new Error(message);
-  }
-
-  const data = await response.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) {
-    throw new Error('No candidate content returned by Gemini');
-  }
-  return text;
+  throw new Error(lastError || `Model ${cleanModel} could not be resolved`);
 }
 
 /**
@@ -350,10 +370,12 @@ export async function generateBatchExecutiveSummaryWithGemini(
   let lastErrorMessage = '';
 
   if (userApiKey) {
-    // Attempt with selected model first, then fallback to gemini-1.5-flash if needed
+    // Attempt with selected model first, then fallback to other standard models
     const modelsToTry = [preferredModel];
-    if (preferredModel !== 'gemini-2.0-flash') modelsToTry.push('gemini-2.0-flash');
+    if (!modelsToTry.includes('gemini-2.0-flash')) modelsToTry.push('gemini-2.0-flash');
+    if (!modelsToTry.includes('gemini-1.5-flash-latest')) modelsToTry.push('gemini-1.5-flash-latest');
     if (!modelsToTry.includes('gemini-1.5-flash')) modelsToTry.push('gemini-1.5-flash');
+    if (!modelsToTry.includes('gemini-1.5-pro')) modelsToTry.push('gemini-1.5-pro');
 
     const prompt = `You are a Principal QA Engineer distilling field defect logs to produce a clear, highly accurate executive summary.
 
