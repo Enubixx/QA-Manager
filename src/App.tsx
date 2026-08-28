@@ -20,6 +20,8 @@ import {
   deleteDeviceFromSupabase,
   syncTesterToSupabase,
   deleteTesterFromSupabase,
+  syncDevicesListToCloud,
+  syncTestersListToCloud,
   subscribeToSupabaseRealtime,
 } from './services/supabaseService';
 import { isSupabaseConfigured } from './lib/supabase';
@@ -126,10 +128,10 @@ export function App() {
       if (cloudData.populatedFeatures && cloudData.populatedFeatures.length > 0) {
         setPopulatedFeatures(cloudData.populatedFeatures);
       }
-      if (cloudData.devices && cloudData.devices.length > 0) {
+      if (cloudData.devices) {
         setDevices(cloudData.devices);
       }
-      if (cloudData.testers && cloudData.testers.length > 0) {
+      if (cloudData.testers) {
         setTesters(cloudData.testers);
       }
     }
@@ -563,6 +565,7 @@ export function App() {
       const exists = prev.some(d => d.id === device.id);
       const next = exists ? prev.map(d => d.id === device.id ? device : d) : [...prev, device];
       localStorage.setItem('qa_devices_list', JSON.stringify(next));
+      syncDevicesListToCloud(next);
       return next;
     });
     syncDeviceToSupabase(device);
@@ -572,6 +575,7 @@ export function App() {
     setDevices(prev => {
       const next = prev.filter(d => d.id !== deviceId);
       localStorage.setItem('qa_devices_list', JSON.stringify(next));
+      syncDevicesListToCloud(next);
       return next;
     });
     deleteDeviceFromSupabase(deviceId);
@@ -582,6 +586,7 @@ export function App() {
       const exists = prev.some(t => t.id === tester.id);
       const next = exists ? prev.map(t => t.id === tester.id ? tester : t) : [...prev, tester];
       localStorage.setItem('qa_testers_list', JSON.stringify(next));
+      syncTestersListToCloud(next);
       return next;
     });
     syncTesterToSupabase(tester);
@@ -591,6 +596,7 @@ export function App() {
     setTesters(prev => {
       const next = prev.filter(t => t.id !== testerId);
       localStorage.setItem('qa_testers_list', JSON.stringify(next));
+      syncTestersListToCloud(next);
       return next;
     });
     deleteTesterFromSupabase(testerId);

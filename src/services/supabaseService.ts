@@ -97,9 +97,9 @@ export const fetchAllSupabaseData = async () => {
       formattedTime: item.formatted_time || new Date().toLocaleTimeString(),
     }));
 
-    const populatedFeatures: string[] = (featuresRes.data || []).map((item: any) => item.feature_name);
-
-    const devices: DeviceProfile[] = (devicesRes.data || []).map((item: any) => ({
+    const rawFeaturesData = featuresRes.data || [];
+    let populatedFeatures: string[] = [];
+    let devices: DeviceProfile[] = (devicesRes.data || []).map((item: any) => ({
       id: item.id,
       name: item.name || '',
       isReady: item.is_ready ?? true,
@@ -107,12 +107,28 @@ export const fetchAllSupabaseData = async () => {
       activeRunId: item.active_run_id || undefined,
       activeTesterName: item.active_tester_name || undefined,
     }));
-
-    const testers: TesterProfile[] = (testersRes.data || []).map((item: any) => ({
+    let testers: TesterProfile[] = (testersRes.data || []).map((item: any) => ({
       id: item.id,
       name: item.name || '',
       role: item.role || '',
     }));
+
+    rawFeaturesData.forEach((item: any) => {
+      const name = item.feature_name || '';
+      if (name.startsWith('__CONFIG_DEVICES__:')) {
+        try {
+          const parsed = JSON.parse(name.replace('__CONFIG_DEVICES__:', ''));
+          if (Array.isArray(parsed)) devices = parsed;
+        } catch (e) {}
+      } else if (name.startsWith('__CONFIG_TESTERS__:')) {
+        try {
+          const parsed = JSON.parse(name.replace('__CONFIG_TESTERS__:', ''));
+          if (Array.isArray(parsed)) testers = parsed;
+        } catch (e) {}
+      } else {
+        populatedFeatures.push(name);
+      }
+    });
 
     return {
       testPlans,
@@ -289,6 +305,28 @@ export const deleteTesterFromSupabase = async (testerId: string) => {
     await supabase.from('testers').delete().eq('id', testerId);
   } catch (err) {
     console.error('deleteTesterFromSupabase error:', err);
+  }
+};
+
+export const syncDevicesListToCloud = async (devices: DeviceProfile[]) => {
+  if (!supabase || !isSupabaseConfigured) return;
+  try {
+    await supabase.from('populated_features').upsert({
+      feature_name: '__CONFIG_DEVICES__:' + JSON.stringify(devices)
+    });
+  } catch (err) {
+    console.error('syncDevicesListToCloud error:', err);
+  }
+};
+
+export const syncTestersListToCloud = async (testers: TesterProfile[]) => {
+  if (!supabase || !isSupabaseConfigured) return;
+  try {
+    await supabase.from('populated_features').upsert({
+      feature_name: '__CONFIG_TESTERS__:' + JSON.stringify(testers)
+    });
+  } catch (err) {
+    console.error('syncTestersListToCloud error:', err);
   }
 };
 
