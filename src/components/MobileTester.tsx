@@ -276,6 +276,24 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
     const trimmedReporter = inputReporterName.trim();
     const trimmedDevice = inputDeviceName.trim();
+    const prevSavedDevice = sessionStorage.getItem('qa_device_name');
+
+    // Unlock any device previously locked by this session if selecting a new device
+    devices.forEach(d => {
+      const isPrevDev = prevSavedDevice && d.name.toLowerCase().trim() === prevSavedDevice.toLowerCase().trim();
+      const isLockedByThisRun = d.activeRunId === activeRun.id;
+      const isNewDev = d.name.toLowerCase().trim() === trimmedDevice.toLowerCase().trim() || d.id === trimmedDevice;
+
+      if ((isPrevDev || isLockedByThisRun) && !isNewDev) {
+        if (onSaveDevice) {
+          onSaveDevice({
+            ...d,
+            activeRunId: undefined,
+            activeTesterName: undefined
+          });
+        }
+      }
+    });
 
     // Store in session storage so the info resets when the app is force quit
     sessionStorage.setItem('qa_tester_name', trimmedReporter);
@@ -294,7 +312,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       startedAt: (activeRun.status === 'not_started' || !activeRun.startedAt) ? new Date().toISOString() : activeRun.startedAt
     };
 
-    // Lock device in real-time if device is registered
+    // Lock newly chosen device
     const matchedDev = devices.find(d => d.name.toLowerCase().trim() === trimmedDevice.toLowerCase().trim() || d.id === trimmedDevice);
     if (matchedDev && onSaveDevice) {
       onSaveDevice({
@@ -1037,6 +1055,16 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                     onClick={() => {
                       setCompletedRunSummary(null);
                       setSelectedStatus(null);
+                      if (activeRun?.deviceName && onSaveDevice) {
+                        const matchedDev = devices.find(d => d.name.toLowerCase().trim() === activeRun.deviceName?.toLowerCase().trim());
+                        if (matchedDev) {
+                          onSaveDevice({
+                            ...matchedDev,
+                            activeRunId: undefined,
+                            activeTesterName: undefined
+                          });
+                        }
+                      }
                       const savedName = sessionStorage.getItem('qa_tester_name') || activeRun?.testerName || '';
                       const savedDevice = sessionStorage.getItem('qa_device_name') || activeRun?.deviceName || '';
                       if (savedName) setInputReporterName(savedName);
