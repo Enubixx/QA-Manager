@@ -26,8 +26,7 @@ export function saveGeminiApiKey(key: string): void {
 }
 
 /**
- * Synthesizes any raw QA note into a clean, complete, professional status phrase.
- * NEVER truncates text with trailing '...' or cuts off sentences mid-word.
+ * Synthesizes raw QA notes into a clean, complete, professional status sentence.
  */
 export function nlpCleanReword(notes: string[], featureName: string): string {
   const reworded = notes.map(note => {
@@ -44,11 +43,6 @@ export function nlpCleanReword(notes: string[], featureName: string): string {
     if (/slow|lag|delay|freeze/i.test(text)) return 'Performance frame-drop latency during interaction';
     if (/crash|force\s+close/i.test(text)) return 'Application runtime force-close crash';
 
-    // Complete sentence fallback: Keep full meaningful phrase without truncation
-    const words = text.split(/\s+/);
-    if (words.length > 8) {
-      return words.slice(0, 8).join(' ');
-    }
     return text.charAt(0).toUpperCase() + text.slice(1);
   });
 
@@ -58,7 +52,7 @@ export function nlpCleanReword(notes: string[], featureName: string): string {
 }
 
 /**
- * Summarizes and rewords all reported bugs for a feature using Gemini AI (or fast clean NLP fallback).
+ * Summarizes and rewords all reported bugs for a feature using Gemini AI with full bug context.
  */
 export async function summarizeFeatureBugsWithGemini(
   featureName: string,
@@ -66,20 +60,25 @@ export async function summarizeFeatureBugsWithGemini(
   yellowCount: number = 0,
   redCount: number = 0
 ): Promise<string> {
-  const notes = bugs
-    .map(b => b.note?.trim())
-    .filter((n): n is string => !!n && n.length > 0);
+  // Extract full contextual descriptions for every bug
+  const bugDetailsList = bugs.map(b => {
+    const titlePart = b.stepTitle ? `Step "${b.stepTitle}": ` : '';
+    const severityPart = b.severity ? `[${b.severity.toUpperCase()} SEVERITY] ` : '';
+    const notePart = b.note ? b.note.trim() : 'No details provided';
+    const devicePart = b.deviceName ? ` (Device: ${b.deviceName})` : '';
+    return `- ${severityPart}${titlePart}${notePart}${devicePart}`;
+  });
 
-  if (notes.length === 0) {
+  if (bugDetailsList.length === 0) {
     if (redCount > 0 || yellowCount > 0) {
       const count = redCount + yellowCount;
-      return `${count} step failure${count > 1 ? 's' : ''}`;
+      return `${count} step failure${count > 1 ? 's' : ''} recorded`;
     }
     return '';
   }
 
   const userApiKey = getStoredGeminiApiKey();
-  const cacheKey = `${userApiKey}:${featureName}:${notes.sort().join('||')}`;
+  const cacheKey = `${userApiKey}:${featureName}:${bugDetailsList.sort().join('||')}`;
   if (summaryCache.has(cacheKey)) {
     return summaryCache.get(cacheKey)!;
   }
@@ -90,15 +89,16 @@ export async function summarizeFeatureBugsWithGemini(
       const response = await genAI.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: `You are a senior QA Lead summarizing test results for executive reporting.
-Reword the following reported bug notes for feature "${featureName}" into a SINGLE short, complete, professional status sentence or phrase (3 to 8 words maximum).
 
-Raw reported bug notes:
-${notes.map(n => `- ${n}`).join('\n')}
+Feature under test: "${featureName}"
+Reported Defects & Bug Logs:
+${bugDetailsList.join('\n')}
 
-Rules:
-1. Make it a complete, meaningful phrase (e.g. "Active test session fails to close on force quit", "Payment gateway timed out on 3G network").
-2. DO NOT use ellipsis (...) or cut off text mid-sentence.
-3. Return ONLY the single reworded summary string without intro text, quotes, or markdown bullets.`,
+Instructions:
+1. Read the full bug notes above and summarize what actually failed into ONE single clear, natural, professional executive sentence.
+2. Explain the core bug behavior clearly without truncation, ellipsis (...), or awkward phrasing.
+3. Keep it to 1 concise sentence (max ~15-20 words).
+4. Return ONLY the single reworded summary sentence. Do not add intro text, quotes, or markdown bullets.`,
       });
 
       const text = (response.text || '').trim().replace(/^["']|["']$/g, '');
@@ -111,7 +111,7 @@ Rules:
     }
   }
 
-  const fallback = nlpCleanReword(notes, featureName);
+  const fallback = nlpCleanReword(bugs.map(b => b.note), featureName);
   summaryCache.set(cacheKey, fallback);
   return fallback;
 }
