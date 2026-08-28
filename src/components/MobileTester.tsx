@@ -117,10 +117,106 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     };
   }
 
-  // Selectable devices: Strictly devices created on Web Dashboard that are Ready, not locked, and quota not exhausted today
+  // Effective Devices: Combine web registered devices + any devices referenced in web runs/bugs/populated lists
+  const effectiveDevices = useMemo(() => {
+    const map = new Map<string, DeviceProfile>();
+
+    devices.forEach(d => {
+      if (d.name && d.name.trim()) {
+        map.set(d.name.toLowerCase().trim(), d);
+      }
+    });
+
+    const allRuns = [...testRuns, ...archivedRuns];
+    allRuns.forEach(r => {
+      if (r.deviceName && r.deviceName.trim()) {
+        const key = r.deviceName.toLowerCase().trim();
+        if (!map.has(key)) {
+          map.set(key, {
+            id: r.deviceId || `dev-${key.replace(/\s+/g, '-')}`,
+            name: r.deviceName.trim(),
+            isReady: true,
+            quotas: []
+          });
+        }
+      }
+    });
+
+    bugLogs.forEach(b => {
+      if (b.deviceName && b.deviceName.trim()) {
+        const key = b.deviceName.toLowerCase().trim();
+        if (!map.has(key)) {
+          map.set(key, {
+            id: `dev-${key.replace(/\s+/g, '-')}`,
+            name: b.deviceName.trim(),
+            isReady: true,
+            quotas: []
+          });
+        }
+      }
+    });
+
+    populatedDevices.forEach(pDev => {
+      if (pDev && pDev.trim()) {
+        const key = pDev.toLowerCase().trim();
+        if (!map.has(key)) {
+          map.set(key, {
+            id: `dev-${key.replace(/\s+/g, '-')}`,
+            name: pDev.trim(),
+            isReady: true,
+            quotas: []
+          });
+        }
+      }
+    });
+
+    return Array.from(map.values());
+  }, [devices, testRuns, archivedRuns, bugLogs, populatedDevices]);
+
+  // Effective Testers: Combine web registered testers + any testers referenced in web runs/bugs
+  const effectiveTesters = useMemo(() => {
+    const map = new Map<string, TesterProfile>();
+
+    testers.forEach(t => {
+      if (t.name && t.name.trim()) {
+        map.set(t.name.toLowerCase().trim(), t);
+      }
+    });
+
+    const allRuns = [...testRuns, ...archivedRuns];
+    allRuns.forEach(r => {
+      if (r.testerName && r.testerName.trim()) {
+        const key = r.testerName.toLowerCase().trim();
+        if (!map.has(key)) {
+          map.set(key, {
+            id: `tester-${key.replace(/\s+/g, '-')}`,
+            name: r.testerName.trim(),
+            role: 'QA Tester'
+          });
+        }
+      }
+    });
+
+    bugLogs.forEach(b => {
+      if (b.testerName && b.testerName.trim()) {
+        const key = b.testerName.toLowerCase().trim();
+        if (!map.has(key)) {
+          map.set(key, {
+            id: `tester-${key.replace(/\s+/g, '-')}`,
+            name: b.testerName.trim(),
+            role: 'QA Tester'
+          });
+        }
+      }
+    });
+
+    return Array.from(map.values());
+  }, [testers, testRuns, archivedRuns, bugLogs]);
+
+  // Selectable devices: Ready, not locked by another active run, and quota not exhausted today
   const selectableDevices = useMemo(() => {
-    if (!currentPlan) return devices;
-    return devices.filter(dev => {
+    if (!currentPlan) return effectiveDevices;
+    return effectiveDevices.filter(dev => {
       if (!dev.isReady) return false;
       if (dev.activeRunId && dev.activeRunId !== activeRun?.id) return false;
 
@@ -131,7 +227,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       }
       return true;
     });
-  }, [devices, currentPlan, todayRunsMap, activeRun]);
+  }, [effectiveDevices, currentPlan, todayRunsMap, activeRun]);
 
   // Clear legacy localStorage tester info so sessions require setup on fresh launch
   useEffect(() => {
@@ -1095,7 +1191,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                     <User className="w-3.5 h-3.5 text-indigo-400" />
                     Select QA Tester
                   </label>
-                  {testers.length > 0 ? (
+                  {effectiveTesters.length > 0 ? (
                     <select
                       value={inputReporterName}
                       onChange={e => setInputReporterName(e.target.value)}
@@ -1103,7 +1199,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                       required
                     >
                       <option value="" disabled>Choose Tester Profile...</option>
-                      {testers.map(t => (
+                      {effectiveTesters.map(t => (
                         <option key={t.id} value={t.name}>
                           👤 {t.name} ({t.role || 'QA Tester'})
                         </option>
