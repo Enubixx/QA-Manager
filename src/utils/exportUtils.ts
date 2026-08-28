@@ -162,37 +162,26 @@ export function formatBugsToText(bugs: BugLog[], filterOptions?: BugCopyFilterOp
   if (filterOptions?.searchQuery) {
     filterParts.push(`Search: "${filterOptions.searchQuery}"`);
   }
-  const filterSummaryStr = filterParts.length > 0 ? filterParts.join(' | ') : 'All Bugs (No filters)';
+  const filterSummaryStr = filterParts.length > 0 ? `Filters: ${filterParts.join(' | ')}\n` : '';
 
   // 1. Plain Text Output
   let plainText = `🐛 QA Bug Report (${bugs.length} ${bugs.length === 1 ? 'Bug' : 'Bugs'})\n`;
-  plainText += `Filters: ${filterSummaryStr}\n`;
-  plainText += `Generated: ${new Date().toLocaleString()}\n`;
+  if (filterSummaryStr) plainText += filterSummaryStr;
   plainText += `----------------------------------------\n\n`;
 
   if (bugs.length === 0) {
     plainText += `No bugs match the selected filter criteria.\n`;
   } else {
     bugs.forEach((bug, idx) => {
-      const severityStr = (bug.severity || 'medium').toUpperCase();
       const ts = getFormattedTimestamp(bug);
       const feature = bug.feature || 'General';
-      const stepTarget = bug.stepTitle || 'N/A';
-      const tester = bug.testerName || 'Anonymous';
-      const device = bug.deviceName || 'Mobile Device';
+      const description = bug.note || 'No description attached.';
 
-      plainText += `${idx + 1}. [${severityStr}] ${feature} — Step: ${stepTarget}\n`;
-      plainText += `   • Description: ${bug.note || 'No description attached.'}\n`;
-      plainText += `   • Reporter: ${tester} (${device})\n`;
-      plainText += `   • Logged Time: ${ts}\n`;
-      if (bug.imageUrl) {
-        plainText += `   • Photo Evidence: ${bug.imageUrl}\n`;
-      }
-      plainText += `\n`;
+      plainText += `${idx + 1}. [${ts}] Feature: ${feature}\n`;
+      plainText += `   Description: ${description}\n\n`;
     });
   }
-  plainText += `----------------------------------------\n`;
-  plainText += `Exported from QA Manager`;
+  plainText += `----------------------------------------`;
 
   // 2. Rich HTML Output for Email, Slack, Teams, Docs & Apple Notes
   let htmlText = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5; max-width: 680px;">`;
@@ -200,9 +189,11 @@ export function formatBugsToText(bugs: BugLog[], filterOptions?: BugCopyFilterOp
   htmlText += `<h3 style="margin: 0 0 4px 0; font-size: 16px; font-weight: 800; color: #0f172a;">`;
   htmlText += `🐛 QA Bug Report <span style="font-size: 13px; font-weight: 600; color: #64748b;">(${bugs.length} ${bugs.length === 1 ? 'Bug' : 'Bugs'})</span>`;
   htmlText += `</h3>`;
-  htmlText += `<div style="font-size: 11.5px; color: #64748b; font-weight: 500;">`;
-  htmlText += `<b>Filters:</b> ${filterSummaryStr} &bull; <i>Generated on ${new Date().toLocaleString()}</i>`;
-  htmlText += `</div>`;
+  if (filterParts.length > 0) {
+    htmlText += `<div style="font-size: 11.5px; color: #64748b; font-weight: 500;">`;
+    htmlText += `<b>Filters:</b> ${filterParts.join(' | ')}`;
+    htmlText += `</div>`;
+  }
   htmlText += `</div>`;
 
   if (bugs.length === 0) {
@@ -210,36 +201,23 @@ export function formatBugsToText(bugs: BugLog[], filterOptions?: BugCopyFilterOp
   } else {
     htmlText += `<ol style="margin: 0; padding-left: 20px;">`;
     bugs.forEach((bug) => {
-      const sev = (bug.severity || 'medium').toLowerCase();
-      const severityStr = sev.toUpperCase();
-      const color = sev === 'critical' ? '#dc2626' : sev === 'high' ? '#ea580c' : sev === 'medium' ? '#d97706' : '#2563eb';
       const ts = getFormattedTimestamp(bug);
       const feature = bug.feature || 'General';
-      const stepTarget = bug.stepTitle || 'N/A';
-      const tester = bug.testerName || 'Anonymous';
-      const device = bug.deviceName || 'Mobile Device';
       const note = (bug.note || 'No description attached.').replace(/\n/g, '<br/>');
 
-      htmlText += `<li style="margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #f1f5f9;">`;
+      htmlText += `<li style="margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #f1f5f9;">`;
       htmlText += `<div style="font-size: 13px; font-weight: 700; color: #0f172a; margin-bottom: 4px;">`;
-      htmlText += `<span style="color: ${color}; font-weight: 800; font-family: monospace;">[${severityStr}]</span> `;
-      htmlText += `<span style="color: #0f172a;">${feature}</span> &mdash; <span style="color: #475569;">${stepTarget}</span>`;
+      htmlText += `<span style="color: #475569; font-weight: 600; font-family: monospace;">[${ts}]</span> `;
+      htmlText += `<span style="color: #4f46e5; font-weight: 700;">Feature: ${feature}</span>`;
       htmlText += `</div>`;
-      htmlText += `<div style="background-color: #f8fafc; border-left: 3px solid #cbd5e1; padding: 8px 12px; margin: 6px 0; border-radius: 4px; font-size: 12.5px; color: #1e293b; font-weight: 500;">`;
-      htmlText += `${note}`;
-      htmlText += `</div>`;
-      htmlText += `<div style="font-size: 11.5px; color: #64748b; margin-top: 4px;">`;
-      htmlText += `&bull; <b>Reporter:</b> ${tester} (${device}) &bull; <b>Time:</b> ${ts}`;
-      if (bug.imageUrl) {
-        htmlText += `<br/>&bull; <b>Evidence Photo:</b> <a href="${bug.imageUrl}" target="_blank" rel="noopener noreferrer" style="color: #2563eb; text-decoration: underline;">View Image</a>`;
-      }
+      htmlText += `<div style="background-color: #f8fafc; border-left: 3px solid #cbd5e1; padding: 8px 12px; margin: 4px 0; border-radius: 4px; font-size: 12.5px; color: #1e293b; font-weight: 500;">`;
+      htmlText += `<b>Description:</b> ${note}`;
       htmlText += `</div>`;
       htmlText += `</li>`;
     });
     htmlText += `</ol>`;
   }
 
-  htmlText += `<div style="margin-top: 12px; padding-top: 8px; border-top: 1px solid #e2e8f0; font-size: 11px; color: #94a3b8; text-align: right;">Exported from QA Manager</div>`;
   htmlText += `</div>`;
 
   return { plainText, htmlText };
