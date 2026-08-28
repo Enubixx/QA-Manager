@@ -430,9 +430,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
       metric.healthScorePct = 100;
     }
 
-    if (metric.redCount > 0 || metric.healthScorePct < 80) {
+    if (metric.healthScorePct <= 59) {
       metric.status = 'critical';
-    } else if (metric.yellowCount > 0 || metric.healthScorePct < 95) {
+    } else if (metric.healthScorePct <= 94) {
       metric.status = 'warning';
     } else {
       metric.status = 'healthy';
