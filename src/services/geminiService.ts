@@ -26,37 +26,37 @@ export function saveGeminiApiKey(key: string): void {
 }
 
 /**
- * Synthesizes raw QA notes into a short, crisp 5-8 word executive status phrase.
+ * Synthesizes raw QA notes into clean, human-readable issue phrases without substituting fake template text.
  */
 export function nlpCleanReword(notes: string[], featureName: string): string {
-  const reworded = notes.map(note => {
-    let text = note.trim();
+  if (!notes || notes.length === 0) return '';
+
+  const cleaned = notes.map(note => {
+    let text = (note || '').trim();
+    // Remove typical prefixes
     text = text.replace(/^(bug|issue|defect|error|problem|note|encountered|found|description):\s*/i, '');
     
-    if (/force\s+quit|close\s+out|active\s+test/i.test(text)) return 'Force quit session cleanup failure';
-    if (/button|unclickable|can'?t\s+click/i.test(text)) return 'Unresponsive UI touch target';
-    if (/session|token|logged\s+out/i.test(text)) return 'Session token lost on restart';
-    if (/payment|checkout|gateway/i.test(text)) return 'Payment gateway submission timeout';
-    if (/timeout|time\s*out/i.test(text)) return 'Network request payload timeout';
-    if (/rotate|orientation|landscape/i.test(text)) return 'Orientation layout responsiveness defect';
-    if (/audio|sound|bluetooth/i.test(text)) return 'Media playback audio sync latency';
-    if (/slow|lag|delay|freeze/i.test(text)) return 'Performance frame-drop latency';
-    if (/crash|force\s+close/i.test(text)) return 'Application runtime crash';
-
-    const words = text.split(/\s+/);
-    if (words.length > 6) {
-      return words.slice(0, 6).join(' ');
+    // Capitalize first letter
+    if (text.length > 0) {
+      text = text.charAt(0).toUpperCase() + text.slice(1);
     }
-    return text.charAt(0).toUpperCase() + text.slice(1);
-  });
+    
+    // Truncate cleanly if note is excessively verbose
+    const words = text.split(/\s+/);
+    if (words.length > 12) {
+      return words.slice(0, 12).join(' ') + '...';
+    }
+    return text;
+  }).filter(Boolean);
 
-  const unique = Array.from(new Set(reworded));
+  const unique = Array.from(new Set(cleaned));
+  if (unique.length === 0) return '';
   if (unique.length === 1) return unique[0];
   return unique.slice(0, 2).join(' & ');
 }
 
 /**
- * Summarizes and rewords all reported bugs for a feature into a short, crisp 5-8 word executive phrase.
+ * Summarizes and rewords all reported bugs for a feature into a clear, accurate, and logical executive summary.
  */
 export async function summarizeFeatureBugsWithGemini(
   featureName: string,
@@ -89,18 +89,19 @@ export async function summarizeFeatureBugsWithGemini(
       const genAI = new GoogleGenAI({ apiKey: userApiKey });
       const response = await genAI.models.generateContent({
         model: 'gemini-2.5-flash',
-        contents: `You are a senior QA Lead distilling test results for executive reporting.
+        contents: `You are a senior Lead QA Engineer distilling test results for executive reporting.
 
-Feature: "${featureName}"
+Feature Tested: "${featureName}"
 Reported Bugs (Step Title & Description):
 ${bugDetailsList.join('\n')}
 
-GOAL: SHORTEN and distill the reported bugs above into a single crisp, super-short executive phrase of 5 to 8 words maximum.
+GOAL: Provide a clear, highly accurate, and concise 1-sentence or short phrase summary (5 to 12 words) explaining the primary bug(s) encountered for this feature.
 
-Instructions:
-1. Distill long or verbose bug descriptions down to just the core failure (e.g. "Force quit session cleanup failure", "Payment gateway submission timeout").
-2. DO NOT write a long sentence or paragraph. Make it super crisp, short, and under 8 words.
-3. Return ONLY the single reworded 5-8 word summary string. Do not add intro text, quotes, or markdown bullets.`,
+CRITICAL REQUIREMENTS:
+1. ACCURACY & LOGIC FIRST: The summary MUST directly and faithfully reflect the actual reported bugs above. Do NOT hallucinate technical terms or failures that were not explicitly in the bug logs.
+2. MAKE CLEAR SENSE: Ensure the summary is grammatically sound, coherent, and makes complete logical sense to a human reader.
+3. DOUBLE-CHECK: Before returning, double-check your summary against the reported bugs to verify it is 100% accurate and coherent.
+4. Return ONLY the final summary string. Do not add intro text, quotes, or markdown bullets.`,
       });
 
       const text = (response.text || '').trim().replace(/^["']|["']$/g, '');
@@ -178,12 +179,13 @@ export async function summarizeOverallBugsWithGemini(bugs: BugLog[] = []): Promi
 Reported Bugs List:
 ${bugLines.join('\n')}
 
-GOAL: Write a super concise, 1 to 2 sentence executive summary overview summarizing the main issues and friction points encountered across the features.
+GOAL: Write a concise 1 to 2 sentence executive overview summarizing the key issues and main points of friction reported across the system.
 
-Instructions:
-1. Be super concise, clear, and direct (under 30 words total).
-2. Highlight the main root causes or recurring failures.
-3. Return ONLY the concise summary text. Do not add intro phrases, quotes, bullet points, or markdown titles.`,
+CRITICAL REQUIREMENTS:
+1. ACCURACY & REALITY: The summary MUST accurately reflect the actual bugs listed above. Do not invent unrelated errors or fake technical jargon.
+2. SENSE & GRAMMAR: Ensure the summary is grammatically sound, clear, and makes logical sense to a human reader.
+3. DOUBLE-CHECK: Review your summary against the bug logs to ensure 100% fidelity and clarity.
+4. Return ONLY the final executive summary text.`,
       });
 
       const text = (response.text || '').trim().replace(/^["']|["']$/g, '');
@@ -196,7 +198,6 @@ Instructions:
     }
   }
 
-  // Fallback NLP synthesis if API key is not configured or fails
   const notes = bugs.map(b => b.note).filter(Boolean);
   const fallback = notes.length > 0 ? nlpCleanReword(notes, 'Overall') : '';
   summaryCache.set(cacheKey, fallback);
