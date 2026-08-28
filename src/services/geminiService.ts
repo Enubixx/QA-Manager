@@ -67,9 +67,10 @@ async function callGeminiRestApi(
   asJson: boolean = false
 ): Promise<string> {
   const cleanModel = model.replace(/^models\//, '').trim();
+  const key = apiKey.trim();
   const endpoints = [
-    `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey.trim()}`,
-    `https://generativelanguage.googleapis.com/v1/models/${cleanModel}:generateContent?key=${apiKey.trim()}`
+    `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${key}`,
+    `https://generativelanguage.googleapis.com/v1/models/${cleanModel}:generateContent?key=${key}`
   ];
 
   let lastError = '';
@@ -95,6 +96,7 @@ async function callGeminiRestApi(
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-goog-api-key': key
         },
         body: JSON.stringify(bodyPayload)
       });
@@ -122,6 +124,56 @@ async function callGeminiRestApi(
   }
 
   throw new Error(lastError || `Model ${cleanModel} could not be resolved`);
+}
+
+/**
+ * Discovers available models for a given Google Gemini API Key via ModelService.ListModels.
+ */
+export async function discoverAvailableGeminiModels(
+  apiKey: string
+): Promise<{ success: boolean; models: string[]; error?: string }> {
+  if (!apiKey || !apiKey.trim()) {
+    return { success: false, models: [], error: 'API key is empty' };
+  }
+
+  const key = apiKey.trim();
+  const endpoints = [
+    `https://generativelanguage.googleapis.com/v1beta/models?key=${key}`,
+    `https://generativelanguage.googleapis.com/v1/models?key=${key}`
+  ];
+
+  let lastError = '';
+
+  for (const url of endpoints) {
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': key
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.models && Array.isArray(data.models)) {
+          const supported = data.models
+            .filter((m: any) => m.supportedGenerationMethods?.includes('generateContent'))
+            .map((m: any) => m.name.replace(/^models\//, ''));
+          if (supported.length > 0) {
+            return { success: true, models: supported };
+          }
+        }
+      } else {
+        const errData = await response.json().catch(() => null);
+        lastError = errData?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+      }
+    } catch (err: any) {
+      lastError = err?.message || String(err);
+    }
+  }
+
+  return { success: false, models: [], error: lastError || 'No supported models found for this API key' };
 }
 
 /**
@@ -761,6 +813,42 @@ CRITICAL ARCHITECTURAL RULES:
         lastErrorMessage = err?.message || String(err);
         console.warn(`Gemini batch executive summary call failed with ${modelName}:`, err);
       }
+    }
+
+    // Dynamic auto-discovery: query Google for models supported by this user's API key
+    try {
+      const discovery = await discoverAvailableGeminiModels(userApiKey);
+      if (discovery.success && discovery.models.length > 0) {
+        for (const discoveredModel of discovery.models) {
+          if (modelsToTry.includes(discoveredModel)) continue;
+          try {
+            const text = await callGeminiRestApi(userApiKey, discoveredModel, prompt, true);
+            if (text) {
+              const parsed = JSON.parse(text);
+              const overall = typeof parsed.overallSummary === 'string' ? parsed.overallSummary.trim() : '';
+              const featureMap: Record<string, string> = {};
+              if (parsed.featureSummaries && typeof parsed.featureSummaries === 'object') {
+                for (const [k, v] of Object.entries(parsed.featureSummaries)) {
+                  if (typeof v === 'string') {
+                    featureMap[k] = v.trim();
+                  }
+                }
+              }
+              return {
+                overallSummary: overall,
+                featureSummaries: featureMap,
+                modelUsed: discoveredModel
+              };
+            }
+          } catch (e: any) {
+            lastErrorMessage = e?.message || String(e);
+          }
+        }
+      } else if (discovery.error) {
+        lastErrorMessage = discovery.error;
+      }
+    } catch (discErr: any) {
+      lastErrorMessage = discErr?.message || String(discErr);
     }
   }
 

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota } from '../types';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard } from '../utils/exportUtils';
-import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel } from '../services/geminiService';
+import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel, discoverAvailableGeminiModels } from '../services/geminiService';
 import { toBlob } from 'html-to-image';
 
 interface DashboardProps {
@@ -171,6 +171,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState<boolean>(false);
   const [tempApiKey, setTempApiKey] = useState<string>(() => getStoredGeminiApiKey());
   const [tempModel, setTempModel] = useState<string>(() => getStoredGeminiModel());
+  const [isTestingKey, setIsTestingKey] = useState<boolean>(false);
+  const [testKeyStatus, setTestKeyStatus] = useState<{ success: boolean; message: string; models?: string[] } | null>(null);
   const [summaryToast, setSummaryToast] = useState<{ type: 'success' | 'warning' | 'error'; message: string } | null>(null);
   const [isVisualSnapshotModalOpen, setIsVisualSnapshotModalOpen] = useState<boolean>(false);
   const [selectedImagePreviewUrl, setSelectedImagePreviewUrl] = useState<string | null>(null);
@@ -3110,14 +3112,65 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-[11px] font-bold text-slate-300 block">Gemini API Key</label>
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-bold text-slate-300">Gemini API Key</label>
+                <button
+                  type="button"
+                  disabled={isTestingKey || !tempApiKey.trim()}
+                  onClick={async () => {
+                    if (!tempApiKey.trim()) return;
+                    setIsTestingKey(true);
+                    setTestKeyStatus(null);
+                    try {
+                      const res = await discoverAvailableGeminiModels(tempApiKey.trim());
+                      if (res.success && res.models.length > 0) {
+                        setTestKeyStatus({
+                          success: true,
+                          message: `✅ Key verified! Found ${res.models.length} model(s): ${res.models.slice(0, 3).join(', ')}${res.models.length > 3 ? '...' : ''}`,
+                          models: res.models
+                        });
+                        const best = res.models.find(m => m.includes('2.0-flash')) || res.models.find(m => m.includes('1.5-flash')) || res.models[0];
+                        if (best) setTempModel(best);
+                      } else {
+                        setTestKeyStatus({
+                          success: false,
+                          message: `❌ ${res.error || 'No supported models found for this key.'}`
+                        });
+                      }
+                    } catch (e: any) {
+                      setTestKeyStatus({
+                        success: false,
+                        message: `❌ ${e?.message || 'Connection test failed.'}`
+                      });
+                    } finally {
+                      setIsTestingKey(false);
+                    }
+                  }}
+                  className="text-[10px] text-purple-400 hover:text-purple-300 font-semibold flex items-center gap-1 disabled:opacity-50 transition cursor-pointer"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isTestingKey ? 'animate-spin text-purple-300' : ''}`} />
+                  <span>{isTestingKey ? 'Testing...' : 'Test Key & Detect Models'}</span>
+                </button>
+              </div>
               <input
                 type="password"
                 placeholder="AIzaSy..."
                 value={tempApiKey}
-                onChange={e => setTempApiKey(e.target.value)}
+                onChange={e => {
+                  setTempApiKey(e.target.value);
+                  setTestKeyStatus(null);
+                }}
                 className="w-full bg-slate-950 border border-slate-800 focus:border-purple-500 rounded-xl px-3 py-2 text-xs text-white font-mono placeholder-slate-600 focus:outline-none"
               />
+              {testKeyStatus && (
+                <div className={`p-2 rounded-lg text-[10.5px] border leading-relaxed ${
+                  testKeyStatus.success
+                    ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                    : 'bg-rose-950/60 border-rose-500/40 text-rose-300'
+                }`}>
+                  {testKeyStatus.message}
+                </div>
+              )}
             </div>
 
             {/* Model Selector */}
@@ -3135,24 +3188,27 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   className="flex-1 bg-slate-950 border border-slate-800 focus:border-purple-500 rounded-xl px-3 py-2 text-xs text-white font-mono placeholder-slate-600 focus:outline-none"
                 />
                 <select
-                  value={GEMINI_MODELS.some(m => m.id === tempModel) ? tempModel : 'custom'}
-                  onChange={e => {
-                    if (e.target.value !== 'custom') {
-                      setTempModel(e.target.value);
-                    }
-                  }}
-                  className="bg-slate-900 border border-slate-800 focus:border-purple-500 rounded-xl px-2.5 py-2 text-xs text-purple-300 font-medium focus:outline-none cursor-pointer"
+                  value={tempModel}
+                  onChange={e => setTempModel(e.target.value)}
+                  className="bg-slate-900 border border-slate-800 focus:border-purple-500 rounded-xl px-2.5 py-2 text-xs text-purple-300 font-medium focus:outline-none cursor-pointer max-w-[150px] truncate"
                 >
-                  {GEMINI_MODELS.map(m => (
-                    <option key={m.id} value={m.id} className="bg-slate-900 text-slate-200">
-                      {m.id}
-                    </option>
-                  ))}
-                  <option value="custom" className="bg-slate-900 text-slate-400">Custom...</option>
+                  {testKeyStatus?.models && testKeyStatus.models.length > 0 ? (
+                    testKeyStatus.models.map(m => (
+                      <option key={m} value={m} className="bg-slate-900 text-slate-200">
+                        {m}
+                      </option>
+                    ))
+                  ) : (
+                    GEMINI_MODELS.map(m => (
+                      <option key={m.id} value={m.id} className="bg-slate-900 text-slate-200">
+                        {m.id}
+                      </option>
+                    ))
+                  )}
                 </select>
               </div>
               <p className="text-[10.5px] text-slate-400">
-                Default: <code className="text-purple-300 font-mono">gemini-2.0-flash</code>. You can choose a preset or type any model ID.
+                Default: <code className="text-purple-300 font-mono">gemini-2.0-flash</code>. You can select an auto-detected model or type any model ID.
               </p>
             </div>
 
