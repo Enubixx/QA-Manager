@@ -81,18 +81,14 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     };
   }
 
-  // Clear legacy localStorage tester info so sessions never persist across force quit
+  // Clear legacy localStorage tester info so sessions require setup on fresh launch
   useEffect(() => {
     localStorage.removeItem('qa_tester_name');
     localStorage.removeItem('qa_device_name');
 
-    // On cold start / fresh launch, clear any leftover in-progress sessions for this device
+    // On cold start / fresh launch, require setup screen without erasing past run results
     if (!sessionStorage.getItem('qa_session_initialized')) {
       sessionStorage.setItem('qa_session_initialized', 'true');
-      const inProgressRun = testRuns.find(r => r.status === 'in_progress' && (r.deviceId === deviceId || r.id.includes(deviceId)));
-      if (inProgressRun) {
-        onRestartRun(inProgressRun.planId || (currentPlan ? currentPlan.id : ''));
-      }
       setShowSetupModal(true);
       setInputReporterName('');
       setInputDeviceName('');
