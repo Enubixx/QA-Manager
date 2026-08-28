@@ -238,8 +238,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
     });
   });
 
-  // Today ISO Date string (YYYY-MM-DD)
-  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  // Today Local Date string (YYYY-MM-DD)
+  const todayStr = useMemo(() => getLocalDateStr(new Date()), []);
 
   // Selected Daily QA Session Date (defaults to Today, or specific saved day YYYY-MM-DD, or 'all')
   const [selectedDailySessionDate, setSelectedDailySessionDate] = useState<string>(todayStr);
@@ -252,12 +252,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const todayLabel = `Today (${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })})`;
     datesMap[todayStr] = { dateStr: todayStr, label: todayLabel, stepCount: 0, bugCount: 0 };
 
+    const formatDisplayLabel = (dStr: string) => {
+      const [y, m, d] = dStr.split('-').map(Number);
+      if (y && m && d) {
+        return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      }
+      return dStr;
+    };
+
     completedRuns.forEach(run => {
       Object.values(run.results || {}).forEach(res => {
         if (!res.timestamp || res.status === 'pending') return;
-        const dStr = res.timestamp.slice(0, 10);
+        const dStr = getLocalDateStr(res.timestamp);
+        if (!dStr) return;
         if (!datesMap[dStr]) {
-          const label = new Date(dStr + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+          const label = dStr === todayStr ? todayLabel : formatDisplayLabel(dStr);
           datesMap[dStr] = { dateStr: dStr, label, stepCount: 0, bugCount: 0 };
         }
         datesMap[dStr].stepCount += 1;
@@ -266,9 +275,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
     bugLogs.forEach(b => {
       if (!b.timestamp) return;
-      const dStr = b.timestamp.slice(0, 10);
+      const dStr = getLocalDateStr(b.timestamp);
+      if (!dStr) return;
       if (!datesMap[dStr]) {
-        const label = new Date(dStr + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        const label = dStr === todayStr ? todayLabel : formatDisplayLabel(dStr);
         datesMap[dStr] = { dateStr: dStr, label, stepCount: 0, bugCount: 0 };
       }
       datesMap[dStr].bugCount += 1;
@@ -365,12 +375,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const historicalTimelinePoints = useMemo(() => {
     const pointsMap: Record<string, { dateStr: string; displayDate: string; totalSteps: number; green: number; yellow: number; red: number; bugs: number }> = {};
 
+    const formatDisplayLabel = (dStr: string) => {
+      const [y, m, d] = dStr.split('-').map(Number);
+      if (y && m && d) {
+        return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      }
+      return dStr;
+    };
+
     completedRuns.forEach(run => {
       Object.values(run.results || {}).forEach(res => {
         if (!res.timestamp || res.status === 'pending') return;
-        const dStr = res.timestamp.slice(0, 10);
+        const dStr = getLocalDateStr(res.timestamp);
+        if (!dStr) return;
         if (!pointsMap[dStr]) {
-          const displayDate = new Date(dStr + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+          const displayDate = formatDisplayLabel(dStr);
           pointsMap[dStr] = { dateStr: dStr, displayDate, totalSteps: 0, green: 0, yellow: 0, red: 0, bugs: 0 };
         }
         pointsMap[dStr].totalSteps += 1;
@@ -382,9 +401,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
     bugLogs.forEach(bug => {
       if (!bug.timestamp) return;
-      const dStr = bug.timestamp.slice(0, 10);
+      const dStr = getLocalDateStr(bug.timestamp);
+      if (!dStr) return;
       if (!pointsMap[dStr]) {
-        const displayDate = new Date(dStr + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        const displayDate = formatDisplayLabel(dStr);
         pointsMap[dStr] = { dateStr: dStr, displayDate, totalSteps: 0, green: 0, yellow: 0, red: 0, bugs: 0 };
       }
       pointsMap[dStr].bugs += 1;
@@ -470,7 +490,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         }
 
         const runDate = (isCompleted && run.completedAt) ? new Date(run.completedAt) : (run.startedAt ? new Date(run.startedAt) : new Date());
-        const dateStr = runDate.toISOString().split('T')[0];
+        const dateStr = getLocalDateStr(runDate);
         const timeFormatted = runDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
         const resultsArray = Object.values(run.results || {});
