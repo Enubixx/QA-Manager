@@ -1097,24 +1097,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 <div className="text-xs font-medium text-emerald-100 leading-normal">{currentStep.expectedOutcome}</div>
               </div>
 
-              {/* Reviewing Recorded Step Banner */}
-              {hasExistingResult && (
-                <div className="bg-indigo-500/15 border border-indigo-400/30 backdrop-blur-md rounded-2xl p-2.5 text-[11px] font-semibold text-indigo-200 flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 truncate">
-                    <Undo2 className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />
-                    <span className="truncate">Reviewing recorded step. Modify status below if needed.</span>
-                  </div>
-                  <span className={`px-2 py-0.5 rounded-lg text-[10px] font-extrabold uppercase shrink-0 ${
-                    currentStepResult?.status === 'green'
-                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                      : currentStepResult?.status === 'yellow'
-                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                      : 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
-                  }`}>
-                    Saved: {currentStepResult?.status || 'recorded'}
-                  </span>
-                </div>
-              )}
 
               {/* Defects Logged on this Step (with 1-click removal for mistakes) */}
               {currentStepBugs.length > 0 && (
