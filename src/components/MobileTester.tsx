@@ -452,25 +452,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     setShowSetupModal(true);
   };
 
-  // Whenever on the setup/selection screen, ensure device locks for this session are suspended/released
-  useEffect(() => {
-    if (showSetupModal && onSaveDevice) {
-      const storedDev = getStoredDeviceName();
-      const storedTester = getStoredTesterName();
-      devices.forEach(d => {
-        const isMatchingTester = storedTester && d.activeTesterName && d.activeTesterName.toLowerCase().trim() === storedTester.toLowerCase().trim();
-        const isMatchingDevice = storedDev && (d.name.toLowerCase().trim() === storedDev.toLowerCase().trim() || d.id === storedDev);
-        if ((isMatchingTester || isMatchingDevice) && d.activeTesterName) {
-          onSaveDevice({
-            ...d,
-            activeRunId: undefined,
-            activeTesterName: undefined
-          });
-        }
-      });
-    }
-  }, [showSetupModal]);
-
   // Bug Modal state
   const [showBugModal, setShowBugModal] = useState(false);
   const [bugNote, setBugNote] = useState('');
@@ -592,6 +573,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     if (currentPlan) {
       localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updatedRun));
     }
+
+    // Sync in-progress run to state & Supabase immediately so dashboard reflects it
+    onUpdateRun(updatedRun);
 
     // Lock newly chosen device
     if (matchedDev && onSaveDevice) {

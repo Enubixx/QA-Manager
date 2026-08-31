@@ -219,32 +219,7 @@ export function App() {
     localStorage.setItem('qa_populated_devices', JSON.stringify(populatedDevices));
   }, [populatedDevices]);
 
-  // Automatically audit device "In Use" locks: if a device has activeRunId but no in_progress test run exists, release it
-  useEffect(() => {
-    if (devices.length === 0) return;
-    let hasChanges = false;
-    const cleanedDevices = devices.map(d => {
-      if (!d.activeRunId && !d.activeTesterName) return d;
-      // Check if there is an actual in_progress run for this device
-      const hasActiveInProgressRun = testRuns.some(r => 
-        r.status === 'in_progress' && 
-        (r.id === d.activeRunId || (r.deviceId && (r.deviceId === d.id || r.deviceId.includes(d.id))) || (r.deviceName && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim()))
-      );
-      if (!hasActiveInProgressRun) {
-        hasChanges = true;
-        const freed = { ...d, activeRunId: undefined, activeTesterName: undefined };
-        syncDeviceToSupabase(freed);
-        return freed;
-      }
-      return d;
-    });
 
-    if (hasChanges) {
-      setDevices(cleanedDevices);
-      localStorage.setItem('qa_devices_list', JSON.stringify(cleanedDevices));
-      syncDevicesListToCloud(cleanedDevices);
-    }
-  }, [testRuns, devices]);
 
   useEffect(() => {
     localStorage.setItem('qa_populated_features', JSON.stringify(populatedFeatures));

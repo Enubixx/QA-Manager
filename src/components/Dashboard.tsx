@@ -102,7 +102,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [testerViewMode, setTesterViewMode] = useState<'all' | 'active'>('all');
   const [searchTesterQuery, setSearchTesterQuery] = useState('');
 
-  // Determine active testers currently running a test session on a device (strictly aligned with device status)
+  // Determine active testers currently running a test session on a device
   const activeTesterMap = useMemo(() => {
     const map = new Map<string, { deviceName: string; planName?: string; runId?: string }>();
     devices.forEach(d => {
@@ -111,11 +111,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
           r.status === 'in_progress' && 
           (r.id === d.activeRunId || r.deviceId === d.id || (r.deviceName && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim()))
         );
-        if (activeRun) {
-          map.set(d.activeTesterName.toLowerCase().trim(), {
-            deviceName: d.name,
-            planName: activeRun.planName,
-            runId: d.activeRunId || activeRun.id
+        map.set(d.activeTesterName.toLowerCase().trim(), {
+          deviceName: d.name,
+          planName: activeRun?.planName,
+          runId: d.activeRunId || activeRun?.id
+        });
+      }
+    });
+    testRuns.forEach(r => {
+      if (r.status === 'in_progress' && r.testerName && r.testerName.trim()) {
+        const key = r.testerName.toLowerCase().trim();
+        if (!map.has(key)) {
+          map.set(key, {
+            deviceName: r.deviceName || 'Mobile Device',
+            planName: r.planName,
+            runId: r.id
           });
         }
       }
@@ -2219,15 +2229,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <div className="space-y-4">
               {(() => {
                 const activeLiveRuns = testRuns.filter(run => {
-                  const effectiveStatus = getEffectiveRunStatus(run);
-                  if (effectiveStatus !== 'in_progress') return false;
-                  // Must correspond to an active locked device
-                  const dev = devices.find(d => 
-                    d.id === run.deviceId || 
-                    (run.deviceName && d.name.toLowerCase().trim() === run.deviceName.toLowerCase().trim()) || 
-                    d.activeRunId === run.id
-                  );
-                  return dev && Boolean(dev.activeTesterName);
+                  return getEffectiveRunStatus(run) === 'in_progress';
                 });
 
                 if (activeLiveRuns.length === 0) {
