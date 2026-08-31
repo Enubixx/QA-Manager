@@ -512,10 +512,16 @@ export function App() {
     deleteArchivedRunFromSupabase(runId);
 
     // Release device if locked by this deleted run
+    const deletedRun = [...testRuns, ...archivedRuns].find(r => r.id === runId);
     setDevices(prev => {
       let changed = false;
       const next = prev.map(d => {
-        if (d.activeRunId === runId) {
+        const matchesRunId = d.activeRunId === runId;
+        const matchesTesterAndDev = deletedRun && (
+          (deletedRun.testerName && d.activeTesterName && d.activeTesterName.toLowerCase().trim() === deletedRun.testerName.toLowerCase().trim()) &&
+          (deletedRun.deviceName && d.name && d.name.toLowerCase().trim() === deletedRun.deviceName.toLowerCase().trim())
+        );
+        if (matchesRunId || matchesTesterAndDev) {
           changed = true;
           const released = { ...d, activeRunId: undefined, activeTesterName: undefined };
           syncDeviceToSupabase(released);

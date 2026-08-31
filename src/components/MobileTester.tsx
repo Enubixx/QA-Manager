@@ -370,29 +370,34 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   const [showQuitConfirmModal, setShowQuitConfirmModal] = useState(false);
 
   const handleQuitAndReleaseSession = () => {
-    // 1. Release active lock on target device
+    // 1. Release active lock on target device and tester
     const currentDeviceName = sessionStorage.getItem('qa_device_name') || activeRun?.deviceName || inputDeviceName;
-    if (currentDeviceName && onSaveDevice) {
-      const matchedDev = devices.find(d => 
-        d.name.toLowerCase().trim() === currentDeviceName.toLowerCase().trim() ||
-        (activeRun && d.activeRunId === activeRun.id)
-      );
-      if (matchedDev) {
-        onSaveDevice({
-          ...matchedDev,
-          activeRunId: undefined,
-          activeTesterName: undefined
-        });
-      }
+    const currentTesterName = sessionStorage.getItem('qa_tester_name') || activeRun?.testerName || inputReporterName;
+
+    if (onSaveDevice) {
+      devices.forEach(d => {
+        const matchesName = currentDeviceName && d.name.toLowerCase().trim() === currentDeviceName.toLowerCase().trim();
+        const matchesRunId = activeRun && d.activeRunId === activeRun.id;
+        const matchesDeviceId = (activeRun?.deviceId && d.id === activeRun.deviceId) || (d.id === deviceId);
+        const matchesTester = currentTesterName && d.activeTesterName && d.activeTesterName.toLowerCase().trim() === currentTesterName.toLowerCase().trim();
+
+        if (matchesName || matchesRunId || matchesDeviceId || matchesTester) {
+          onSaveDevice({
+            ...d,
+            activeRunId: undefined,
+            activeTesterName: undefined
+          });
+        }
+      });
     }
 
     // 2. Delete active uncompleted run session to restore test quota
     const runsToDelete = testRuns.filter(r => 
       r.status !== 'completed' && (
         (activeRun && r.id === activeRun.id) ||
-        (currentPlan && r.planId === currentPlan.id && (
-          !r.deviceId || r.deviceId === deviceId || (currentDeviceName && r.deviceName === currentDeviceName)
-        ))
+        (currentTesterName && r.testerName && r.testerName.toLowerCase().trim() === currentTesterName.toLowerCase().trim()) ||
+        (currentDeviceName && r.deviceName && r.deviceName.toLowerCase().trim() === currentDeviceName.toLowerCase().trim()) ||
+        (currentPlan && r.planId === currentPlan.id)
       )
     );
 
