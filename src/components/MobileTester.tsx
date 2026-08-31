@@ -373,20 +373,61 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     }
 
     // 2. Delete active uncompleted run session to restore test quota
-    if (activeRun && onDeleteRun) {
-      onDeleteRun(activeRun.id);
+    const runsToDelete = testRuns.filter(r => 
+      r.status !== 'completed' && (
+        (activeRun && r.id === activeRun.id) ||
+        (currentPlan && r.planId === currentPlan.id && (
+          !r.deviceId || r.deviceId === deviceId || (currentDeviceName && r.deviceName === currentDeviceName)
+        ))
+      )
+    );
+
+    if (onDeleteRun) {
+      if (activeRun?.id) onDeleteRun(activeRun.id);
+      runsToDelete.forEach(r => {
+        if (r.id !== activeRun?.id) onDeleteRun(r.id);
+      });
     }
 
-    // 3. Clear session storage & reset setup state
+    // 3. Delete any bugs logged during this in-progress session
+    if (onDeleteBug) {
+      if (activeRun?.bugLogs && activeRun.bugLogs.length > 0) {
+        activeRun.bugLogs.forEach(b => {
+          if (b.id) onDeleteBug(b.id);
+        });
+      }
+      if (bugLogs && bugLogs.length > 0 && activeRun?.id) {
+        const matchingBugs = bugLogs.filter(b => b.testRunId === activeRun.id);
+        matchingBugs.forEach(b => onDeleteBug(b.id));
+      }
+    }
+
+    // 4. Remove all in-progress run caches from localStorage
+    try {
+      if (currentPlan) {
+        localStorage.removeItem(`qa_in_progress_run_${currentPlan.id}`);
+      }
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && (k.startsWith('qa_in_progress_run_') || k.startsWith('qa_active_run_'))) {
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach(k => localStorage.removeItem(k));
+    } catch (e) {}
+
+    // 5. Clear session storage & reset setup state
     sessionStorage.removeItem('qa_tester_name');
     sessionStorage.removeItem('qa_device_name');
     setInputReporterName('');
     setInputDeviceName('');
-    setCompletedRunSummary(null);
+    setActiveStepIndex(0);
     setSelectedStatus(null);
+    setCompletedRunSummary(null);
     setShowQuitConfirmModal(false);
 
-    // 4. Return to setup screen
+    // 6. Return to setup screen
     setShowSetupModal(true);
   };
 
@@ -480,16 +521,27 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
     onAddPopulatedDevice(trimmedDevice);
 
+    const isBrandNew = !activeRun || activeRun.status === 'not_started' || Object.keys(activeRun.results || {}).length === 0;
+
     const updatedRun: TestRun = {
       ...activeRun,
+      id: isBrandNew ? `run-${currentPlan.id}-${deviceId}-${Date.now().toString(36)}` : activeRun.id,
       planId: currentPlan.id,
       planName: currentPlan.name,
       deviceId: deviceId,
       testerName: trimmedReporter,
       deviceName: trimmedDevice,
-      status: activeRun.status === 'not_started' ? 'in_progress' : activeRun.status,
-      startedAt: (activeRun.status === 'not_started' || !activeRun.startedAt) ? new Date().toISOString() : activeRun.startedAt
+      status: 'in_progress',
+      currentStepIndex: isBrandNew ? 0 : (activeRun.currentStepIndex || 0),
+      results: isBrandNew ? {} : (activeRun.results || {}),
+      bugLogs: isBrandNew ? [] : (activeRun.bugLogs || []),
+      startedAt: isBrandNew ? new Date().toISOString() : (activeRun.startedAt || new Date().toISOString())
     };
+
+    if (isBrandNew) {
+      setActiveStepIndex(0);
+      setSelectedStatus(null);
+    }
 
     // Save in-progress run to localStorage immediately
     if (currentPlan) {
