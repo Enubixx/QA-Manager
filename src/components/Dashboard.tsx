@@ -1,7 +1,7 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota } from '../types';
-import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer } from 'lucide-react';
+import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard } from '../utils/exportUtils';
 import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel, discoverAvailableGeminiModels } from '../services/geminiService';
 import { toBlob } from 'html-to-image';
@@ -1380,11 +1380,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </div>
               ) : (
                 devices.map(device => {
-                  const unassignedPlans = testPlans.filter(p => !device.quotas.some(q => q.planId === p.id));
-                  const selectedPlanForDev = (quotaPlanMap[device.id] && unassignedPlans.some(p => p.id === quotaPlanMap[device.id]))
-                    ? quotaPlanMap[device.id]
-                    : (unassignedPlans[0]?.id || '');
-                  const selectedRunsForDev = quotaRunsMap[device.id] || 3;
+                  const assignedQuota = device.quotas && device.quotas.length > 0 ? device.quotas[0] : null;
+                  const assignedPlan = assignedQuota ? testPlans.find(p => p.id === assignedQuota.planId) : null;
+                  const targetRuns = assignedQuota ? assignedQuota.targetRunsPerDay : 3;
+                  const doneToday = (assignedQuota && todayRunsMap[device.id] && todayRunsMap[device.id][assignedQuota.planId]) || 0;
+                  const remaining = assignedQuota ? Math.max(0, targetRuns - doneToday) : 0;
+                  const pct = assignedQuota ? Math.min(100, Math.round((doneToday / targetRuns) * 100)) : 0;
+
                   const activeRunForDevice = testRuns.find(r => 
                     r.status === 'in_progress' && 
                     (r.id === device.activeRunId || (r.deviceId && (r.deviceId === device.id || r.deviceId.includes(device.id))) || (r.deviceName && r.deviceName.toLowerCase().trim() === device.name.toLowerCase().trim()))
@@ -1466,128 +1468,92 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         </div>
                       </div>
 
-                      {/* Quotas List for this device */}
-                      <div className="bg-slate-950/70 rounded-xl p-3.5 border border-slate-800 space-y-3">
-                        <div className="text-xs font-bold text-slate-300 flex items-center justify-between">
-                          <span>Daily Test Plan Quotas</span>
-                          <span className="text-[10px] text-purple-400 font-mono font-normal">Controls Mobile Availability</span>
+                      {/* Dedicated Single Test Plan Configuration */}
+                      <div className="bg-slate-950/70 rounded-2xl p-4 border border-slate-800 space-y-3.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                            <Layers className="w-3.5 h-3.5 text-purple-400" />
+                            <span>Configured Test Plan</span>
+                          </span>
+                          <span className="text-[10px] text-purple-400 font-mono">1 Plan Per Device</span>
                         </div>
 
-                        {device.quotas.length === 0 ? (
-                          <div className="text-[11px] text-slate-500 italic">No plan quotas set for this device. Assign a plan below.</div>
-                        ) : (
-                          <div className="space-y-2">
-                            {device.quotas.map(quota => {
-                              const plan = testPlans.find(p => p.id === quota.planId);
-                              const doneToday = (todayRunsMap[device.id] && todayRunsMap[device.id][quota.planId]) || 0;
-                              const remaining = Math.max(0, quota.targetRunsPerDay - doneToday);
-                              const pct = Math.min(100, Math.round((doneToday / quota.targetRunsPerDay) * 100));
+                        {/* Plan Selector */}
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-semibold text-slate-400 block">
+                            Assigned Plan for this Device:
+                          </label>
+                          <select
+                            value={assignedQuota?.planId || ''}
+                            onChange={e => {
+                              const newPlanId = e.target.value;
+                              if (!newPlanId) {
+                                if (onSaveDevice) onSaveDevice({ ...device, quotas: [] });
+                              } else {
+                                const currentTarget = assignedQuota?.targetRunsPerDay || 3;
+                                if (onSaveDevice) onSaveDevice({ ...device, quotas: [{ planId: newPlanId, targetRunsPerDay: currentTarget }] });
+                              }
+                            }}
+                            className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none focus:border-purple-500 cursor-pointer shadow-inner"
+                          >
+                            <option value="">-- No Test Plan Assigned --</option>
+                            {testPlans.map(p => (
+                              <option key={p.id} value={p.id}>
+                                {p.name} ({p.steps.length} steps)
+                              </option>
+                            ))}
+                          </select>
+                        </div>
 
-                              return (
-                                <div key={quota.planId} className="bg-slate-900/80 rounded-lg p-2.5 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-                                  <div className="flex-1 space-y-1">
-                                    <div className="flex items-center justify-between font-bold flex-wrap gap-2">
-                                      <span className="text-white">{plan?.name || `Plan (${quota.planId})`}</span>
-                                      <div className="flex items-center gap-1.5">
-                                        <span className="text-slate-300 font-mono">
-                                          {doneToday} / 
-                                        </span>
-                                        <input
-                                          type="number"
-                                          min="1"
-                                          max="50"
-                                          value={quota.targetRunsPerDay}
-                                          onChange={e => {
-                                            const val = Math.max(1, parseInt(e.target.value) || 1);
-                                            const nextQuotas = device.quotas.map(q => q.planId === quota.planId ? { ...q, targetRunsPerDay: val } : q);
-                                            if (onSaveDevice) onSaveDevice({ ...device, quotas: nextQuotas });
-                                          }}
-                                          className="w-12 bg-slate-950 border border-slate-700 text-xs text-purple-300 font-mono rounded px-1.5 py-0.5 text-center font-bold focus:outline-none focus:border-purple-500"
-                                          title="Edit target runs per day"
-                                        />
-                                        <span className="text-slate-400 font-mono text-[11px]">runs</span>
-                                        {remaining > 0 ? (
-                                          <span className="text-purple-400 ml-1 font-sans font-extrabold text-[11px]">({remaining} left ⚡)</span>
-                                        ) : (
-                                          <span className="text-emerald-400 ml-1 font-sans font-extrabold text-[11px]">(Done ✅)</span>
-                                        )}
-                                      </div>
-                                    </div>
+                        {/* Quota & Today's Progress */}
+                        {assignedQuota && assignedPlan ? (
+                          <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                            <div className="flex items-center justify-between flex-wrap gap-2 text-xs">
+                              <div className="flex items-center gap-2">
+                                <span className="text-[11px] text-slate-400 font-medium">Daily Target Runs:</span>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max="50"
+                                  value={assignedQuota.targetRunsPerDay}
+                                  onChange={e => {
+                                    const val = Math.max(1, parseInt(e.target.value) || 1);
+                                    if (onSaveDevice) {
+                                      onSaveDevice({
+                                        ...device,
+                                        quotas: [{ planId: assignedQuota.planId, targetRunsPerDay: val }]
+                                      });
+                                    }
+                                  }}
+                                  className="w-14 bg-slate-900 border border-slate-700 text-xs text-purple-300 font-mono font-bold rounded-lg px-2 py-1 text-center focus:outline-none focus:border-purple-500"
+                                  title="Edit daily quota"
+                                />
+                                <span className="text-[11px] text-slate-500 font-mono">runs/day</span>
+                              </div>
 
-                                    {/* Progress Bar */}
-                                    <div className="w-full h-1.5 bg-slate-950 rounded-full overflow-hidden">
-                                      <div
-                                        className={`h-full transition-all duration-500 ${remaining === 0 ? 'bg-emerald-400' : 'bg-purple-500'}`}
-                                        style={{ width: `${pct}%` }}
-                                      />
-                                    </div>
-                                  </div>
-
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const nextQuotas = device.quotas.filter(q => q.planId !== quota.planId);
-                                      if (onSaveDevice) onSaveDevice({ ...device, quotas: nextQuotas });
-                                    }}
-                                    className="p-1 text-slate-500 hover:text-rose-400 self-end sm:self-center transition-colors"
-                                    title="Remove Quota"
-                                  >
-                                    <X className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-
-                        {/* Add/Edit Quota Inline Form */}
-                        {unassignedPlans.length > 0 ? (
-                          <div className="pt-2 border-t border-slate-800/60 flex flex-wrap items-center gap-2">
-                            <select
-                              value={selectedPlanForDev}
-                              onChange={e => setQuotaPlanMap(prev => ({ ...prev, [device.id]: e.target.value }))}
-                              className="bg-slate-900 border border-slate-800 text-xs text-white rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-purple-500"
-                            >
-                              {unassignedPlans.map(p => (
-                                <option key={p.id} value={p.id}>{p.name}</option>
-                              ))}
-                            </select>
-
-                            <div className="flex items-center gap-1">
-                              <span className="text-[11px] text-slate-400">Target Runs/Day:</span>
-                              <input
-                                type="number"
-                                min="1"
-                                max="50"
-                                value={selectedRunsForDev}
-                                onChange={e => setQuotaRunsMap(prev => ({ ...prev, [device.id]: parseInt(e.target.value) || 1 }))}
-                                className="w-16 bg-slate-900 border border-slate-800 text-xs text-white font-mono rounded-lg px-2 py-1 focus:outline-none focus:border-purple-500 text-center"
-                              />
+                              <div className="flex items-center gap-1.5 font-mono text-xs">
+                                <span className="text-slate-300 font-bold">{doneToday} / {targetRuns}</span>
+                                {remaining > 0 ? (
+                                  <span className="text-purple-400 font-sans font-extrabold text-[11px]">({remaining} left today ⚡)</span>
+                                ) : (
+                                  <span className="text-emerald-400 font-sans font-extrabold text-[11px]">(Target Reached ✅)</span>
+                                )}
+                              </div>
                             </div>
 
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (!selectedPlanForDev) return;
-                                const nextQuotas = [...device.quotas, { planId: selectedPlanForDev, targetRunsPerDay: selectedRunsForDev }];
-                                if (onSaveDevice) onSaveDevice({ ...device, quotas: nextQuotas });
-                                setQuotaPlanMap(prev => {
-                                  const copy = { ...prev };
-                                  delete copy[device.id];
-                                  return copy;
-                                });
-                              }}
-                              className="px-3 py-1 bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 border border-purple-400/40 text-xs font-bold rounded-lg transition-all cursor-pointer"
-                            >
-                              + Set Quota
-                            </button>
+                            {/* Progress Bar */}
+                            <div className="w-full h-2 bg-slate-950 rounded-full overflow-hidden border border-white/5">
+                              <div
+                                className={`h-full transition-all duration-500 ${remaining === 0 ? 'bg-emerald-400' : 'bg-gradient-to-r from-purple-500 to-indigo-500'}`}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
                           </div>
-                        ) : testPlans.length > 0 ? (
-                          <div className="pt-2 border-t border-slate-800/60 text-[11px] text-emerald-400 font-semibold flex items-center gap-1">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>All test plans have quotas configured for this device.</span>
+                        ) : (
+                          <div className="pt-2 border-t border-slate-800/80 text-[11px] text-amber-300/80 font-medium flex items-center gap-1.5">
+                            <span>⚠️ Assign a test plan above to make this device active for testing on the mobile app.</span>
                           </div>
-                        ) : null}
+                        )}
                       </div>
 
                     </div>

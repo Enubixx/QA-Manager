@@ -265,7 +265,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   // Professional Bottom-Sheet Custom Selectors (replaces raw OS debug menus)
   const [openTesterPickerModal, setOpenTesterPickerModal] = useState<boolean>(false);
   const [openDevicePickerModal, setOpenDevicePickerModal] = useState<boolean>(false);
-  const [openPlanPickerModal, setOpenPlanPickerModal] = useState<boolean>(false);
 
   // Computed helper for currently selected tester profile
   const selectedTesterProfile = useMemo(() => {
@@ -872,14 +871,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 <span>Plan:</span>
               </div>
               <div className="relative flex-1 max-w-[210px]">
-                <button
-                  type="button"
-                  onClick={() => setOpenPlanPickerModal(true)}
-                  className="w-full flex items-center justify-between gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-white/15 text-xs font-bold text-white shadow-inner transition-all truncate group cursor-pointer active:scale-95"
-                >
-                  <span className="truncate">{currentPlan?.name || 'Select Plan...'}</span>
-                  <ChevronDown className="w-3.5 h-3.5 text-purple-400 group-hover:text-purple-300 flex-shrink-0 transition-transform" />
-                </button>
+                <div className="w-full flex items-center justify-between gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-white/15 text-xs font-bold text-white shadow-inner truncate">
+                  <span className="truncate">{currentPlan?.name || 'No Plan Assigned'}</span>
+                </div>
               </div>
             </div>
 
@@ -1589,40 +1583,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   )}
                 </div>
 
-                {/* Test Plan Walkthrough Custom Trigger (Field 3) */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
-                    <Layers className="w-3.5 h-3.5 text-purple-400" />
-                    Test Plan Walkthrough
-                  </label>
-                  {availablePlans.length > 0 ? (
-                    <button
-                      type="button"
-                      onClick={() => setOpenPlanPickerModal(true)}
-                      className="w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left group cursor-pointer active:scale-[0.99] bg-slate-900/90 border-purple-500/40 shadow-md ring-1 ring-purple-500/20"
-                    >
-                      <div className="flex items-center gap-3 truncate">
-                        <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-600 text-white flex items-center justify-center font-bold text-xs shadow flex-shrink-0">
-                          <Layers className="w-4 h-4 text-purple-200" />
-                        </div>
-                        <div className="truncate">
-                          <div className="text-xs font-extrabold text-white truncate">
-                            {currentPlan?.name || 'Choose Test Plan...'}
-                          </div>
-                          <div className="text-[10px] text-purple-300 font-mono truncate">
-                            {currentPlan ? `${currentPlan.steps.length} Steps • Tap to switch plan` : 'Tap to select plan'}
-                          </div>
-                        </div>
-                      </div>
-                      <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-white flex-shrink-0 transition-transform" />
-                    </button>
-                  ) : (
-                    <div className="p-3 bg-amber-500/15 border border-amber-500/30 rounded-2xl text-amber-200 text-xs font-semibold text-center leading-relaxed">
-                      ⚠️ No test plans created yet. Create a test plan on the Web Dashboard.
-                    </div>
-                  )}
-                </div>
-
               </div>
 
               <button
@@ -1635,72 +1595,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
             </form>
 
-          </div>
-        )}
-
-        {/* Custom Plan Picker Bottom Sheet */}
-        {openPlanPickerModal && (
-          <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-xl z-[80] flex flex-col justify-end p-3 animate-in fade-in duration-200 rounded-[44px]">
-            <div className="bg-slate-900/95 border border-white/20 rounded-3xl p-5 space-y-4 max-h-[85%] flex flex-col shadow-2xl animate-in slide-in-from-bottom duration-200">
-              <div className="w-10 h-1 bg-white/25 rounded-full mx-auto" />
-              <div className="flex items-center justify-between pb-2 border-b border-white/10">
-                <div>
-                  <h3 className="text-sm font-black text-white flex items-center gap-2">
-                    <Layers className="w-4 h-4 text-purple-400" />
-                    <span>Select Test Plan</span>
-                  </h3>
-                  <p className="text-[11px] text-slate-400">Available plans for this device</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setOpenPlanPickerModal(false)}
-                  className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white transition cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="space-y-2 overflow-y-auto max-h-[350px] pr-1">
-                {availablePlans.map(plan => {
-                  const isSelected = plan.id === currentPlan?.id;
-                  return (
-                    <button
-                      key={plan.id}
-                      type="button"
-                      onClick={() => {
-                        setCompletedRunSummary(null);
-                        setSelectedStatus(null);
-                        onSelectPlan(plan.id);
-                        setOpenPlanPickerModal(false);
-                        setShowSetupModal(true);
-                      }}
-                      className={`w-full p-3.5 rounded-2xl text-left border flex items-center justify-between gap-3 transition-all cursor-pointer ${
-                        isSelected
-                          ? 'bg-gradient-to-r from-purple-900/40 to-indigo-900/40 border-purple-400/50 shadow-lg ring-1 ring-purple-500/40 scale-[1.01]'
-                          : 'bg-slate-950/60 border-white/10 hover:bg-slate-950/90 hover:border-white/25'
-                      }`}
-                    >
-                      <div className="space-y-1 truncate flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-black text-white">{plan.name}</span>
-                          <span className="px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 font-mono text-[9px] font-bold border border-purple-500/30">
-                            {plan.steps.length} Steps
-                          </span>
-                        </div>
-                        {plan.description && (
-                          <p className="text-[11px] text-slate-400 truncate">{plan.description}</p>
-                        )}
-                      </div>
-                      {isSelected && (
-                        <div className="w-6 h-6 rounded-full bg-purple-500 text-white flex items-center justify-center flex-shrink-0 shadow">
-                          <Check className="w-3.5 h-3.5" />
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
           </div>
         )}
 
