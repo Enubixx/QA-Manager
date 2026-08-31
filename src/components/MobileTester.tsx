@@ -202,9 +202,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     };
   }
 
-  // Selectable devices: Ready, not locked by another tester, and MUST have a quota set for this plan
+  // Selectable devices: Ready, not locked by another tester, and has configured daily test quota(s)
   const selectableDevices = useMemo(() => {
-    if (!currentPlan) return devices;
     const currentSavedName = getStoredDeviceName() || inputDeviceName || '';
 
     return devices.filter(dev => {
@@ -219,18 +218,23 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         }
       }
 
-      // "The only test plan that should be available to that Device is the one it has a quota set for"
-      const quota = dev.quotas?.find(q => q.planId === currentPlan.id);
-      if (!quota || quota.targetRunsPerDay <= 0) {
+      // If device has no quotas at all, it cannot run tests
+      if (!dev.quotas || dev.quotas.length === 0) {
         return false;
       }
 
-      const doneToday = (todayRunsMap[dev.id] && todayRunsMap[dev.id][currentPlan.id]) || 0;
-      if (doneToday >= quota.targetRunsPerDay) return false;
+      const activeQuotas = dev.quotas.filter(q => q.targetRunsPerDay > 0);
+      if (activeQuotas.length === 0) return false;
 
-      return true;
+      // Device must have at least one plan quota with remaining runs today
+      const hasRemaining = activeQuotas.some(q => {
+        const doneToday = (todayRunsMap[dev.id] && todayRunsMap[dev.id][q.planId]) || 0;
+        return doneToday < q.targetRunsPerDay;
+      });
+
+      return hasRemaining;
     });
-  }, [devices, currentPlan, todayRunsMap, activeRun, testRuns, inputDeviceName]);
+  }, [devices, todayRunsMap, activeRun, testRuns, inputDeviceName]);
 
   // Keep tester identity reliably in localStorage and sessionStorage (NEVER wipe on mount)
   useEffect(() => {
@@ -1559,13 +1563,19 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                           <div className="text-[10px] text-slate-400 truncate">
                             {(() => {
                               if (!selectedDeviceProfile) return 'Tap to select mobile device';
-                              const quota = selectedDeviceProfile.quotas?.find(q => q.planId === currentPlan?.id);
-                              const doneToday = (todayRunsMap[selectedDeviceProfile.id] && todayRunsMap[selectedDeviceProfile.id][currentPlan?.id || '']) || 0;
-                              const remaining = quota ? Math.max(0, quota.targetRunsPerDay - doneToday) : null;
-                              if (remaining !== null) {
-                                return `⚡ ${remaining} run${remaining > 1 ? 's' : ''} left today`;
+                              const activeQuotas = (selectedDeviceProfile.quotas || []).filter(q => q.targetRunsPerDay > 0);
+                              if (activeQuotas.length === 0) return 'Ready';
+                              const currentQuota = activeQuotas.find(q => q.planId === currentPlan?.id);
+                              if (currentQuota) {
+                                const done = (todayRunsMap[selectedDeviceProfile.id] && todayRunsMap[selectedDeviceProfile.id][currentQuota.planId]) || 0;
+                                const rem = Math.max(0, currentQuota.targetRunsPerDay - done);
+                                return `⚡ ${currentPlan?.name}: ${rem} run${rem === 1 ? '' : 's'} left today`;
                               }
-                              return 'Ready';
+                              const firstQ = activeQuotas[0];
+                              const planObj = testPlans.find(p => p.id === firstQ.planId);
+                              const done = (todayRunsMap[selectedDeviceProfile.id] && todayRunsMap[selectedDeviceProfile.id][firstQ.planId]) || 0;
+                              const rem = Math.max(0, firstQ.targetRunsPerDay - done);
+                              return `⚡ ${planObj?.name || 'Plan'}: ${rem} left today`;
                             })()}
                           </div>
                         </div>
@@ -1574,7 +1584,41 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                     </button>
                   ) : (
                     <div className="p-3 bg-amber-500/15 border border-amber-500/30 rounded-2xl text-amber-200 text-xs font-semibold text-center leading-relaxed">
-                      ⚠️ No devices have active daily quotas configured for "{currentPlan?.name || 'this plan'}". Set plan quotas on the Web Dashboard under Devices & Quotas.
+                      ⚠️ No ready devices with active daily quotas found. Register devices and set daily plan quotas on the Web Dashboard under Devices & Quotas.
+                    </div>
+                  )}
+                </div>
+
+                {/* Test Plan Walkthrough Custom Trigger (Field 3) */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5 text-purple-400" />
+                    Test Plan Walkthrough
+                  </label>
+                  {availablePlans.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => setOpenPlanPickerModal(true)}
+                      className="w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left group cursor-pointer active:scale-[0.99] bg-slate-900/90 border-purple-500/40 shadow-md ring-1 ring-purple-500/20"
+                    >
+                      <div className="flex items-center gap-3 truncate">
+                        <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-600 text-white flex items-center justify-center font-bold text-xs shadow flex-shrink-0">
+                          <Layers className="w-4 h-4 text-purple-200" />
+                        </div>
+                        <div className="truncate">
+                          <div className="text-xs font-extrabold text-white truncate">
+                            {currentPlan?.name || 'Choose Test Plan...'}
+                          </div>
+                          <div className="text-[10px] text-purple-300 font-mono truncate">
+                            {currentPlan ? `${currentPlan.steps.length} Steps • Tap to switch plan` : 'Tap to select plan'}
+                          </div>
+                        </div>
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-white flex-shrink-0 transition-transform" />
+                    </button>
+                  ) : (
+                    <div className="p-3 bg-amber-500/15 border border-amber-500/30 rounded-2xl text-amber-200 text-xs font-semibold text-center leading-relaxed">
+                      ⚠️ No test plans created yet. Create a test plan on the Web Dashboard.
                     </div>
                   )}
                 </div>
@@ -1746,9 +1790,16 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               <div className="space-y-2 overflow-y-auto max-h-[350px] pr-1">
                 {selectableDevices.map(dev => {
                   const isSelected = dev.name.toLowerCase().trim() === inputDeviceName.toLowerCase().trim() || dev.id === inputDeviceName;
-                  const quota = dev.quotas?.find(q => q.planId === currentPlan?.id);
-                  const doneToday = (todayRunsMap[dev.id] && todayRunsMap[dev.id][currentPlan?.id || '']) || 0;
-                  const remaining = quota ? Math.max(0, quota.targetRunsPerDay - doneToday) : null;
+                  const activeQuotas = (dev.quotas || []).filter(q => q.targetRunsPerDay > 0);
+                  
+                  const quotaDetails = activeQuotas.map(q => {
+                    const planObj = testPlans.find(p => p.id === q.planId);
+                    const done = (todayRunsMap[dev.id] && todayRunsMap[dev.id][q.planId]) || 0;
+                    const rem = Math.max(0, q.targetRunsPerDay - done);
+                    return { name: planObj?.name || 'Plan', rem, planId: q.planId };
+                  });
+
+                  const quotaText = quotaDetails.map(d => `${d.name}: ${d.rem} left`).join(' • ');
 
                   return (
                     <button
@@ -1757,13 +1808,17 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                       onClick={() => {
                         const chosenDevName = dev.name;
                         setInputDeviceName(chosenDevName);
-                        if (dev.quotas && dev.quotas.length > 0) {
-                          const quotaForCurrent = dev.quotas.find(q => q.planId === currentPlan?.id && q.targetRunsPerDay > 0);
-                          if (!quotaForCurrent) {
-                            const firstValid = dev.quotas.find(q => q.targetRunsPerDay > 0);
-                            if (firstValid) {
-                              onSelectPlan(firstValid.planId);
-                            }
+                        // Check if current plan is supported by this device
+                        const hasCurrent = dev.quotas?.some(q => q.planId === currentPlan?.id && q.targetRunsPerDay > 0);
+                        if (!hasCurrent && dev.quotas && dev.quotas.length > 0) {
+                          // Switch to the first plan this device has an active quota for
+                          const firstAvailableQuota = dev.quotas.find(q => {
+                            const done = (todayRunsMap[dev.id] && todayRunsMap[dev.id][q.planId]) || 0;
+                            return q.targetRunsPerDay > 0 && done < q.targetRunsPerDay;
+                          }) || dev.quotas.find(q => q.targetRunsPerDay > 0);
+
+                          if (firstAvailableQuota) {
+                            onSelectPlan(firstAvailableQuota.planId);
                           }
                         }
                         setOpenDevicePickerModal(false);
@@ -1781,7 +1836,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                         <div className="truncate">
                           <div className="text-xs font-black text-white truncate">{dev.name}</div>
                           <div className="text-[10px] text-purple-300 font-mono font-semibold truncate">
-                            {remaining !== null ? `⚡ ${remaining} run${remaining > 1 ? 's' : ''} left today` : 'Ready'}
+                            {quotaText ? `⚡ ${quotaText}` : 'Ready'}
                           </div>
                         </div>
                       </div>
