@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile } from '../types';
 import { CheckCircle2, Clock, Bug, Smartphone, RefreshCw, Send, Check, Layers, ChevronDown, AlertTriangle, XCircle, ArrowRight, ArrowLeft, ChevronLeft, ChevronRight, Undo2, Sparkles, User, Download, Edit3, Trash2, Tag, Image, Camera, X } from 'lucide-react';
 import { exportTestRunToCSV } from '../utils/exportUtils';
+import { triggerHaptic } from '../utils/haptics';
 
 interface MobileTesterProps {
   testPlans: TestPlan[];
@@ -295,16 +296,25 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   const currentStepIndex = Math.min(activeStepIndex, Math.max(0, totalSteps - 1));
   const currentStep = steps[currentStepIndex];
 
-  // Auto-scroll ref for keeping active step visible in the numbered step bar
+  // Smooth horizontal scroll ref for keeping active step centered
+  const stepRowRef = useRef<HTMLDivElement | null>(null);
   const activeStepRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
-    if (activeStepRef.current) {
-      activeStepRef.current.scrollIntoView({
-        behavior: 'smooth',
-        inline: 'center',
-        block: 'nearest'
+    const container = stepRowRef.current;
+    const activeEl = activeStepRef.current;
+    if (container && activeEl) {
+      const rafId = requestAnimationFrame(() => {
+        const containerWidth = container.clientWidth;
+        const elLeft = activeEl.offsetLeft;
+        const elWidth = activeEl.offsetWidth;
+        const targetLeft = elLeft - (containerWidth / 2) + (elWidth / 2);
+        container.scrollTo({
+          left: Math.max(0, targetLeft),
+          behavior: 'smooth'
+        });
       });
+      return () => cancelAnimationFrame(rafId);
     }
   }, [currentStepIndex]);
   
@@ -558,12 +568,14 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       });
     }
 
+    triggerHaptic('medium');
     setShowSetupModal(false);
   };
 
   // Navigate to previous step (to inspect or correct a mistake)
   const handlePreviousStep = () => {
     if (currentStepIndex > 0) {
+      triggerHaptic('light');
       const prevIndex = currentStepIndex - 1;
       setActiveStepIndex(prevIndex);
       const prevStep = steps[prevIndex];
@@ -581,6 +593,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   // Go back to a specific previous step (only allowed to go backward)
   const handleGoToStep = (targetIdx: number) => {
     if (targetIdx >= 0 && targetIdx < currentStepIndex) {
+      triggerHaptic('light');
       setActiveStepIndex(targetIdx);
       const targetStep = steps[targetIdx];
       const existingStatus = targetStep && activeRun?.results?.[targetStep.id]?.status;
@@ -671,6 +684,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     };
 
     if (isDone) {
+      triggerHaptic('success');
       setCompletedRunSummary(updatedRun);
       if (currentPlan) {
         localStorage.removeItem(`qa_in_progress_run_${currentPlan.id}`);
@@ -687,6 +701,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       setBugSuccessMessage(`🎉 Run complete! ${activeDevName || 'Device'} progress updated for today.`);
       setTimeout(() => setBugSuccessMessage(null), 4000);
     } else {
+      triggerHaptic('medium');
       if (currentPlan) {
         localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updatedRun));
       }
@@ -723,12 +738,15 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       if (e.key === '1') {
         e.preventDefault();
         setSelectedStatus('green');
+        triggerHaptic('light');
       } else if (e.key === '2') {
         e.preventDefault();
         setSelectedStatus('yellow');
+        triggerHaptic('light');
       } else if (e.key === '3') {
         e.preventDefault();
         setSelectedStatus('red');
+        triggerHaptic('light');
       } else if (e.key.toLowerCase() === 'b') {
         e.preventDefault();
         setShowBugModal(true);
@@ -1052,8 +1070,12 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 <span className="font-mono text-zinc-400 text-[11px]">Step {currentStepIndex + 1} of {totalSteps}</span>
               </div>
 
-              {/* Sequential Step Row (Auto-centers active step chip without left cut-off) */}
-              <div className="flex items-center gap-1.5 overflow-x-auto px-1.5 py-1 scrollbar-none scroll-smooth">
+              {/* Sequential Step Row (Auto-centers active step chip smoothly without choppiness) */}
+              <div
+                ref={stepRowRef}
+                className="flex items-center gap-1.5 overflow-x-auto px-2 py-1 scrollbar-none overscroll-x-contain"
+                style={{ WebkitOverflowScrolling: 'touch' }}
+              >
                 {steps.map((s, idx) => {
                   const sRes = activeRun?.results?.[s.id];
                   const isCurrent = idx === currentStepIndex;
@@ -1069,7 +1091,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                       onClick={() => {
                         if (canGoBack) handleGoToStep(idx);
                       }}
-                      className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0 border ${
+                      className={`flex items-center justify-center gap-1 min-w-[38px] h-8 px-2.5 rounded-xl text-xs font-bold transition-colors duration-150 flex-shrink-0 border ${
                         isCurrent
                           ? 'bg-zinc-700 text-zinc-100 border-zinc-400 shadow-md ring-1 ring-zinc-400/40'
                           : canGoBack
@@ -1086,7 +1108,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                     >
                       <span>{idx + 1}</span>
                       {isDone && (
-                        <span>
+                        <span className="text-[11px] leading-none">
                           {sRes.status === 'green' ? '✓' : sRes.status === 'yellow' ? '!' : '✗'}
                         </span>
                       )}
@@ -1189,7 +1211,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   {/* GREEN Status Button */}
                   <button
                     type="button"
-                    onClick={() => setSelectedStatus('green')}
+                    onClick={() => {
+                      setSelectedStatus('green');
+                      triggerHaptic('light');
+                    }}
                     className={`py-3 rounded-2xl font-bold text-xs flex flex-col items-center justify-center gap-1.5 transition-all border cursor-pointer ${
                       selectedStatus === 'green'
                         ? 'bg-emerald-500/30 text-white border-emerald-400 shadow-xl shadow-emerald-500/20 ring-2 ring-emerald-400/50 scale-[1.02]'
@@ -1203,7 +1228,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   {/* YELLOW Status Button */}
                   <button
                     type="button"
-                    onClick={() => setSelectedStatus('yellow')}
+                    onClick={() => {
+                      setSelectedStatus('yellow');
+                      triggerHaptic('light');
+                    }}
                     className={`py-3 rounded-2xl font-bold text-xs flex flex-col items-center justify-center gap-1.5 transition-all border cursor-pointer ${
                       selectedStatus === 'yellow'
                         ? 'bg-amber-500/30 text-white border-amber-400 shadow-xl shadow-amber-500/20 ring-2 ring-amber-400/50 scale-[1.02]'
@@ -1217,7 +1245,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   {/* RED Status Button */}
                   <button
                     type="button"
-                    onClick={() => setSelectedStatus('red')}
+                    onClick={() => {
+                      setSelectedStatus('red');
+                      triggerHaptic('light');
+                    }}
                     className={`py-3 rounded-2xl font-bold text-xs flex flex-col items-center justify-center gap-1.5 transition-all border cursor-pointer ${
                       selectedStatus === 'red'
                         ? 'bg-rose-500/30 text-white border-rose-400 shadow-xl shadow-rose-500/20 ring-2 ring-rose-400/50 scale-[1.02]'
@@ -1479,7 +1510,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   {testers.length > 0 ? (
                     <button
                       type="button"
-                      onClick={() => setOpenTesterPickerModal(true)}
+                      onClick={() => {
+                        triggerHaptic('soft');
+                        setOpenTesterPickerModal(true);
+                      }}
                       className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left group cursor-pointer active:scale-[0.99] ${
                         inputReporterName
                           ? 'bg-zinc-900 border-sky-500/50 shadow-md ring-1 ring-sky-500/25'
@@ -1521,7 +1555,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   {selectableDevices.length > 0 ? (
                     <button
                       type="button"
-                      onClick={() => setOpenDevicePickerModal(true)}
+                      onClick={() => {
+                        triggerHaptic('soft');
+                        setOpenDevicePickerModal(true);
+                      }}
                       className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left group cursor-pointer active:scale-[0.99] ${
                         inputDeviceName
                           ? 'bg-zinc-900 border-sky-500/50 shadow-md ring-1 ring-sky-500/25'
@@ -1613,6 +1650,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                       key={t.id}
                       type="button"
                       onClick={() => {
+                        triggerHaptic('soft');
                         setInputReporterName(t.name);
                         setOpenTesterPickerModal(false);
                       }}
@@ -1690,6 +1728,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                       key={dev.id}
                       type="button"
                       onClick={() => {
+                        triggerHaptic('soft');
                         const chosenDevName = dev.name;
                         setInputDeviceName(chosenDevName);
                         // Check if current plan is supported by this device
