@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile } from '../types';
 import { CheckCircle2, Clock, Bug, Smartphone, RefreshCw, Send, Check, Layers, ChevronDown, AlertTriangle, XCircle, ArrowRight, ArrowLeft, ChevronLeft, ChevronRight, Undo2, Sparkles, User, Download, Edit3, Trash2, Tag, Image, Camera, X } from 'lucide-react';
@@ -294,6 +294,19 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   const currentStepIndex = Math.min(activeStepIndex, Math.max(0, totalSteps - 1));
   const currentStep = steps[currentStepIndex];
+
+  // Auto-scroll ref for keeping active step visible in the numbered step bar
+  const activeStepRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (activeStepRef.current) {
+      activeStepRef.current.scrollIntoView({
+        behavior: 'smooth',
+        inline: 'center',
+        block: 'nearest'
+      });
+    }
+  }, [currentStepIndex]);
   
   // Explicit state for completion summary view
   const [completedRunSummary, setCompletedRunSummary] = useState<TestRun | null>(null);
@@ -985,22 +998,15 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         ) : !isCompleted && currentStep ? (
           <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
             
-            {/* Step Progress Bar & Interactive Step Chips */}
-            <div className="space-y-2">
+            {/* Step Walkthrough Header & Interactive Step Chips */}
+            <div className="space-y-1.5">
               <div className="flex items-center justify-between text-xs font-semibold">
-                <span className="text-indigo-300 uppercase tracking-wider text-[10px]">Step Walkthrough</span>
+                <span className="text-indigo-300 uppercase tracking-wider text-[10px] font-bold">Step Walkthrough</span>
                 <span className="font-mono text-slate-400 text-[11px]">Step {currentStepIndex + 1} of {totalSteps}</span>
               </div>
 
-              <div className="w-full bg-slate-950/80 h-2 rounded-full overflow-hidden border border-white/10 shadow-inner">
-                <div
-                  className="bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 h-full transition-all duration-300 shadow-md shadow-purple-500/20"
-                  style={{ width: `${((currentStepIndex + 1) / totalSteps) * 100}%` }}
-                ></div>
-              </div>
-
-              {/* Sequential Step Breadcrumbs (Tap any previous step to go back and review) */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none pt-0.5">
+              {/* Sequential Step Row (Auto-centers active step chip) */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none pt-0.5 scroll-smooth">
                 {steps.map((s, idx) => {
                   const sRes = activeRun?.results?.[s.id];
                   const isCurrent = idx === currentStepIndex;
@@ -1010,14 +1016,15 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   return (
                     <button
                       key={s.id}
+                      ref={isCurrent ? activeStepRef : null}
                       type="button"
                       disabled={!canGoBack}
                       onClick={() => {
                         if (canGoBack) handleGoToStep(idx);
                       }}
-                      className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[10px] font-bold transition-all flex-shrink-0 border ${
+                      className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0 border ${
                         isCurrent
-                          ? 'bg-indigo-600 text-white border-indigo-300 shadow-md ring-2 ring-indigo-400/50 scale-105'
+                          ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white border-indigo-300 shadow-md ring-2 ring-indigo-400/50 scale-105'
                           : canGoBack
                           ? isDone
                             ? sRes.status === 'green'
