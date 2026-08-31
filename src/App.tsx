@@ -640,39 +640,27 @@ export function App() {
   };
 
   const handleRestartRun = (runIdOrPlanId: string) => {
+    const plan = testPlans.find(p => p.id === runIdOrPlanId);
+    const planId = plan ? plan.id : runIdOrPlanId;
+    const planName = plan ? plan.name : 'Test Plan';
+
     setTestRuns(prev => {
-      const targetRun = prev.find(r => r.id === runIdOrPlanId || (r.planId === runIdOrPlanId && r.status !== 'completed'));
-      if (!targetRun) return prev;
-
-      if (targetRun.status === 'completed') {
-        const newRun: TestRun = {
-          ...targetRun,
-          id: `run-${targetRun.planId}-${targetRun.deviceId || 'dev'}-${Date.now().toString(36)}`,
-          status: 'in_progress',
-          currentStepIndex: 0,
-          results: {},
-          completedAt: undefined,
-          startedAt: new Date().toISOString()
-        };
-        syncTestRunToSupabase(newRun);
-        return [newRun, ...prev];
-      }
-
-      const updated = prev.map(r => {
-        if (r.id === targetRun.id) {
-          const resetRun = {
-            ...r,
-            currentStepIndex: 0,
-            status: 'in_progress' as const,
-            results: {},
-            startedAt: new Date().toISOString()
-          };
-          syncTestRunToSupabase(resetRun);
-          return resetRun;
-        }
-        return r;
-      });
-      return updated;
+      // Remove any existing in-progress run for this plan
+      const filtered = prev.filter(r => r.planId !== planId && r.id !== runIdOrPlanId);
+      const newRun: TestRun = {
+        id: `run-${planId}-${Date.now().toString(36)}`,
+        planId: planId,
+        planName: planName,
+        testerName: '',
+        deviceName: '',
+        status: 'not_started',
+        currentStepIndex: 0,
+        results: {},
+        bugLogs: [],
+        startedAt: new Date().toISOString()
+      };
+      syncTestRunToSupabase(newRun);
+      return [newRun, ...filtered];
     });
   };
 

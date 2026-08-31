@@ -244,19 +244,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   // Explicit state for completion summary view
   const [completedRunSummary, setCompletedRunSummary] = useState<TestRun | null>(null);
 
-  // Check if current plan has a completed run in archivedRuns for THIS device or tester
-  const archivedCompletedRun = useMemo(() => {
-    if (!currentPlan) return undefined;
-    const currentTesterLower = inputReporterName ? inputReporterName.trim().toLowerCase() : '';
-    return archivedRuns.find(r => 
-      r.planId === currentPlan.id && 
-      r.status === 'completed' &&
-      (r.deviceId === deviceId || r.id.includes(deviceId) || (currentTesterLower && r.testerName?.trim().toLowerCase() === currentTesterLower))
-    );
-  }, [archivedRuns, currentPlan, deviceId, inputReporterName]);
-
-  const activeOrSummaryCompleted = completedRunSummary || (archivedCompletedRun && activeRun?.status === 'not_started' ? archivedCompletedRun : null);
-  const isCompleted = activeOrSummaryCompleted !== null || activeRun?.status === 'completed' || (totalSteps > 0 && currentStepIndex >= totalSteps && activeRun?.status !== 'not_started');
+  // Active run completion state (strictly gated to this session or explicitly completed activeRun)
+  const isCompleted = completedRunSummary !== null;
+  const activeOrSummaryCompleted = completedRunSummary;
 
   // Dynamically compute active bugs for current plan/run
   const activeBugs = useMemo(() => {
@@ -467,26 +457,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     }
   };
 
-  // Skip forward to next step without changing existing status
-  const handleNextStepWithoutConfirm = () => {
-    if (currentStepIndex < totalSteps - 1) {
-      const nextIndex = currentStepIndex + 1;
-      setActiveStepIndex(nextIndex);
-      const nextStep = steps[nextIndex];
-      const nextStatus = nextStep && activeRun?.results?.[nextStep.id]?.status;
-      setSelectedStatus(nextStatus && nextStatus !== 'pending' ? nextStatus : null);
-      if (activeRun) {
-        const updated = { ...activeRun, currentStepIndex: nextIndex };
-        if (currentPlan) {
-          localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updated));
-        }
-      }
-    }
-  };
-
-  // Jump directly to any specific step
+  // Go back to a specific previous step (only allowed to go backward)
   const handleGoToStep = (targetIdx: number) => {
-    if (targetIdx >= 0 && targetIdx < totalSteps) {
+    if (targetIdx >= 0 && targetIdx < currentStepIndex) {
       setActiveStepIndex(targetIdx);
       const targetStep = steps[targetIdx];
       const existingStatus = targetStep && activeRun?.results?.[targetStep.id]?.status;
@@ -639,11 +612,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       } else if (e.key === 'ArrowLeft' || e.key === 'p' || e.key === 'P') {
         e.preventDefault();
         handlePreviousStep();
-      } else if (e.key === 'ArrowRight' || e.key === 'n' || e.key === 'N') {
-        if (currentStepIndex < totalSteps - 1) {
-          e.preventDefault();
-          handleNextStepWithoutConfirm();
-        }
       } else if (e.key === 'Enter' && selectedStatus) {
         e.preventDefault();
         handleConfirmStepStatus();
@@ -1019,30 +987,36 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 ></div>
               </div>
 
-              {/* Interactive Step Jump Chips (Tap any step to review or correct) */}
+              {/* Sequential Step Breadcrumbs (Tap any previous step to go back and review) */}
               <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none pt-0.5">
                 {steps.map((s, idx) => {
                   const sRes = activeRun?.results?.[s.id];
                   const isCurrent = idx === currentStepIndex;
+                  const canGoBack = idx < currentStepIndex;
                   const isDone = sRes && sRes.status && sRes.status !== 'pending';
 
                   return (
                     <button
                       key={s.id}
                       type="button"
-                      onClick={() => handleGoToStep(idx)}
-                      className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[10px] font-bold transition-all flex-shrink-0 border cursor-pointer ${
+                      disabled={!canGoBack}
+                      onClick={() => {
+                        if (canGoBack) handleGoToStep(idx);
+                      }}
+                      className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[10px] font-bold transition-all flex-shrink-0 border ${
                         isCurrent
                           ? 'bg-indigo-600 text-white border-indigo-300 shadow-md ring-2 ring-indigo-400/50 scale-105'
-                          : isDone
-                          ? sRes.status === 'green'
-                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
-                            : sRes.status === 'yellow'
-                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
-                            : 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
-                          : 'bg-slate-900/60 text-slate-400 border-white/10 hover:text-white'
+                          : canGoBack
+                          ? isDone
+                            ? sRes.status === 'green'
+                              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30 cursor-pointer'
+                              : sRes.status === 'yellow'
+                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30 cursor-pointer'
+                              : 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30 cursor-pointer'
+                            : 'bg-slate-900/60 text-slate-400 border-white/10 hover:text-white cursor-pointer'
+                          : 'bg-slate-900/30 text-slate-600 border-white/5 opacity-40 cursor-not-allowed'
                       }`}
-                      title={`Jump to Step ${idx + 1}: ${s.title}`}
+                      title={canGoBack ? `Go back to Step ${idx + 1}: ${s.title}` : `Step ${idx + 1}`}
                     >
                       <span>{idx + 1}</span>
                       {isDone && (
@@ -1264,18 +1238,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   )}
                 </button>
 
-                {/* Optional Next button if step already answered */}
-                {currentStepIndex < totalSteps - 1 && hasExistingResult && (
-                  <button
-                    type="button"
-                    onClick={handleNextStepWithoutConfirm}
-                    className="px-3.5 py-3.5 liquid-glass-button text-slate-300 hover:text-white rounded-2xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md active:scale-95 flex-shrink-0 cursor-pointer"
-                    title="Skip to next step without modifying"
-                  >
-                    <span>Next</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
-                )}
+                {/* Confirm & Move to Next Step Button */}
               </div>
             </div>
 
@@ -1283,7 +1246,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         ) : (
           /* Completion Summary View (Liquid Glass Style) */
           (() => {
-            const summaryRun = completedRunSummary || archivedCompletedRun || activeRun;
+            const summaryRun = completedRunSummary || activeRun;
             const summaryResults = summaryRun?.results || {};
             const summaryResultsArray = Object.entries(summaryResults)
               .filter(([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any))
@@ -1383,6 +1346,11 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                     onClick={() => {
                       setCompletedRunSummary(null);
                       setSelectedStatus(null);
+                      setActiveStepIndex(0);
+                      if (currentPlan) {
+                        localStorage.removeItem(`qa_in_progress_run_${currentPlan.id}`);
+                        onRestartRun(currentPlan.id);
+                      }
                       if (activeRun?.deviceName && onSaveDevice) {
                         const matchedDev = devices.find(d => d.name.toLowerCase().trim() === activeRun.deviceName?.toLowerCase().trim());
                         if (matchedDev) {
@@ -1397,9 +1365,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                       const savedDevice = sessionStorage.getItem('qa_device_name') || activeRun?.deviceName || '';
                       if (savedName) setInputReporterName(savedName);
                       if (savedDevice) setInputDeviceName(savedDevice);
-                      if (currentPlan) {
-                        onRestartRun(currentPlan.id);
-                      }
                       setShowSetupModal(true);
                     }}
                     className="w-full py-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-extrabold text-xs rounded-2xl flex items-center justify-center gap-2 transition-all shadow-xl shadow-indigo-500/25 border border-white/20 hover:scale-[1.01] active:scale-[0.99]"
