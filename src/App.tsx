@@ -580,9 +580,8 @@ export function App() {
     const stepResultsEntries = Object.entries(updatedRun.results || {}).filter(
       ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in v
     );
-    const completedSteps = stepResultsEntries.length;
-    // Run is only done if explicitly marked completed, or all steps have been executed
-    const isDone = updatedRun.status === 'completed' || (totalSteps > 0 && (completedSteps >= totalSteps || (updatedRun.currentStepIndex !== undefined && updatedRun.currentStepIndex >= totalSteps)));
+    // Run is only done when explicitly marked 'completed' at the final step
+    const isDone = updatedRun.status === 'completed';
 
     if (isDone) {
       const finishTimeIso = updatedRun.completedAt || new Date().toISOString();

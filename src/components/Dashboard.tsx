@@ -265,27 +265,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
     e.target.value = '';
   };
 
-  // Filter runs to ONLY include fully finished test plan executions (executed from start to finish)
+  // Filter runs to ONLY include fully finished test plan executions (status === 'completed')
   const completedRuns = useMemo(() => {
     const map = new Map<string, TestRun>();
-    
     const combined = [...archivedRuns, ...testRuns];
     combined.forEach(run => {
-      const plan = testPlans.find(p => p.id === run.planId);
-      const totalSteps = plan?.steps.length || 0;
-      const stepEntries = Object.entries(run.results || {}).filter(
-        ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
-      );
-      const completedCount = stepEntries.length;
-      const isDone = run.status === 'completed' || (totalSteps > 0 && (completedCount >= totalSteps || (run.currentStepIndex !== undefined && run.currentStepIndex >= totalSteps)));
-
-      if (isDone) {
+      if (run.status === 'completed') {
         map.set(run.id, run);
       }
     });
-
     return Array.from(map.values());
-  }, [testRuns, archivedRuns, testPlans]);
+  }, [testRuns, archivedRuns]);
 
   // Unique devices populated across bug logs and completed test runs
   const uniqueDevices = Array.from(
