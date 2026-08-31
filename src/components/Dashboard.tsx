@@ -98,29 +98,59 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [newPersonRole, setNewPersonRole] = useState('Mobile Tester');
   const [quotaPlanMap, setQuotaPlanMap] = useState<Record<string, string>>({});
   const [quotaRunsMap, setQuotaRunsMap] = useState<Record<string, number>>({});
+  const [isRegisteredTestersCollapsed, setIsRegisteredTestersCollapsed] = useState(false);
+  const [testerViewMode, setTesterViewMode] = useState<'all' | 'active'>('all');
 
-  // Calculate completed runs today per device ID and plan ID
+  // Determine active testers currently running a test session on a device
+  const activeTesterMap = useMemo(() => {
+    const map = new Map<string, { deviceName: string; planName?: string; runId?: string }>();
+    devices.forEach(d => {
+      if (d.activeTesterName) {
+        const activeRun = testRuns.find(r => r.id === d.activeRunId || (r.deviceId === d.id && r.status === 'in_progress'));
+        map.set(d.activeTesterName.toLowerCase().trim(), {
+          deviceName: d.name,
+          planName: activeRun?.planName,
+          runId: d.activeRunId || activeRun?.id
+        });
+      }
+    });
+    testRuns.forEach(r => {
+      if (r.status === 'in_progress' && r.testerName) {
+        const key = r.testerName.toLowerCase().trim();
+        if (!map.has(key)) {
+          map.set(key, {
+            deviceName: r.deviceName || 'Mobile Device',
+            planName: r.planName,
+            runId: r.id
+          });
+        }
+      }
+    });
+    return map;
+  }, [devices, testRuns]);
+
+  // Calculate completed runs today per device ID and plan ID (deduplicated by run.id)
   const todayRunsMap = useMemo(() => {
     const todayStr = getLocalDateStr(new Date());
     const map: Record<string, Record<string, number>> = {};
-    const allRuns = [...archivedRuns, ...testRuns];
+    const runMap = new Map<string, TestRun>();
+    [...archivedRuns, ...testRuns].forEach(r => {
+      if (r && r.id) runMap.set(r.id, r);
+    });
     
-    allRuns.forEach(run => {
+    runMap.forEach(run => {
       if (run.status !== 'completed' || !run.completedAt) return;
       const runDate = getLocalDateStr(run.completedAt);
       if (runDate !== todayStr) return;
       
-      const devId = run.deviceId || (run.deviceName ? `dev-${run.deviceName.toLowerCase().replace(/\s+/g, '-')}` : '');
-      const devName = run.deviceName?.toLowerCase().trim();
-      
-      devices.forEach(d => {
-        const matchesId = devId && (d.id === devId || devId.includes(d.id));
-        const matchesName = devName && d.name.toLowerCase().trim() === devName;
-        if (matchesId || matchesName) {
-          if (!map[d.id]) map[d.id] = {};
-          map[d.id][run.planId] = (map[d.id][run.planId] || 0) + 1;
-        }
-      });
+      const targetDev = devices.find(d => 
+        (run.deviceId && (d.id === run.deviceId || d.id.toLowerCase() === run.deviceId.toLowerCase())) ||
+        (run.deviceName && d.name && d.name.toLowerCase().trim() === run.deviceName.toLowerCase().trim())
+      );
+      if (targetDev) {
+        if (!map[targetDev.id]) map[targetDev.id] = {};
+        map[targetDev.id][run.planId] = (map[targetDev.id][run.planId] || 0) + 1;
+      }
     });
     return map;
   }, [archivedRuns, testRuns, devices]);
@@ -1115,53 +1145,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
 
-      {/* Top Welcome & Actions Header (Apple Liquid Glass Banner) */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 liquid-glass-panel rounded-3xl p-6 shadow-2xl relative overflow-hidden">
-        <div className="relative z-10">
-          <h2 className="text-2xl font-black text-white tracking-tight">Test Plans & Feature Health Monitor</h2>
-          <p className="text-xs text-slate-300 mt-1 font-medium">
-            Design test templates, track individual feature health metrics, and organize bug logs by device model.
-          </p>
-        </div>
 
-        <div className="flex flex-wrap items-center gap-2.5 relative z-10">
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="px-3.5 py-2 bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-bold rounded-2xl border border-white/10 flex items-center gap-1.5 transition-all duration-300 shadow-sm"
-            title="Import QA Backup JSON File"
-          >
-            <Upload className="w-3.5 h-3.5 text-purple-400" />
-            <span>Import JSON</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              if (onRunSubagentTest) {
-                const targetId = testPlans[0]?.id || 'plan-demo-1';
-                onRunSubagentTest(targetId);
-                setActiveTab('features');
-                setSubagentToast(`🤖 Autonomous Subagent tested all steps for Today (${todayStr})! Live feature metrics populated below.`);
-                setTimeout(() => setSubagentToast(null), 5000);
-              }
-            }}
-            className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-extrabold rounded-2xl shadow-xl shadow-emerald-500/25 border border-white/20 flex items-center gap-1.5 transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer"
-            title="Run autonomous QA subagent to execute full test flow and record data for Today"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-white animate-pulse" />
-            <span>Run Subagent Test Flow (Today)</span>
-          </button>
-
-          <button
-            onClick={onSelectPlanToBuild}
-            className="px-4 py-2 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-400 hover:to-pink-400 text-white text-xs font-extrabold rounded-2xl shadow-xl shadow-purple-500/30 border border-white/30 flex items-center gap-1.5 transition-all duration-300 hover:scale-[1.03] active:scale-[0.98]"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Create Plan</span>
-          </button>
-        </div>
-      </div>
 
       {/* Unified Top Navigation KPI Cards Row */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
@@ -1638,47 +1622,191 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </div>
 
             {/* Right List: Registered Testers Grid */}
-            <div className="lg:col-span-2 space-y-6">
-              <h3 className="text-base font-extrabold text-white flex items-center gap-2">
-                <UserCheck className="w-4 h-4 text-emerald-400" />
-                <span>Registered Testers ({testers.length})</span>
-              </h3>
+            <div className="lg:col-span-2 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-1 border-b border-white/10">
+                <div className="flex items-center gap-2">
+                  <UserCheck className="w-4 h-4 text-emerald-400" />
+                  <h3 className="text-base font-extrabold text-white">Registered Testers ({testers.length})</h3>
+                  {activeTesterMap.size > 0 && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                      {activeTesterMap.size} Active
+                    </span>
+                  )}
+                </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {testers.length === 0 ? (
-                  <div className="sm:col-span-2 liquid-glass-card rounded-2xl p-8 text-center text-slate-400 text-xs italic">
-                    No QA testers registered. Add testers using the form on the left.
+                <div className="flex items-center gap-2">
+                  {/* Filter: All vs Active Only */}
+                  <div className="flex items-center bg-slate-900/90 border border-slate-800 rounded-xl p-0.5 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTesterViewMode('all');
+                        setIsRegisteredTestersCollapsed(false);
+                      }}
+                      className={`px-2.5 py-1 rounded-lg font-semibold transition ${
+                        testerViewMode === 'all' && !isRegisteredTestersCollapsed
+                          ? 'bg-emerald-600 text-white shadow-sm'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      All ({testers.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTesterViewMode('active');
+                        setIsRegisteredTestersCollapsed(false);
+                      }}
+                      className={`px-2.5 py-1 rounded-lg font-semibold transition flex items-center gap-1 ${
+                        testerViewMode === 'active' || isRegisteredTestersCollapsed
+                          ? 'bg-emerald-600 text-white shadow-sm'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <span>Active Only ({activeTesterMap.size})</span>
+                    </button>
                   </div>
-                ) : (
-                  testers.map(tester => (
-                    <div key={tester.id} className="liquid-glass-panel rounded-2xl p-5 border border-white/10 flex items-center justify-between bg-slate-900/60 shadow-lg">
-                      <div className="flex items-center gap-3.5">
-                        <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 text-emerald-300 font-black text-sm flex items-center justify-center border border-emerald-400/40 shadow-inner">
-                          {tester.name.charAt(0).toUpperCase()}
-                        </div>
-                        <div>
-                          <div className="text-sm font-black text-white">{tester.name}</div>
-                          <div className="text-xs text-emerald-400 font-semibold">{tester.role || 'Mobile Tester'}</div>
-                          <div className="text-[10px] text-slate-500 font-mono mt-0.5">ID: {tester.id}</div>
-                        </div>
-                      </div>
 
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (confirm(`Delete tester profile "${tester.name}"?`)) {
-                            if (onDeleteTesterProfile) onDeleteTesterProfile(tester.id);
-                          }
-                        }}
-                        className="p-2 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-xl transition-colors"
-                        title="Delete Tester"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))
-                )}
+                  {/* Collapse / Expand Toggle */}
+                  <button
+                    type="button"
+                    onClick={() => setIsRegisteredTestersCollapsed(prev => !prev)}
+                    className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl border border-slate-800 text-xs font-semibold flex items-center gap-1.5 transition shadow-sm cursor-pointer"
+                    title={isRegisteredTestersCollapsed ? "Expand all registered testers" : "Collapse to see only active testers"}
+                  >
+                    <span>{isRegisteredTestersCollapsed ? 'Expand All' : 'Collapse'}</span>
+                    <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-300 ${isRegisteredTestersCollapsed ? 'rotate-180 text-emerald-400' : 'rotate-0'}`} />
+                  </button>
+                </div>
               </div>
+
+              {/* Collapsed Mode: Only shows Active Testers summary */}
+              {isRegisteredTestersCollapsed ? (
+                <div className="liquid-glass-panel rounded-2xl p-5 border border-white/10 space-y-3 bg-slate-900/60 shadow-lg">
+                  <div className="flex items-center justify-between text-xs text-slate-400">
+                    <span className="font-bold text-white flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                      Currently Active Testers ({activeTesterMap.size})
+                    </span>
+                    <span className="text-[11px] font-mono text-slate-500">{Math.max(0, testers.length - activeTesterMap.size)} registered idle</span>
+                  </div>
+
+                  {activeTesterMap.size === 0 ? (
+                    <div className="p-6 text-center text-slate-400 text-xs italic bg-slate-950/40 rounded-xl border border-slate-800/80">
+                      No testers are currently in an active testing session.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {testers
+                        .filter(t => activeTesterMap.has(t.name.toLowerCase().trim()))
+                        .map(tester => {
+                          const activeInfo = activeTesterMap.get(tester.name.toLowerCase().trim());
+                          return (
+                            <div key={tester.id} className="p-3.5 rounded-xl border border-emerald-500/30 bg-emerald-950/30 flex items-center justify-between shadow-sm">
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-300 font-extrabold text-xs flex items-center justify-center border border-emerald-400/40 shadow-inner flex-shrink-0">
+                                  {tester.name.charAt(0).toUpperCase()}
+                                </div>
+                                <div className="truncate">
+                                  <div className="text-xs font-extrabold text-white truncate flex items-center gap-1.5">
+                                    <span>{tester.name}</span>
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                                  </div>
+                                  <div className="text-[11px] text-emerald-300 font-medium truncate">
+                                    📱 {activeInfo?.deviceName || 'Device'}
+                                  </div>
+                                  {activeInfo?.planName && (
+                                    <div className="text-[10px] text-slate-400 font-mono truncate">
+                                      📋 {activeInfo.planName}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Expanded Grid: filtered by testerViewMode ('all' or 'active') */
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {(() => {
+                    const displayedTesters = testerViewMode === 'active'
+                      ? testers.filter(t => activeTesterMap.has(t.name.toLowerCase().trim()))
+                      : testers;
+
+                    if (displayedTesters.length === 0) {
+                      return (
+                        <div className="sm:col-span-2 liquid-glass-card rounded-2xl p-8 text-center text-slate-400 text-xs italic">
+                          {testerViewMode === 'active'
+                            ? 'No testers are currently in an active testing session.'
+                            : 'No QA testers registered. Add testers using the form on the left.'}
+                        </div>
+                      );
+                    }
+
+                    return displayedTesters.map(tester => {
+                      const isActive = activeTesterMap.has(tester.name.toLowerCase().trim());
+                      const activeInfo = activeTesterMap.get(tester.name.toLowerCase().trim());
+
+                      return (
+                        <div
+                          key={tester.id}
+                          className={`liquid-glass-panel rounded-2xl p-4 border transition-all shadow-lg flex items-center justify-between ${
+                            isActive
+                              ? 'bg-slate-900/90 border-emerald-500/40 ring-1 ring-emerald-500/30'
+                              : 'bg-slate-900/60 border-white/10'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3.5 min-w-0">
+                            <div className={`w-10 h-10 rounded-2xl font-black text-sm flex items-center justify-center border shadow-inner flex-shrink-0 ${
+                              isActive
+                                ? 'bg-emerald-500/25 text-emerald-300 border-emerald-400/50'
+                                : 'bg-slate-800 text-slate-300 border-slate-700'
+                            }`}>
+                              {tester.name.charAt(0).toUpperCase()}
+                            </div>
+                            <div className="truncate">
+                              <div className="text-sm font-black text-white truncate flex items-center gap-1.5">
+                                <span>{tester.name}</span>
+                                {isActive && (
+                                  <span className="px-1.5 py-0.5 text-[9px] font-extrabold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 rounded-full flex items-center gap-1">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                                    Active
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-xs text-slate-400 font-semibold truncate">
+                                {isActive ? `📱 Testing on ${activeInfo?.deviceName}` : (tester.role || 'Mobile Tester')}
+                              </div>
+                              {isActive && activeInfo?.planName && (
+                                <div className="text-[10px] text-emerald-400/90 font-mono truncate">
+                                  Plan: {activeInfo.planName}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (confirm(`Delete tester profile "${tester.name}"?`)) {
+                                if (onDeleteTesterProfile) onDeleteTesterProfile(tester.id);
+                              }
+                            }}
+                            className="p-2 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-xl transition-colors flex-shrink-0 cursor-pointer"
+                            title="Delete Tester"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              )}
             </div>
 
           </div>
@@ -1689,7 +1817,30 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       {/* Tab 1: Overview - Test Plans & Active Runs */}
       {activeTab === 'overview' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 animate-liquid-fade">
+        <div className="space-y-6 animate-liquid-fade">
+          
+          {/* Test Plans Area Header Banner */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 liquid-glass-panel rounded-3xl p-6 shadow-2xl relative overflow-hidden">
+            <div className="relative z-10">
+              <h2 className="text-2xl font-black text-white tracking-tight">Test Plans & Feature Health Monitor</h2>
+              <p className="text-xs text-slate-300 mt-1 font-medium">
+                Design test templates, track individual feature health metrics, and organize bug logs by device model.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2.5 relative z-10">
+              <button
+                type="button"
+                onClick={onSelectPlanToBuild}
+                className="px-4 py-2 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-400 hover:to-pink-400 text-white text-xs font-extrabold rounded-2xl shadow-xl shadow-purple-500/30 border border-white/30 flex items-center gap-1.5 transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Create Plan</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           
           {/* Test Plans List */}
           <div className="lg:col-span-2 space-y-4">
@@ -1987,6 +2138,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </div>
           </div>
 
+          </div>
         </div>
       )}
 

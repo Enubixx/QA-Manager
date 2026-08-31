@@ -119,24 +119,28 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     return `${year}-${month}-${day}`;
   }, []);
 
-  // Compute completed runs per device and plan for today
+  // Compute completed runs per device and plan for today (deduplicated by run.id)
   const todayRunsMap = useMemo(() => {
     const map: Record<string, Record<string, number>> = {};
-    const allRuns = [...archivedRuns, ...testRuns];
-    allRuns.forEach(run => {
+    const runMap = new Map<string, TestRun>();
+    [...archivedRuns, ...testRuns].forEach(r => {
+      if (r && r.id) runMap.set(r.id, r);
+    });
+
+    runMap.forEach(run => {
       if (run.status !== 'completed' || !run.completedAt) return;
       const d = new Date(run.completedAt);
       const runDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
       if (runDate !== todayStr) return;
 
-      devices.forEach(dev => {
-        const matchesId = run.deviceId && (dev.id === run.deviceId || run.deviceId.includes(dev.id));
-        const matchesName = run.deviceName && dev.name.toLowerCase().trim() === run.deviceName.toLowerCase().trim();
-        if (matchesId || matchesName) {
-          if (!map[dev.id]) map[dev.id] = {};
-          map[dev.id][run.planId] = (map[dev.id][run.planId] || 0) + 1;
-        }
-      });
+      const targetDev = devices.find(dev => 
+        (run.deviceId && (dev.id === run.deviceId || dev.id.toLowerCase() === run.deviceId.toLowerCase())) ||
+        (run.deviceName && dev.name && dev.name.toLowerCase().trim() === run.deviceName.toLowerCase().trim())
+      );
+      if (targetDev) {
+        if (!map[targetDev.id]) map[targetDev.id] = {};
+        map[targetDev.id][run.planId] = (map[targetDev.id][run.planId] || 0) + 1;
+      }
     });
     return map;
   }, [archivedRuns, testRuns, devices, todayStr]);
@@ -531,16 +535,21 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
     onAddPopulatedDevice(trimmedDevice);
 
+    const matchedDev = devices.find(d => d.name.toLowerCase().trim() === trimmedDevice.toLowerCase().trim() || d.id === trimmedDevice);
     const isBrandNew = !activeRun || activeRun.status === 'not_started' || Object.keys(activeRun.results || {}).length === 0;
+
+    const deviceIdToSave = selectedDeviceProfile ? selectedDeviceProfile.id : (matchedDev ? matchedDev.id : deviceId);
+    const deviceNameToSave = selectedDeviceProfile ? selectedDeviceProfile.name : (matchedDev ? matchedDev.name : trimmedDevice);
+    const testerNameToSave = selectedTesterProfile ? selectedTesterProfile.name : trimmedReporter;
 
     const updatedRun: TestRun = {
       ...activeRun,
-      id: isBrandNew ? `run-${currentPlan.id}-${deviceId}-${Date.now().toString(36)}` : activeRun.id,
+      id: isBrandNew ? `run-${currentPlan.id}-${deviceIdToSave}-${Date.now().toString(36)}` : activeRun.id,
       planId: currentPlan.id,
       planName: currentPlan.name,
-      deviceId: deviceId,
-      testerName: trimmedReporter,
-      deviceName: trimmedDevice,
+      deviceId: deviceIdToSave,
+      testerName: testerNameToSave,
+      deviceName: deviceNameToSave,
       status: 'in_progress',
       currentStepIndex: isBrandNew ? 0 : (activeRun.currentStepIndex || 0),
       results: isBrandNew ? {} : (activeRun.results || {}),
@@ -559,7 +568,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     }
 
     // Lock newly chosen device
-    const matchedDev = devices.find(d => d.name.toLowerCase().trim() === trimmedDevice.toLowerCase().trim() || d.id === trimmedDevice);
     if (matchedDev && onSaveDevice) {
       onSaveDevice({
         ...matchedDev,
