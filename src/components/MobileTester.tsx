@@ -124,13 +124,29 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     (r.deviceId === deviceId || r.id.includes(deviceId) || (localSavedRun && r.id === localSavedRun.id))
   );
 
-  if (!activeRun && localSavedRun && localSavedRun.planId === currentPlan?.id) {
-    activeRun = localSavedRun;
-  }
-
   // Fallback: check if an unassigned active run matching legacy ID exists
   if (!activeRun && currentPlan) {
     activeRun = testRuns.find(r => r.id === 'run-' + currentPlan.id && r.status !== 'completed');
+  }
+
+  // Merge with locally persisted in-progress run so step results are NEVER lost
+  if (localSavedRun && localSavedRun.planId === currentPlan?.id) {
+    if (!activeRun) {
+      activeRun = localSavedRun;
+    } else {
+      activeRun = {
+        ...activeRun,
+        results: {
+          ...(activeRun.results || {}),
+          ...(localSavedRun.results || {})
+        },
+        bugLogs: [
+          ...(activeRun.bugLogs || []),
+          ...(localSavedRun.bugLogs || []).filter(b => !(activeRun?.bugLogs || []).some(existing => existing.id === b.id))
+        ],
+        currentStepIndex: localSavedRun.currentStepIndex !== undefined ? localSavedRun.currentStepIndex : activeRun.currentStepIndex
+      };
+    }
   }
 
   if (!activeRun && currentPlan) {
@@ -512,8 +528,13 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     const now = new Date();
     const isoTimestamp = now.toISOString();
 
+    const currentAccumulated = {
+      ...(localSavedRun?.results || {}),
+      ...(activeRun?.results || {})
+    };
+
     const updatedResults = {
-      ...activeRun.results,
+      ...currentAccumulated,
       [currentStep.id]: {
         stepId: currentStep.id,
         status: selectedStatus,
@@ -569,11 +590,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       }
       setBugSuccessMessage(`🎉 Run complete! ${activeDevName || 'Device'} progress updated for today.`);
       setTimeout(() => setBugSuccessMessage(null), 4000);
-
-      // Commit 100% finished run to dashboard & cloud
-      onUpdateRun(updatedRun);
     } else {
-      // Intermediate step: Keep purely in local storage, do NOT touch dashboard or cloud until 100% finished
       if (currentPlan) {
         localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updatedRun));
       }
@@ -584,6 +601,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       setSelectedStatus(nextSavedStatus && nextSavedStatus !== 'pending' ? nextSavedStatus : null);
     }
 
+    // Always record step to active in-progress test run so data is NEVER lost
+    onUpdateRun(updatedRun);
     setBugSuccessMessage(null);
   };
 
