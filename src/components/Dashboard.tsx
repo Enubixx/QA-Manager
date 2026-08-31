@@ -32,6 +32,7 @@ interface DashboardProps {
   onSaveTester?: (tester: TesterProfile) => void;
   onDeleteTesterProfile?: (testerId: string) => void;
   archivedRuns?: TestRun[];
+  onRunSubagentTest?: (planId?: string) => void;
 }
 
 interface FeatureMetric {
@@ -80,13 +81,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onSaveDevice,
   onDeleteDevice,
   onSaveTester,
-  onDeleteTesterProfile
+  onDeleteTesterProfile,
+  onRunSubagentTest
 }) => {
   const defaultTodayStr = getLocalDateStr(new Date());
   const [activeTab, setActiveTab] = useState<'overview' | 'devices' | 'testers' | 'features' | 'bugs'>('overview');
   const [selectedQaDate, setSelectedQaDate] = useState<string>(defaultTodayStr);
   const [expandedTesters, setExpandedTesters] = useState<Record<string, boolean>>({});
   const [expandedPlanSteps, setExpandedPlanSteps] = useState<Record<string, boolean>>({});
+  const [subagentToast, setSubagentToast] = useState<string | null>(null);
 
   const [newDeviceName, setNewDeviceName] = useState('');
   const [newPersonName, setNewPersonName] = useState('');
@@ -1070,7 +1073,28 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
-      
+      {/* Hidden File Input for JSON Backup Import */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleJSONFileImport}
+        accept=".json"
+        className="hidden"
+      />
+
+      {/* Subagent Execution Toast / Banner */}
+      {subagentToast && (
+        <div className="bg-gradient-to-r from-emerald-600/30 via-teal-600/30 to-indigo-600/30 border border-emerald-400/50 p-4 rounded-3xl backdrop-blur-xl flex items-center justify-between text-xs font-bold text-emerald-200 animate-in fade-in slide-in-from-top-2 duration-300 shadow-xl shadow-emerald-500/20">
+          <div className="flex items-center gap-2.5">
+            <Sparkles className="w-4 h-4 text-emerald-400 flex-shrink-0 animate-pulse" />
+            <span>{subagentToast}</span>
+          </div>
+          <button onClick={() => setSubagentToast(null)} className="text-emerald-400 hover:text-white p-1">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Top Welcome & Actions Header (Apple Liquid Glass Banner) */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 liquid-glass-panel rounded-3xl p-6 shadow-2xl relative overflow-hidden">
         <div className="relative z-10">
@@ -1082,11 +1106,39 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
         <div className="flex flex-wrap items-center gap-2.5 relative z-10">
           <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="px-3.5 py-2 bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-bold rounded-2xl border border-white/10 flex items-center gap-1.5 transition-all duration-300 shadow-sm"
+            title="Import QA Backup JSON File"
+          >
+            <Upload className="w-3.5 h-3.5 text-purple-400" />
+            <span>Import JSON</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (onRunSubagentTest) {
+                const targetId = testPlans[0]?.id || 'plan-demo-1';
+                onRunSubagentTest(targetId);
+                setActiveTab('features');
+                setSubagentToast(`🤖 Autonomous Subagent tested all steps for Today (${todayStr})! Live feature metrics populated below.`);
+                setTimeout(() => setSubagentToast(null), 5000);
+              }
+            }}
+            className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-extrabold rounded-2xl shadow-xl shadow-emerald-500/25 border border-white/20 flex items-center gap-1.5 transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer"
+            title="Run autonomous QA subagent to execute full test flow and record data for Today"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-white animate-pulse" />
+            <span>Run Subagent Test Flow (Today)</span>
+          </button>
+
+          <button
             onClick={onSelectPlanToBuild}
             className="px-4 py-2 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-400 hover:to-pink-400 text-white text-xs font-extrabold rounded-2xl shadow-xl shadow-purple-500/30 border border-white/30 flex items-center gap-1.5 transition-all duration-300 hover:scale-[1.03] active:scale-[0.98]"
           >
             <Plus className="w-3.5 h-3.5" />
-            Create Plan
+            <span>Create Plan</span>
           </button>
         </div>
       </div>
@@ -1722,13 +1774,32 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         <span className="font-mono text-[11px]">Created {new Date(plan.createdAt).toLocaleDateString()}</span>
                       </div>
 
-                      <button
-                        onClick={() => onOpenMobileView(plan.id)}
-                        className="px-4 py-2 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-400/40 text-purple-200 text-xs font-bold rounded-2xl flex items-center gap-1.5 transition-all duration-300 shadow-md shadow-purple-500/10 backdrop-blur-md hover:scale-[1.02] active:scale-[0.98]"
-                      >
-                        <Smartphone className="w-3.5 h-3.5 text-purple-300" />
-                        Test on Phone App
-                      </button>
+                      <div className="flex items-center gap-2">
+                        {onRunSubagentTest && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onRunSubagentTest(plan.id);
+                              setActiveTab('features');
+                              setSubagentToast(`🤖 Subagent executed all ${plan.steps.length} steps in "${plan.name}" for Today! Features populated.`);
+                              setTimeout(() => setSubagentToast(null), 5000);
+                            }}
+                            className="px-3.5 py-2 bg-gradient-to-r from-emerald-500/20 to-teal-500/20 hover:from-emerald-500/30 hover:to-teal-500/30 border border-emerald-400/40 text-emerald-300 text-xs font-bold rounded-2xl flex items-center gap-1.5 transition-all duration-300 shadow-md shadow-emerald-500/10 backdrop-blur-md hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+                            title="Run autonomous subagent to execute all steps in this test flow and record data for Today"
+                          >
+                            <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>Run Subagent Test (Today)</span>
+                          </button>
+                        )}
+
+                        <button
+                          onClick={() => onOpenMobileView(plan.id)}
+                          className="px-4 py-2 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-400/40 text-purple-200 text-xs font-bold rounded-2xl flex items-center gap-1.5 transition-all duration-300 shadow-md shadow-purple-500/10 backdrop-blur-md hover:scale-[1.02] active:scale-[0.98]"
+                        >
+                          <Smartphone className="w-3.5 h-3.5 text-purple-300" />
+                          Test on Phone App
+                        </button>
+                      </div>
                     </div>
 
                     {/* Expandable Step Walkthrough Table/List */}
@@ -2183,6 +2254,25 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 );
               })()}
 
+              {/* Run Subagent QA Test Flow Button */}
+              {onRunSubagentTest && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (testPlans.length === 0) onLoadSampleData();
+                    const targetId = testPlans[0]?.id || 'plan-demo-1';
+                    onRunSubagentTest(targetId);
+                    setSubagentToast(`🤖 Autonomous Subagent tested all steps for Today (${todayStr})! Live feature metrics populated below.`);
+                    setTimeout(() => setSubagentToast(null), 5000);
+                  }}
+                  className="px-3.5 h-9 bg-gradient-to-r from-emerald-500/20 to-teal-500/20 hover:from-emerald-500/30 hover:to-teal-500/30 text-emerald-300 border border-emerald-400/40 rounded-2xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all shadow-md hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+                  title="Run autonomous QA subagent to execute full test flow and record data for Today"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0 animate-pulse" />
+                  <span className="leading-none">Run Subagent Test Flow (Today)</span>
+                </button>
+              )}
+
               {/* Inline Feature Creation Form */}
               <form onSubmit={handleCreateFeatureSubmit} className="flex items-center gap-2">
                 <div className="relative flex items-center">
@@ -2536,8 +2626,34 @@ export const Dashboard: React.FC<DashboardProps> = ({
           )}
 
           {featureMetricsList.length === 0 ? (
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-xs text-slate-500">
-              No features tracked yet. Use the form above to add your first Feature Tag.
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-10 text-center space-y-4 shadow-xl">
+              <div className="p-3 bg-purple-950/60 rounded-full border border-purple-800/40 text-purple-400 w-fit mx-auto">
+                <Tag className="w-6 h-6" />
+              </div>
+              <div>
+                <h4 className="text-base font-bold text-white">No Features Tracked For {selectedDailySessionDate === todayStr ? 'Today' : selectedDailySessionDate}</h4>
+                <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+                  Execute test runs or click below to have the autonomous QA subagent test a flow and populate live feature data for today.
+                </p>
+              </div>
+              {onRunSubagentTest && (
+                <div className="pt-2 flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (testPlans.length === 0) onLoadSampleData();
+                      const targetId = testPlans[0]?.id || 'plan-demo-1';
+                      onRunSubagentTest(targetId);
+                      setSubagentToast(`🤖 Autonomous Subagent tested all steps for Today (${todayStr})! Live feature metrics populated below.`);
+                      setTimeout(() => setSubagentToast(null), 5000);
+                    }}
+                    className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-extrabold text-xs rounded-2xl shadow-xl shadow-emerald-500/25 border border-white/20 flex items-center gap-2 transition-all hover:scale-105 active:scale-95 cursor-pointer"
+                  >
+                    <Sparkles className="w-4 h-4 text-white" />
+                    <span>Run Subagent Test Flow for Today</span>
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">

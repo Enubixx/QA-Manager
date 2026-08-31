@@ -311,6 +311,87 @@ export function App() {
     }
   };
 
+  const handleRunSubagentAutomatedTest = (planId?: string) => {
+    let targetPlan = (planId ? testPlans.find(p => p.id === planId) : null) || testPlans[0];
+    
+    // If no plans exist yet, initialize sample plans first
+    if (!targetPlan) {
+      targetPlan = SAMPLE_PLANS[0];
+      setTestPlans(SAMPLE_PLANS);
+      setSelectedPlanId(targetPlan.id);
+      SAMPLE_PLANS.forEach(syncTestPlanToSupabase);
+    }
+
+    const now = new Date();
+    const isoTimestamp = now.toISOString();
+    const runId = `run-${targetPlan.id}-subagent-${Date.now().toString(36)}`;
+    const testerName = 'Automated QA Subagent';
+    const deviceName = 'Simulated Automated Runner';
+
+    handleAddPopulatedDevice(deviceName);
+    handleSaveTester({
+      id: 'tester-subagent-bot',
+      name: testerName,
+      role: 'Autonomous QA Agent'
+    });
+
+    const results: Record<string, any> = {};
+    const createdBugs: BugLog[] = [];
+
+    // Execute every step from Step 1 through to the Final Step!
+    targetPlan.steps.forEach((step, idx) => {
+      const status: 'green' | 'yellow' = (idx === 1 && targetPlan.steps.length > 2) ? 'yellow' : 'green';
+      results[step.id] = {
+        stepId: step.id,
+        status,
+        feature: step.feature || 'General',
+        timestamp: isoTimestamp
+      };
+
+      if (step.feature) {
+        handleAddPopulatedFeature(step.feature);
+      }
+
+      if (status === 'yellow') {
+        const bug: BugLog = {
+          id: `bug-subagent-${Date.now()}-${idx}`,
+          testRunId: runId,
+          planId: targetPlan.id,
+          stepId: step.id,
+          stepTitle: step.title,
+          feature: step.feature || 'General',
+          testerName,
+          deviceName,
+          severity: 'medium',
+          note: `Subagent automated verification: detected 3.1s response latency on SSO callback.`,
+          timestamp: isoTimestamp,
+          formattedTime: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        };
+        createdBugs.push(bug);
+        setBugLogs(prev => [bug, ...prev]);
+        syncBugLogToSupabase(bug);
+      }
+    });
+
+    const completedRun: TestRun = {
+      id: runId,
+      planId: targetPlan.id,
+      planName: targetPlan.name,
+      testerName,
+      deviceName,
+      status: 'completed',
+      currentStepIndex: targetPlan.steps.length,
+      results,
+      bugLogs: createdBugs,
+      startedAt: new Date(now.getTime() - targetPlan.steps.length * 20000).toISOString(),
+      completedAt: isoTimestamp,
+      durationMs: targetPlan.steps.length * 20000
+    };
+
+    setArchivedRuns(prev => [completedRun, ...prev]);
+    syncArchivedRunToSupabase(completedRun);
+  };
+
   const handleClearAllData = () => {
     setTestPlans([]);
     setTestRuns([]);
@@ -323,7 +404,7 @@ export function App() {
     localStorage.removeItem('qa_bug_logs');
   };
 
-  const handleImportJSONData = (data: { testPlans?: TestPlan[]; testRuns?: TestRun[]; bugLogs?: BugLog[] }) => {
+  const handleImportJSONData = (data: { testPlans?: TestPlan[]; testRuns?: TestRun[]; bugLogs?: BugLog[]; archivedRuns?: TestRun[] }) => {
     if (data.testPlans && Array.isArray(data.testPlans)) {
       setTestPlans(data.testPlans);
       data.testPlans.forEach(syncTestPlanToSupabase);
@@ -332,6 +413,10 @@ export function App() {
     if (data.testRuns && Array.isArray(data.testRuns)) {
       setTestRuns(data.testRuns);
       data.testRuns.forEach(syncTestRunToSupabase);
+    }
+    if (data.archivedRuns && Array.isArray(data.archivedRuns)) {
+      setArchivedRuns(data.archivedRuns);
+      data.archivedRuns.forEach(syncArchivedRunToSupabase);
     }
     if (data.bugLogs && Array.isArray(data.bugLogs)) {
       setBugLogs(data.bugLogs);
@@ -690,6 +775,7 @@ export function App() {
               onSaveTester={handleSaveTester}
               onDeleteTesterProfile={handleDeleteTesterProfile}
               archivedRuns={archivedRuns}
+              onRunSubagentTest={handleRunSubagentAutomatedTest}
             />
           </div>
         )}
