@@ -102,25 +102,87 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [testerViewMode, setTesterViewMode] = useState<'all' | 'active'>('all');
   const [searchTesterQuery, setSearchTesterQuery] = useState('');
 
-  // Determine active testers currently running a test session on a device (strictly aligned with device status)
+  // Determine active testers currently running a test session on a device (with live step and status metrics)
   const activeTesterMap = useMemo(() => {
-    const map = new Map<string, { deviceName: string; planName?: string; runId?: string }>();
+    const map = new Map<string, { 
+      deviceName: string; 
+      planName?: string; 
+      runId?: string;
+      currentStepIndex: number;
+      totalSteps: number;
+      currentStepTitle?: string;
+      greenCount: number;
+      yellowCount: number;
+      redCount: number;
+      progressPct: number;
+    }>();
+
+    const computeMetrics = (testerName: string, devName: string, run?: TestRun) => {
+      if (!testerName) return;
+      const key = testerName.toLowerCase().trim();
+      const plan = run ? testPlans.find(p => p.id === run.planId) : undefined;
+      const totalSteps = plan?.steps.length || 1;
+      const stepEntries = Object.entries(run?.results || {}).filter(
+        ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+      );
+      const completedResults = stepEntries.map(([_, v]) => v as any);
+      const completedSteps = completedResults.length;
+      const progressPct = Math.min(100, Math.round((completedSteps / totalSteps) * 100));
+
+      const greenCount = completedResults.filter(r => r.status === 'green').length;
+      const yellowCount = completedResults.filter(r => r.status === 'yellow').length;
+      const redCount = completedResults.filter(r => r.status === 'red').length;
+
+      const currentStepIdx = (run?.currentStepIndex !== undefined) ? run.currentStepIndex : completedSteps;
+      const currentStep = plan?.steps[Math.min(currentStepIdx, totalSteps - 1)];
+      const currentStepTitle = currentStep ? (currentStep.title || currentStep.feature || `Step ${currentStepIdx + 1}`) : undefined;
+
+      map.set(key, {
+        deviceName: devName || run?.deviceName || 'Mobile Device',
+        planName: run?.planName || plan?.name || 'Test Plan',
+        runId: run?.id,
+        currentStepIndex: Math.min(currentStepIdx + 1, totalSteps),
+        totalSteps,
+        currentStepTitle,
+        greenCount,
+        yellowCount,
+        redCount,
+        progressPct
+      });
+    };
+
+    // 1. Check devices that are currently locked by a tester
     devices.forEach(d => {
-      if (d.activeTesterName && d.activeTesterName.trim()) {
+      const activeTester = d.activeTesterName?.trim();
+      if (activeTester) {
         const activeRun = testRuns.find(r => 
-          (d.activeRunId && r.id === d.activeRunId) || 
-          (r.deviceId === d.id && r.status === 'in_progress') ||
-          (r.deviceName && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim() && r.status === 'in_progress')
+          r.status === 'in_progress' && (
+            (d.activeRunId && r.id === d.activeRunId) || 
+            (r.deviceId === d.id) ||
+            (r.deviceName && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim()) ||
+            (r.testerName && r.testerName.toLowerCase().trim() === activeTester.toLowerCase())
+          )
         );
-        map.set(d.activeTesterName.toLowerCase().trim(), {
-          deviceName: d.name,
-          planName: activeRun?.planName,
-          runId: d.activeRunId || activeRun?.id
-        });
+        computeMetrics(activeTester, d.name, activeRun);
       }
     });
+
+    // 2. Also check in_progress runs directly so step changes sync with zero lag
+    testRuns.forEach(r => {
+      if (r.status === 'in_progress' && r.testerName && r.testerName.trim()) {
+        const key = r.testerName.toLowerCase().trim();
+        const existing = map.get(key);
+        // If not in map, or if existing has less recent results count
+        const currentEntriesCount = Object.keys(r.results || {}).length;
+        const existingCount = existing ? (existing.greenCount + existing.yellowCount + existing.redCount) : -1;
+        if (!existing || currentEntriesCount >= existingCount) {
+          computeMetrics(r.testerName, r.deviceName || 'Mobile Device', r);
+        }
+      }
+    });
+
     return map;
-  }, [devices, testRuns]);
+  }, [devices, testRuns, testPlans]);
 
   // Calculate completed runs today per device ID and plan ID (deduplicated by run.id)
   const todayRunsMap = useMemo(() => {
@@ -1853,14 +1915,54 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         </div>
                       </div>
 
-                      {/* Live Active Test Plan Banner if testing */}
-                      {isActive && activeInfo?.planName && (
-                        <div className="mt-3 bg-emerald-950/40 border border-emerald-500/30 rounded-xl p-2.5 flex items-center justify-between text-xs">
-                          <span className="text-[11px] text-emerald-300 font-bold flex items-center gap-1.5">
-                            <Layers className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>Currently Testing:</span>
-                            <span className="text-white font-mono">{activeInfo.planName}</span>
-                          </span>
+                      {/* Live Active Test Walkthrough Details */}
+                      {isActive && activeInfo && (
+                        <div className="mt-3 bg-gradient-to-br from-emerald-950/50 via-slate-950/70 to-indigo-950/40 border border-emerald-500/30 rounded-2xl p-3 space-y-2.5 shadow-md animate-in fade-in duration-300">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-[11px] text-emerald-300 font-bold flex items-center gap-1.5 truncate">
+                              <Layers className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                              <span className="truncate">{activeInfo.planName || 'Live Walkthrough'}</span>
+                            </span>
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 shrink-0">
+                              Step {activeInfo.currentStepIndex} of {activeInfo.totalSteps}
+                            </span>
+                          </div>
+
+                          {activeInfo.currentStepTitle && (
+                            <div className="bg-slate-900/70 rounded-xl px-2.5 py-1.5 border border-white/5 flex items-center justify-between text-[11px]">
+                              <span className="text-slate-400 text-[10px] uppercase font-bold tracking-wider">Current Step</span>
+                              <span className="text-indigo-300 font-semibold truncate max-w-[170px]" title={activeInfo.currentStepTitle}>
+                                {activeInfo.currentStepTitle}
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Live Status Pills: Green, Yellow, Red */}
+                          <div className="flex items-center gap-1.5 text-[10px]">
+                            <span className="flex items-center gap-1 text-emerald-300 bg-emerald-950/80 px-2 py-0.5 rounded-lg border border-emerald-700/50 font-mono font-bold">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-400" /> {activeInfo.greenCount || 0} Green
+                            </span>
+                            <span className="flex items-center gap-1 text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded-lg border border-amber-700/50 font-mono font-bold">
+                              <AlertTriangle className="w-3 h-3 text-amber-400" /> {activeInfo.yellowCount || 0} Yellow
+                            </span>
+                            <span className="flex items-center gap-1 text-rose-300 bg-rose-950/80 px-2 py-0.5 rounded-lg border border-rose-700/50 font-mono font-bold">
+                              <XCircle className="w-3 h-3 text-rose-400" /> {activeInfo.redCount || 0} Red
+                            </span>
+                          </div>
+
+                          {/* Live Progress Bar */}
+                          <div className="space-y-1">
+                            <div className="flex justify-between text-[10px] font-mono text-slate-400">
+                              <span>Progress</span>
+                              <span className="text-emerald-400 font-bold">{activeInfo.progressPct || 0}%</span>
+                            </div>
+                            <div className="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden border border-white/5">
+                              <div
+                                className="bg-gradient-to-r from-emerald-500 to-indigo-500 h-full transition-all duration-300"
+                                style={{ width: `${activeInfo.progressPct || 0}%` }}
+                              />
+                            </div>
+                          </div>
                         </div>
                       )}
 
@@ -2263,7 +2365,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         </span>
                       </div>
 
-                      {/* Status Pills */}
+                      {/* Current Step being tested */}
+                      {(() => {
+                        const currentStepIdx = (run.currentStepIndex !== undefined) ? run.currentStepIndex : completedSteps;
+                        const currentStep = plan?.steps[Math.min(currentStepIdx, totalSteps - 1)];
+                        const stepTitle = currentStep ? (currentStep.title || currentStep.feature || `Step ${currentStepIdx + 1}`) : undefined;
+                        return (
+                          <div className="bg-slate-900/60 rounded-xl px-2.5 py-1.5 border border-white/5 flex items-center justify-between text-[11px]">
+                            <span className="text-slate-400 font-mono text-[10px]">
+                              Step {Math.min(currentStepIdx + 1, totalSteps)} of {totalSteps}
+                            </span>
+                            {stepTitle && (
+                              <span className="text-indigo-300 font-semibold truncate max-w-[170px]" title={stepTitle}>
+                                {stepTitle}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
                       <div className="flex items-center gap-2 text-[10px]">
                         <span className="flex items-center gap-1 text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/40">
                           <CheckCircle2 className="w-3 h-3" /> {greenCount} Green
