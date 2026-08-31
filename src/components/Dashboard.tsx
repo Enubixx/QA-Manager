@@ -1385,6 +1385,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     ? quotaPlanMap[device.id]
                     : (unassignedPlans[0]?.id || '');
                   const selectedRunsForDev = quotaRunsMap[device.id] || 3;
+                  const activeRunForDevice = testRuns.find(r => 
+                    r.status === 'in_progress' && 
+                    (r.id === device.activeRunId || (r.deviceId && (r.deviceId === device.id || r.deviceId.includes(device.id))) || (r.deviceName && r.deviceName.toLowerCase().trim() === device.name.toLowerCase().trim()))
+                  );
 
                   return (
                     <div key={device.id} className="liquid-glass-panel rounded-2xl p-5 border border-white/10 space-y-4 bg-slate-900/60 shadow-lg">
@@ -1398,10 +1402,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           <div>
                             <div className="flex items-center gap-2">
                               <h4 className="text-sm font-extrabold text-white">{device.name}</h4>
-                              {device.activeRunId && (
-                                <span className="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-extrabold flex items-center gap-1 animate-pulse">
+                              {device.activeRunId && activeRunForDevice && (
+                                <span className="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-extrabold flex items-center gap-1.5 animate-pulse">
                                   <Timer className="w-3 h-3" />
-                                  <span>In Use by {device.activeTesterName || 'Tester'}</span>
+                                  <span>In Use by {device.activeTesterName || activeRunForDevice.testerName || 'Tester'}</span>
+                                  {onSaveDevice && (
+                                    <button
+                                      type="button"
+                                      onClick={() => onSaveDevice({ ...device, activeRunId: undefined, activeTesterName: undefined })}
+                                      className="ml-1 text-[9px] text-rose-400 hover:text-white underline font-semibold cursor-pointer"
+                                      title="Clear in-use lock"
+                                    >
+                                      Clear
+                                    </button>
+                                  )}
                                 </span>
                               )}
                             </div>

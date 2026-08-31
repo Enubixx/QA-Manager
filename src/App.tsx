@@ -218,6 +218,33 @@ export function App() {
     localStorage.setItem('qa_populated_devices', JSON.stringify(populatedDevices));
   }, [populatedDevices]);
 
+  // Automatically audit device "In Use" locks: if a device has activeRunId but no in_progress test run exists, release it
+  useEffect(() => {
+    if (devices.length === 0) return;
+    let hasChanges = false;
+    const cleanedDevices = devices.map(d => {
+      if (!d.activeRunId) return d;
+      // Check if there is an actual in_progress run for this device
+      const hasActiveInProgressRun = testRuns.some(r => 
+        r.status === 'in_progress' && 
+        (r.id === d.activeRunId || (r.deviceId && (r.deviceId === d.id || r.deviceId.includes(d.id))) || (r.deviceName && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim()))
+      );
+      if (!hasActiveInProgressRun) {
+        hasChanges = true;
+        const freed = { ...d, activeRunId: undefined, activeTesterName: undefined };
+        syncDeviceToSupabase(freed);
+        return freed;
+      }
+      return d;
+    });
+
+    if (hasChanges) {
+      setDevices(cleanedDevices);
+      localStorage.setItem('qa_devices_list', JSON.stringify(cleanedDevices));
+      syncDevicesListToCloud(cleanedDevices);
+    }
+  }, [testRuns, devices]);
+
   useEffect(() => {
     localStorage.setItem('qa_populated_features', JSON.stringify(populatedFeatures));
   }, [populatedFeatures]);
@@ -482,6 +509,25 @@ export function App() {
 
     deleteTestRunFromSupabase(runId);
     deleteArchivedRunFromSupabase(runId);
+
+    // Release device if locked by this deleted run
+    setDevices(prev => {
+      let changed = false;
+      const next = prev.map(d => {
+        if (d.activeRunId === runId) {
+          changed = true;
+          const released = { ...d, activeRunId: undefined, activeTesterName: undefined };
+          syncDeviceToSupabase(released);
+          return released;
+        }
+        return d;
+      });
+      if (changed) {
+        localStorage.setItem('qa_devices_list', JSON.stringify(next));
+        syncDevicesListToCloud(next);
+      }
+      return next;
+    });
   };
 
   const handleDeleteTester = (testerName: string) => {
@@ -631,6 +677,27 @@ export function App() {
 
       deleteTestRunFromSupabase(completedRun.id);
       syncArchivedRunToSupabase(completedRun);
+
+      // Release device lock: if test is finished, device is no longer in use
+      setDevices(prev => {
+        let changed = false;
+        const next = prev.map(d => {
+          const matchesId = d.activeRunId === completedRun.id || (completedRun.deviceId && (d.id === completedRun.deviceId || completedRun.deviceId.includes(d.id)));
+          const matchesName = completedRun.deviceName && d.name.toLowerCase().trim() === completedRun.deviceName.toLowerCase().trim();
+          if (matchesId || matchesName) {
+            changed = true;
+            const released = { ...d, activeRunId: undefined, activeTesterName: undefined };
+            syncDeviceToSupabase(released);
+            return released;
+          }
+          return d;
+        });
+        if (changed) {
+          localStorage.setItem('qa_devices_list', JSON.stringify(next));
+          syncDevicesListToCloud(next);
+        }
+        return next;
+      });
     } else {
       setTestRuns(prev => {
         const exists = prev.some(r => r.id === updatedRun.id);

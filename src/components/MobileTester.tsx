@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile } from '../types';
-import { CheckCircle2, Clock, Bug, Smartphone, RefreshCw, Send, Check, Layers, ChevronDown, AlertTriangle, XCircle, ArrowRight, ArrowLeft, ChevronLeft, Undo2, Sparkles, User, Download, Edit3, Trash2, Tag, Image, Camera, X } from 'lucide-react';
+import { CheckCircle2, Clock, Bug, Smartphone, RefreshCw, Send, Check, Layers, ChevronDown, AlertTriangle, XCircle, ArrowRight, ArrowLeft, ChevronLeft, ChevronRight, Undo2, Sparkles, User, Download, Edit3, Trash2, Tag, Image, Camera, X } from 'lucide-react';
 import { exportTestRunToCSV } from '../utils/exportUtils';
 
 interface MobileTesterProps {
@@ -257,6 +257,21 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     const hasDevice = Boolean(savedDevice || activeRun?.deviceName);
     return !hasTester || !hasDevice;
   });
+
+  // Professional Bottom-Sheet Custom Selectors (replaces raw OS debug menus)
+  const [openTesterPickerModal, setOpenTesterPickerModal] = useState<boolean>(false);
+  const [openDevicePickerModal, setOpenDevicePickerModal] = useState<boolean>(false);
+  const [openPlanPickerModal, setOpenPlanPickerModal] = useState<boolean>(false);
+
+  // Computed helper for currently selected tester profile
+  const selectedTesterProfile = useMemo(() => {
+    return testers.find(t => t.name.toLowerCase().trim() === inputReporterName.toLowerCase().trim()) || null;
+  }, [testers, inputReporterName]);
+
+  // Computed helper for currently selected device profile
+  const selectedDeviceProfile = useMemo(() => {
+    return devices.find(d => d.name.toLowerCase().trim() === inputDeviceName.toLowerCase().trim() || d.id === inputDeviceName) || null;
+  }, [devices, inputDeviceName]);
 
   const steps = currentPlan?.steps || [];
   const totalSteps = steps.length;
@@ -853,24 +868,14 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 <span>Plan:</span>
               </div>
               <div className="relative flex-1 max-w-[210px]">
-                <select
-                  value={currentPlan?.id || ''}
-                  onChange={e => {
-                    setCompletedRunSummary(null);
-                    setSelectedStatus(null);
-                    onSelectPlan(e.target.value);
-                    setShowSetupModal(true);
-                  }}
-                  style={{ backgroundColor: '#0b101d', color: '#e0e7ff', WebkitAppearance: 'none', appearance: 'none' }}
-                  className="w-full dark-select-input rounded-xl px-3 py-1.5 text-xs font-bold shadow-inner focus:outline-none focus:border-indigo-500 cursor-pointer truncate pr-6"
+                <button
+                  type="button"
+                  onClick={() => setOpenPlanPickerModal(true)}
+                  className="w-full flex items-center justify-between gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-white/15 text-xs font-bold text-white shadow-inner transition-all truncate group cursor-pointer active:scale-95"
                 >
-                  {availablePlans.map(plan => (
-                    <option key={plan.id} value={plan.id} style={{ backgroundColor: '#090d16', color: '#f1f5f9' }} className="bg-slate-950 text-slate-100 py-1 font-bold">
-                      {plan.name}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 top-2 pointer-events-none" />
+                  <span className="truncate">{currentPlan?.name || 'Select Plan...'}</span>
+                  <ChevronDown className="w-3.5 h-3.5 text-purple-400 group-hover:text-purple-300 flex-shrink-0 transition-transform" />
+                </button>
               </div>
             </div>
 
@@ -1489,26 +1494,37 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
               <div className="liquid-glass-panel rounded-3xl p-5 space-y-4 border-white/15 shadow-2xl">
                 
-                {/* Reporter Select Field */}
+                {/* QA Tester Custom Trigger */}
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
                     <User className="w-3.5 h-3.5 text-indigo-400" />
                     Select QA Tester
                   </label>
                   {testers.length > 0 ? (
-                    <select
-                      value={inputReporterName}
-                      onChange={e => setInputReporterName(e.target.value)}
-                      className="w-full liquid-glass-input rounded-2xl px-4 py-3 text-xs text-white bg-slate-900 border border-slate-700/80 focus:outline-none focus:border-indigo-500 font-bold cursor-pointer"
-                      required
+                    <button
+                      type="button"
+                      onClick={() => setOpenTesterPickerModal(true)}
+                      className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left group cursor-pointer active:scale-[0.99] ${
+                        inputReporterName
+                          ? 'bg-slate-900/90 border-indigo-500/40 shadow-md ring-1 ring-indigo-500/20'
+                          : 'bg-slate-900/70 border-white/15 hover:border-white/30'
+                      }`}
                     >
-                      <option value="" disabled>Choose Tester Profile...</option>
-                      {testers.map(t => (
-                        <option key={t.id} value={t.name}>
-                          👤 {t.name} ({t.role || 'QA Tester'})
-                        </option>
-                      ))}
-                    </select>
+                      <div className="flex items-center gap-3 truncate">
+                        <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 text-white flex items-center justify-center font-bold text-xs shadow flex-shrink-0">
+                          {selectedTesterProfile ? selectedTesterProfile.name.charAt(0).toUpperCase() : <User className="w-4 h-4 text-indigo-200" />}
+                        </div>
+                        <div className="truncate">
+                          <div className="text-xs font-extrabold text-white truncate">
+                            {selectedTesterProfile ? selectedTesterProfile.name : (inputReporterName || 'Choose QA Tester...')}
+                          </div>
+                          <div className="text-[10px] text-slate-400 truncate">
+                            {selectedTesterProfile?.role || 'Tap to select tester profile'}
+                          </div>
+                        </div>
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-white flex-shrink-0 transition-transform" />
+                    </button>
                   ) : (
                     <div className="p-3 bg-amber-500/15 border border-amber-500/30 rounded-2xl text-amber-200 text-xs font-semibold text-center leading-relaxed">
                       ⚠️ No QA tester profiles created yet. Register tester profiles on the Web Dashboard.
@@ -1516,52 +1532,46 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   )}
                 </div>
 
-                {/* Target Device Select Field */}
+                {/* Target Device Custom Trigger */}
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
                     <Smartphone className="w-3.5 h-3.5 text-purple-400" />
                     Select Target Device
                   </label>
                   {selectableDevices.length > 0 ? (
-                    <select
-                      value={inputDeviceName}
-                      onChange={e => {
-                        const chosenDevName = e.target.value;
-                        setInputDeviceName(chosenDevName);
-                        const matched = devices.find(d => d.name.toLowerCase().trim() === chosenDevName.toLowerCase().trim() || d.id === chosenDevName);
-                        if (matched && matched.quotas && matched.quotas.length > 0) {
-                          const quotaForCurrent = matched.quotas.find(q => q.planId === currentPlan?.id && q.targetRunsPerDay > 0);
-                          if (!quotaForCurrent) {
-                            const firstValid = matched.quotas.find(q => q.targetRunsPerDay > 0);
-                            if (firstValid) {
-                              onSelectPlan(firstValid.planId);
-                            }
-                          }
-                        }
-                      }}
-                      className="w-full liquid-glass-input rounded-2xl px-4 py-3 text-xs text-white bg-slate-900 border border-slate-700/80 focus:outline-none focus:border-purple-500 font-bold cursor-pointer"
-                      required
+                    <button
+                      type="button"
+                      onClick={() => setOpenDevicePickerModal(true)}
+                      className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left group cursor-pointer active:scale-[0.99] ${
+                        inputDeviceName
+                          ? 'bg-slate-900/90 border-purple-500/40 shadow-md ring-1 ring-purple-500/20'
+                          : 'bg-slate-900/70 border-white/15 hover:border-white/30'
+                      }`}
                     >
-                      <option value="" disabled>Choose Mobile Device...</option>
-                      {selectableDevices.map(dev => {
-                        const quota = dev.quotas?.find(q => q.planId === currentPlan?.id);
-                        const doneToday = (todayRunsMap[dev.id] && todayRunsMap[dev.id][currentPlan?.id || '']) || 0;
-                        const remaining = quota ? Math.max(0, quota.targetRunsPerDay - doneToday) : null;
-                        
-                        let label = `📱 ${dev.name}`;
-                        if (remaining !== null) {
-                          label += ` — (⚡ ${remaining} run${remaining > 1 ? 's' : ''} left today)`;
-                        } else {
-                          label += ` — (Ready)`;
-                        }
-
-                        return (
-                          <option key={dev.id} value={dev.name}>
-                            {label}
-                          </option>
-                        );
-                      })}
-                    </select>
+                      <div className="flex items-center gap-3 truncate">
+                        <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-purple-600 to-pink-600 text-white flex items-center justify-center font-bold text-xs shadow flex-shrink-0">
+                          <Smartphone className="w-4 h-4 text-purple-200" />
+                        </div>
+                        <div className="truncate">
+                          <div className="text-xs font-extrabold text-white truncate">
+                            {selectedDeviceProfile ? selectedDeviceProfile.name : (inputDeviceName || 'Choose Mobile Device...')}
+                          </div>
+                          <div className="text-[10px] text-slate-400 truncate">
+                            {(() => {
+                              if (!selectedDeviceProfile) return 'Tap to select mobile device';
+                              const quota = selectedDeviceProfile.quotas?.find(q => q.planId === currentPlan?.id);
+                              const doneToday = (todayRunsMap[selectedDeviceProfile.id] && todayRunsMap[selectedDeviceProfile.id][currentPlan?.id || '']) || 0;
+                              const remaining = quota ? Math.max(0, quota.targetRunsPerDay - doneToday) : null;
+                              if (remaining !== null) {
+                                return `⚡ ${remaining} run${remaining > 1 ? 's' : ''} left today`;
+                              }
+                              return 'Ready';
+                            })()}
+                          </div>
+                        </div>
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-white flex-shrink-0 transition-transform" />
+                    </button>
                   ) : (
                     <div className="p-3 bg-amber-500/15 border border-amber-500/30 rounded-2xl text-amber-200 text-xs font-semibold text-center leading-relaxed">
                       ⚠️ No devices have active daily quotas configured for "{currentPlan?.name || 'this plan'}". Set plan quotas on the Web Dashboard under Devices & Quotas.
@@ -1581,6 +1591,210 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
             </form>
 
+          </div>
+        )}
+
+        {/* Custom Plan Picker Bottom Sheet */}
+        {openPlanPickerModal && (
+          <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-xl z-[80] flex flex-col justify-end p-3 animate-in fade-in duration-200 rounded-[44px]">
+            <div className="bg-slate-900/95 border border-white/20 rounded-3xl p-5 space-y-4 max-h-[85%] flex flex-col shadow-2xl animate-in slide-in-from-bottom duration-200">
+              <div className="w-10 h-1 bg-white/25 rounded-full mx-auto" />
+              <div className="flex items-center justify-between pb-2 border-b border-white/10">
+                <div>
+                  <h3 className="text-sm font-black text-white flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-purple-400" />
+                    <span>Select Test Plan</span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400">Available plans for this device</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setOpenPlanPickerModal(false)}
+                  className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white transition cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-2 overflow-y-auto max-h-[350px] pr-1">
+                {availablePlans.map(plan => {
+                  const isSelected = plan.id === currentPlan?.id;
+                  return (
+                    <button
+                      key={plan.id}
+                      type="button"
+                      onClick={() => {
+                        setCompletedRunSummary(null);
+                        setSelectedStatus(null);
+                        onSelectPlan(plan.id);
+                        setOpenPlanPickerModal(false);
+                        setShowSetupModal(true);
+                      }}
+                      className={`w-full p-3.5 rounded-2xl text-left border flex items-center justify-between gap-3 transition-all cursor-pointer ${
+                        isSelected
+                          ? 'bg-gradient-to-r from-purple-900/40 to-indigo-900/40 border-purple-400/50 shadow-lg ring-1 ring-purple-500/40 scale-[1.01]'
+                          : 'bg-slate-950/60 border-white/10 hover:bg-slate-950/90 hover:border-white/25'
+                      }`}
+                    >
+                      <div className="space-y-1 truncate flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-black text-white">{plan.name}</span>
+                          <span className="px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 font-mono text-[9px] font-bold border border-purple-500/30">
+                            {plan.steps.length} Steps
+                          </span>
+                        </div>
+                        {plan.description && (
+                          <p className="text-[11px] text-slate-400 truncate">{plan.description}</p>
+                        )}
+                      </div>
+                      {isSelected && (
+                        <div className="w-6 h-6 rounded-full bg-purple-500 text-white flex items-center justify-center flex-shrink-0 shadow">
+                          <Check className="w-3.5 h-3.5" />
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Custom Tester Picker Bottom Sheet */}
+        {openTesterPickerModal && (
+          <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-xl z-[80] flex flex-col justify-end p-3 animate-in fade-in duration-200 rounded-[44px]">
+            <div className="bg-slate-900/95 border border-white/20 rounded-3xl p-5 space-y-4 max-h-[85%] flex flex-col shadow-2xl animate-in slide-in-from-bottom duration-200">
+              <div className="w-10 h-1 bg-white/25 rounded-full mx-auto" />
+              <div className="flex items-center justify-between pb-2 border-b border-white/10">
+                <div>
+                  <h3 className="text-sm font-black text-white flex items-center gap-2">
+                    <User className="w-4 h-4 text-indigo-400" />
+                    <span>Select QA Tester</span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400">Choose who is running this QA walkthrough</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setOpenTesterPickerModal(false)}
+                  className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white transition cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-2 overflow-y-auto max-h-[350px] pr-1">
+                {testers.map(t => {
+                  const isSelected = t.name.toLowerCase().trim() === inputReporterName.toLowerCase().trim();
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => {
+                        setInputReporterName(t.name);
+                        setOpenTesterPickerModal(false);
+                      }}
+                      className={`w-full p-3.5 rounded-2xl text-left border flex items-center justify-between gap-3 transition-all cursor-pointer ${
+                        isSelected
+                          ? 'bg-gradient-to-r from-indigo-900/40 to-purple-900/40 border-indigo-400/50 shadow-lg ring-1 ring-indigo-500/40 scale-[1.01]'
+                          : 'bg-slate-950/60 border-white/10 hover:bg-slate-950/90 hover:border-white/25'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3 truncate">
+                        <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-600 text-white flex items-center justify-center font-bold text-sm shadow flex-shrink-0">
+                          {t.name.charAt(0).toUpperCase()}
+                        </div>
+                        <div className="truncate">
+                          <div className="text-xs font-black text-white truncate">{t.name}</div>
+                          <div className="text-[10px] text-indigo-300 font-medium truncate">{t.role || 'QA Tester'}</div>
+                        </div>
+                      </div>
+                      {isSelected && (
+                        <div className="w-6 h-6 rounded-full bg-indigo-500 text-white flex items-center justify-center flex-shrink-0 shadow">
+                          <Check className="w-3.5 h-3.5" />
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Custom Target Device Picker Bottom Sheet */}
+        {openDevicePickerModal && (
+          <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-xl z-[80] flex flex-col justify-end p-3 animate-in fade-in duration-200 rounded-[44px]">
+            <div className="bg-slate-900/95 border border-white/20 rounded-3xl p-5 space-y-4 max-h-[85%] flex flex-col shadow-2xl animate-in slide-in-from-bottom duration-200">
+              <div className="w-10 h-1 bg-white/25 rounded-full mx-auto" />
+              <div className="flex items-center justify-between pb-2 border-b border-white/10">
+                <div>
+                  <h3 className="text-sm font-black text-white flex items-center gap-2">
+                    <Smartphone className="w-4 h-4 text-purple-400" />
+                    <span>Select Target Device</span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400">Devices configured with active daily quotas</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setOpenDevicePickerModal(false)}
+                  className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white transition cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-2 overflow-y-auto max-h-[350px] pr-1">
+                {selectableDevices.map(dev => {
+                  const isSelected = dev.name.toLowerCase().trim() === inputDeviceName.toLowerCase().trim() || dev.id === inputDeviceName;
+                  const quota = dev.quotas?.find(q => q.planId === currentPlan?.id);
+                  const doneToday = (todayRunsMap[dev.id] && todayRunsMap[dev.id][currentPlan?.id || '']) || 0;
+                  const remaining = quota ? Math.max(0, quota.targetRunsPerDay - doneToday) : null;
+
+                  return (
+                    <button
+                      key={dev.id}
+                      type="button"
+                      onClick={() => {
+                        const chosenDevName = dev.name;
+                        setInputDeviceName(chosenDevName);
+                        if (dev.quotas && dev.quotas.length > 0) {
+                          const quotaForCurrent = dev.quotas.find(q => q.planId === currentPlan?.id && q.targetRunsPerDay > 0);
+                          if (!quotaForCurrent) {
+                            const firstValid = dev.quotas.find(q => q.targetRunsPerDay > 0);
+                            if (firstValid) {
+                              onSelectPlan(firstValid.planId);
+                            }
+                          }
+                        }
+                        setOpenDevicePickerModal(false);
+                      }}
+                      className={`w-full p-3.5 rounded-2xl text-left border flex items-center justify-between gap-3 transition-all cursor-pointer ${
+                        isSelected
+                          ? 'bg-gradient-to-r from-purple-900/40 to-pink-900/40 border-purple-400/50 shadow-lg ring-1 ring-purple-500/40 scale-[1.01]'
+                          : 'bg-slate-950/60 border-white/10 hover:bg-slate-950/90 hover:border-white/25'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3 truncate">
+                        <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-purple-600 to-pink-600 text-white flex items-center justify-center font-bold text-sm shadow flex-shrink-0">
+                          <Smartphone className="w-4 h-4 text-purple-200" />
+                        </div>
+                        <div className="truncate">
+                          <div className="text-xs font-black text-white truncate">{dev.name}</div>
+                          <div className="text-[10px] text-purple-300 font-mono font-semibold truncate">
+                            {remaining !== null ? `⚡ ${remaining} run${remaining > 1 ? 's' : ''} left today` : 'Ready'}
+                          </div>
+                        </div>
+                      </div>
+                      {isSelected && (
+                        <div className="w-6 h-6 rounded-full bg-purple-500 text-white flex items-center justify-center flex-shrink-0 shadow">
+                          <Check className="w-3.5 h-3.5" />
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         )}
 
