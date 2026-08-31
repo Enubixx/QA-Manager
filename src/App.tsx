@@ -41,7 +41,13 @@ export function App() {
     } catch (e) {}
     return 'dashboard';
   });
-  const [selectedPlanId, setSelectedPlanId] = useState<string>('');
+  const [selectedPlanId, setSelectedPlanId] = useState<string>(() => {
+    try {
+      return localStorage.getItem('qa_selected_plan_id') || '';
+    } catch (e) {
+      return '';
+    }
+  });
 
   // App State with LocalStorage persistence (starts empty by default)
   const [testPlans, setTestPlans] = useState<TestPlan[]>(() => {
@@ -174,10 +180,20 @@ export function App() {
     };
   }, []);
 
-  // Ensure selectedPlanId defaults to first plan if available
+  // Ensure selectedPlanId defaults to first plan if unavailable or invalid
   useEffect(() => {
-    if (!selectedPlanId && testPlans.length > 0) {
-      setSelectedPlanId(testPlans[0].id);
+    if (testPlans.length > 0) {
+      const isValid = testPlans.some(p => p.id === selectedPlanId);
+      if (!selectedPlanId || !isValid) {
+        setSelectedPlanId(testPlans[0].id);
+        try {
+          localStorage.setItem('qa_selected_plan_id', testPlans[0].id);
+        } catch (e) {}
+      } else {
+        try {
+          localStorage.setItem('qa_selected_plan_id', selectedPlanId);
+        } catch (e) {}
+      }
     }
   }, [testPlans, selectedPlanId]);
 
@@ -817,7 +833,12 @@ export function App() {
               selectedPlanId={selectedPlanId}
               populatedDevices={populatedDevices}
               onAddPopulatedDevice={handleAddPopulatedDevice}
-              onSelectPlan={setSelectedPlanId}
+              onSelectPlan={(planId) => {
+                setSelectedPlanId(planId);
+                try {
+                  localStorage.setItem('qa_selected_plan_id', planId);
+                } catch (e) {}
+              }}
               onUpdateRun={handleUpdateRun}
               onDeleteRun={handleDeleteTestRun}
               onLogBug={handleLogBug}

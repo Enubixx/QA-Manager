@@ -43,8 +43,25 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   onRestartRun,
   onNavigateToDashboard
 }) => {
-  // Find current plan
-  const currentPlan = testPlans.find(p => p.id === selectedPlanId) || testPlans[0];
+  // Persistent helper to get stored tester name & device name
+  const getStoredTesterName = () => {
+    try {
+      return localStorage.getItem('qa_tester_name') || sessionStorage.getItem('qa_tester_name') || '';
+    } catch (e) {
+      return '';
+    }
+  };
+
+  const getStoredDeviceName = () => {
+    try {
+      return localStorage.getItem('qa_device_name') || sessionStorage.getItem('qa_device_name') || '';
+    } catch (e) {
+      return '';
+    }
+  };
+
+  const [inputReporterName, setInputReporterName] = useState(() => getStoredTesterName());
+  const [inputDeviceName, setInputDeviceName] = useState(() => getStoredDeviceName());
 
   // Persistent Device Identifier for multi-tester isolation
   const getDeviceId = () => {
@@ -57,6 +74,41 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   };
 
   const deviceId = getDeviceId();
+
+  // Match device currently in use by this phone / tester
+  const currentSavedDevName = inputDeviceName || getStoredDeviceName();
+  const currentDevice = useMemo(() => {
+    return devices.find(d => 
+      (currentSavedDevName && d.name.toLowerCase().trim() === currentSavedDevName.toLowerCase().trim()) ||
+      d.id === currentSavedDevName ||
+      d.id === deviceId
+    );
+  }, [devices, currentSavedDevName, deviceId]);
+
+  // "The only test plan that should be available to that Device is the one it has a quota set for"
+  const availablePlans = useMemo(() => {
+    if (!currentDevice || !currentDevice.quotas || currentDevice.quotas.length === 0) {
+      return testPlans;
+    }
+    const filtered = testPlans.filter(p => 
+      currentDevice.quotas.some(q => q.planId === p.id && q.targetRunsPerDay > 0)
+    );
+    return filtered.length > 0 ? filtered : testPlans;
+  }, [testPlans, currentDevice]);
+
+  // Current plan strictly resolves to an available plan for this device
+  const currentPlan = useMemo(() => {
+    if (availablePlans.length === 0) return testPlans[0];
+    const match = availablePlans.find(p => p.id === selectedPlanId);
+    return match || availablePlans[0];
+  }, [availablePlans, selectedPlanId, testPlans]);
+
+  // Synchronize parent selectedPlanId if current device is locked to a specific quota plan
+  useEffect(() => {
+    if (currentPlan && currentPlan.id !== selectedPlanId) {
+      onSelectPlan(currentPlan.id);
+    }
+  }, [currentPlan?.id, selectedPlanId, onSelectPlan]);
 
   const todayStr = useMemo(() => {
     const d = new Date();
@@ -87,23 +139,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     });
     return map;
   }, [archivedRuns, testRuns, devices, todayStr]);
-
-  // Persistent helper to get stored tester name & device name
-  const getStoredTesterName = () => {
-    try {
-      return localStorage.getItem('qa_tester_name') || sessionStorage.getItem('qa_tester_name') || '';
-    } catch (e) {
-      return '';
-    }
-  };
-
-  const getStoredDeviceName = () => {
-    try {
-      return localStorage.getItem('qa_device_name') || sessionStorage.getItem('qa_device_name') || '';
-    } catch (e) {
-      return '';
-    }
-  };
 
   // Check localStorage for any persistent in-progress run for this plan
   const localSavedRunJson = currentPlan ? localStorage.getItem(`qa_in_progress_run_${currentPlan.id}`) : null;
@@ -167,13 +202,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     };
   }
 
-  const [inputReporterName, setInputReporterName] = useState(() => getStoredTesterName());
-  const [inputDeviceName, setInputDeviceName] = useState(() => getStoredDeviceName());
-
-  // Selectable devices: Ready, not locked by another tester's active in-progress run, and quota not exhausted today
+  // Selectable devices: Ready, not locked by another tester, and MUST have a quota set for this plan
   const selectableDevices = useMemo(() => {
     if (!currentPlan) return devices;
-    const currentSavedDevName = getStoredDeviceName() || inputDeviceName || '';
+    const currentSavedName = getStoredDeviceName() || inputDeviceName || '';
 
     return devices.filter(dev => {
       if (!dev.isReady) return false;
@@ -181,17 +213,21 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       // Lock out ONLY if locked by another tester's active, in-progress run
       if (dev.activeRunId && dev.activeRunId !== activeRun?.id) {
         const matchingRun = testRuns.find(r => r.id === dev.activeRunId);
-        const isSelfDevice = currentSavedDevName && dev.name.toLowerCase().trim() === currentSavedDevName.toLowerCase().trim();
+        const isSelfDevice = currentSavedName && dev.name.toLowerCase().trim() === currentSavedName.toLowerCase().trim();
         if (matchingRun && matchingRun.status === 'in_progress' && !isSelfDevice) {
           return false;
         }
       }
 
+      // "The only test plan that should be available to that Device is the one it has a quota set for"
       const quota = dev.quotas?.find(q => q.planId === currentPlan.id);
-      if (quota && quota.targetRunsPerDay > 0) {
-        const doneToday = (todayRunsMap[dev.id] && todayRunsMap[dev.id][currentPlan.id]) || 0;
-        if (doneToday >= quota.targetRunsPerDay) return false;
+      if (!quota || quota.targetRunsPerDay <= 0) {
+        return false;
       }
+
+      const doneToday = (todayRunsMap[dev.id] && todayRunsMap[dev.id][currentPlan.id]) || 0;
+      if (doneToday >= quota.targetRunsPerDay) return false;
+
       return true;
     });
   }, [devices, currentPlan, todayRunsMap, activeRun, testRuns, inputDeviceName]);
@@ -415,6 +451,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
     const updatedRun: TestRun = {
       ...activeRun,
+      planId: currentPlan.id,
+      planName: currentPlan.name,
       deviceId: deviceId,
       testerName: trimmedReporter,
       deviceName: trimmedDevice,
@@ -540,6 +578,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
     const updatedRun: TestRun = {
       ...activeRun,
+      planId: currentPlan.id,
+      planName: currentPlan.name,
       results: updatedResults,
       currentStepIndex: nextIndex,
       status: isDone ? 'completed' : 'in_progress',
@@ -824,7 +864,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   style={{ backgroundColor: '#0b101d', color: '#e0e7ff', WebkitAppearance: 'none', appearance: 'none' }}
                   className="w-full dark-select-input rounded-xl px-3 py-1.5 text-xs font-bold shadow-inner focus:outline-none focus:border-indigo-500 cursor-pointer truncate pr-6"
                 >
-                  {testPlans.map(plan => (
+                  {availablePlans.map(plan => (
                     <option key={plan.id} value={plan.id} style={{ backgroundColor: '#090d16', color: '#f1f5f9' }} className="bg-slate-950 text-slate-100 py-1 font-bold">
                       {plan.name}
                     </option>
@@ -1485,7 +1525,20 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   {selectableDevices.length > 0 ? (
                     <select
                       value={inputDeviceName}
-                      onChange={e => setInputDeviceName(e.target.value)}
+                      onChange={e => {
+                        const chosenDevName = e.target.value;
+                        setInputDeviceName(chosenDevName);
+                        const matched = devices.find(d => d.name.toLowerCase().trim() === chosenDevName.toLowerCase().trim() || d.id === chosenDevName);
+                        if (matched && matched.quotas && matched.quotas.length > 0) {
+                          const quotaForCurrent = matched.quotas.find(q => q.planId === currentPlan?.id && q.targetRunsPerDay > 0);
+                          if (!quotaForCurrent) {
+                            const firstValid = matched.quotas.find(q => q.targetRunsPerDay > 0);
+                            if (firstValid) {
+                              onSelectPlan(firstValid.planId);
+                            }
+                          }
+                        }
+                      }}
                       className="w-full liquid-glass-input rounded-2xl px-4 py-3 text-xs text-white bg-slate-900 border border-slate-700/80 focus:outline-none focus:border-purple-500 font-bold cursor-pointer"
                       required
                     >
@@ -1511,7 +1564,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                     </select>
                   ) : (
                     <div className="p-3 bg-amber-500/15 border border-amber-500/30 rounded-2xl text-amber-200 text-xs font-semibold text-center leading-relaxed">
-                      ⚠️ No ready devices available. Register devices and set plan quotas on the Web Dashboard.
+                      ⚠️ No devices have active daily quotas configured for "{currentPlan?.name || 'this plan'}". Set plan quotas on the Web Dashboard under Devices & Quotas.
                     </div>
                   )}
                 </div>
