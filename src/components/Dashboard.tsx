@@ -107,12 +107,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const map = new Map<string, { deviceName: string; planName?: string; runId?: string }>();
     devices.forEach(d => {
       if (d.activeTesterName && d.activeTesterName.trim()) {
-        const activeRun = testRuns.find(r => r.id === d.activeRunId || (r.deviceId === d.id && r.status === 'in_progress'));
-        map.set(d.activeTesterName.toLowerCase().trim(), {
-          deviceName: d.name,
-          planName: activeRun?.planName,
-          runId: d.activeRunId || activeRun?.id
-        });
+        const activeRun = testRuns.find(r => 
+          r.status === 'in_progress' && 
+          (r.id === d.activeRunId || r.deviceId === d.id || (r.deviceName && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim()))
+        );
+        if (activeRun) {
+          map.set(d.activeTesterName.toLowerCase().trim(), {
+            deviceName: d.name,
+            planName: activeRun.planName,
+            runId: d.activeRunId || activeRun.id
+          });
+        }
       }
     });
     return map;
@@ -626,14 +631,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       const effectiveStatus = getEffectiveRunStatus(run);
       const isCompleted = effectiveStatus === 'completed';
-      const isInProgress = effectiveStatus === 'in_progress';
 
-      if (isCompleted || isInProgress) {
-        if (isCompleted) {
-          profile.allTimeCompletedCount++;
-        }
+      if (isCompleted) {
+        profile.allTimeCompletedCount++;
 
-        const runDate = (isCompleted && run.completedAt) ? new Date(run.completedAt) : (run.startedAt ? new Date(run.startedAt) : new Date());
+        const runDate = (run.completedAt) ? new Date(run.completedAt) : (run.startedAt ? new Date(run.startedAt) : new Date());
         const dateStr = getLocalDateStr(runDate);
         const timeFormatted = runDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -645,7 +647,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         let durationMs = run.durationMs || 0;
         if (!durationMs) {
           const startMs = run.startedAt ? new Date(run.startedAt).getTime() : 0;
-          const endMs = (isCompleted && run.completedAt) ? new Date(run.completedAt).getTime() : Date.now();
+          const endMs = run.completedAt ? new Date(run.completedAt).getTime() : Date.now();
 
           if (startMs > 0 && endMs > startMs) {
             durationMs = endMs - startMs;
@@ -680,19 +682,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
           };
         }
 
-        if (isCompleted) {
-          profile.dailyStats[dateStr].completedCount++;
-          profile.dailyStats[dateStr].totalDurationMs += durationMs;
-        }
-
+        profile.dailyStats[dateStr].completedCount++;
+        profile.dailyStats[dateStr].totalDurationMs += durationMs;
         profile.dailyStats[dateStr].devicesUsedOnDay.add(deviceNameStr);
         profile.dailyStats[dateStr].completedRuns.push({
           runId: run.id,
           planName: run.planName,
           deviceName: deviceNameStr,
-          completedAtFormatted: isCompleted ? timeFormatted : `In Progress (${timeFormatted})`,
+          completedAtFormatted: timeFormatted,
           durationMs,
-          durationFormatted: isCompleted ? durationFormatted : 'Active Now',
+          durationFormatted,
           greenCount,
           yellowCount,
           redCount
@@ -2218,10 +2217,28 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </h3>
 
             <div className="space-y-4">
-              {testRuns.length === 0 ? (
-                <div className="text-xs text-slate-400 text-center py-6 font-medium">No active test runs recorded yet.</div>
-              ) : (
-                testRuns.map(run => {
+              {(() => {
+                const activeLiveRuns = testRuns.filter(run => {
+                  const effectiveStatus = getEffectiveRunStatus(run);
+                  if (effectiveStatus !== 'in_progress') return false;
+                  // Must correspond to an active locked device
+                  const dev = devices.find(d => 
+                    d.id === run.deviceId || 
+                    (run.deviceName && d.name.toLowerCase().trim() === run.deviceName.toLowerCase().trim()) || 
+                    d.activeRunId === run.id
+                  );
+                  return dev && Boolean(dev.activeTesterName);
+                });
+
+                if (activeLiveRuns.length === 0) {
+                  return (
+                    <div className="text-xs text-slate-400 text-center py-6 font-medium">
+                      No active field test sessions running.
+                    </div>
+                  );
+                }
+
+                return activeLiveRuns.map(run => {
                   const plan = testPlans.find(p => p.id === run.planId);
                   const totalSteps = plan?.steps.length || 1;
                   const stepEntries = Object.entries(run.results || {}).filter(
@@ -2230,7 +2247,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   const completedResults = stepEntries.map(([_, v]) => v as any);
                   const completedSteps = completedResults.length;
                   const progressPct = Math.min(100, Math.round((completedSteps / totalSteps) * 100));
-                  const effectiveStatus = getEffectiveRunStatus(run);
 
                   const greenCount = completedResults.filter(r => r.status === 'green').length;
                   const yellowCount = completedResults.filter(r => r.status === 'yellow').length;
@@ -2243,14 +2259,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           <User className="w-3.5 h-3.5 text-indigo-400" />
                           {run.testerName || 'Unassigned Tester'}
                         </span>
-                        <span className={`px-2.5 py-0.5 rounded-full font-mono text-[10px] font-extrabold border ${
-                          effectiveStatus === 'completed'
-                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/30'
-                            : effectiveStatus === 'in_progress'
-                            ? 'bg-purple-500/20 text-purple-300 border-purple-400/30 animate-pulse'
-                            : 'bg-slate-800 text-slate-400 border-slate-700'
-                        }`}>
-                          {effectiveStatus === 'completed' ? 'Finished' : effectiveStatus === 'in_progress' ? 'In Progress' : 'Idle'}
+                        <span className="px-2.5 py-0.5 rounded-full font-mono text-[10px] font-extrabold border bg-purple-500/20 text-purple-300 border-purple-400/30 animate-pulse">
+                          In Progress
                         </span>
                       </div>
 
@@ -2309,8 +2319,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       )}
                     </div>
                   );
-                })
-              )}
+                });
+              })()}
             </div>
           </div>
 

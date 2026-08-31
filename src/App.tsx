@@ -224,7 +224,7 @@ export function App() {
     if (devices.length === 0) return;
     let hasChanges = false;
     const cleanedDevices = devices.map(d => {
-      if (!d.activeRunId) return d;
+      if (!d.activeRunId && !d.activeTesterName) return d;
       // Check if there is an actual in_progress run for this device
       const hasActiveInProgressRun = testRuns.some(r => 
         r.status === 'in_progress' && 

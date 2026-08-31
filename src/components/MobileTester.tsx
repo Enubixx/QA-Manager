@@ -436,9 +436,11 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       keysToRemove.forEach(k => localStorage.removeItem(k));
     } catch (e) {}
 
-    // 5. Clear session storage & reset setup state
+    // 5. Clear session & local storage & reset setup state
     sessionStorage.removeItem('qa_tester_name');
     sessionStorage.removeItem('qa_device_name');
+    localStorage.removeItem('qa_tester_name');
+    localStorage.removeItem('qa_device_name');
     setInputReporterName('');
     setInputDeviceName('');
     setActiveStepIndex(0);
@@ -449,6 +451,25 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     // 6. Return to setup screen
     setShowSetupModal(true);
   };
+
+  // Whenever on the setup/selection screen, ensure device locks for this session are suspended/released
+  useEffect(() => {
+    if (showSetupModal && onSaveDevice) {
+      const storedDev = getStoredDeviceName();
+      const storedTester = getStoredTesterName();
+      devices.forEach(d => {
+        const isMatchingTester = storedTester && d.activeTesterName && d.activeTesterName.toLowerCase().trim() === storedTester.toLowerCase().trim();
+        const isMatchingDevice = storedDev && (d.name.toLowerCase().trim() === storedDev.toLowerCase().trim() || d.id === storedDev);
+        if ((isMatchingTester || isMatchingDevice) && d.activeTesterName) {
+          onSaveDevice({
+            ...d,
+            activeRunId: undefined,
+            activeTesterName: undefined
+          });
+        }
+      });
+    }
+  }, [showSetupModal]);
 
   // Bug Modal state
   const [showBugModal, setShowBugModal] = useState(false);
@@ -847,6 +868,15 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           setPreviewImageUrl(null);
         } else if (showBugModal) {
           setShowBugModal(false);
+        } else if (showQuitConfirmModal) {
+          setShowQuitConfirmModal(false);
+        } else if (openTesterPickerModal) {
+          setOpenTesterPickerModal(false);
+        } else if (openDevicePickerModal) {
+          setOpenDevicePickerModal(false);
+        } else if (!showSetupModal && activeRun && activeRun.status !== 'completed') {
+          // If actively running a test walkthrough, prompt user to Quit & Release to suspend cleanly
+          setShowQuitConfirmModal(true);
         } else if (showSetupModal) {
           if (onNavigateToDashboard) onNavigateToDashboard();
         } else if (onNavigateToDashboard) {
@@ -860,7 +890,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     return () => {
       if (sub && typeof sub.remove === 'function') sub.remove();
     };
-  }, [previewImageUrl, showBugModal, showSetupModal, onNavigateToDashboard]);
+  }, [previewImageUrl, showBugModal, showQuitConfirmModal, openTesterPickerModal, openDevicePickerModal, showSetupModal, activeRun, onNavigateToDashboard]);
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-black p-0 sm:p-6 select-none font-sans relative">
@@ -873,7 +903,13 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           </span>
           <button
             type="button"
-            onClick={onNavigateToDashboard}
+            onClick={() => {
+              if (!showSetupModal && activeRun && activeRun.status !== 'completed') {
+                setShowQuitConfirmModal(true);
+              } else {
+                onNavigateToDashboard();
+              }
+            }}
             className="px-3.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-white rounded-xl text-xs font-bold transition shadow flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
           >
             ← Back to Dashboard
@@ -894,7 +930,13 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
             {onNavigateToDashboard && (
               <button
                 type="button"
-                onClick={onNavigateToDashboard}
+                onClick={() => {
+                  if (!showSetupModal && activeRun && activeRun.status !== 'completed') {
+                    setShowQuitConfirmModal(true);
+                  } else {
+                    onNavigateToDashboard();
+                  }
+                }}
                 className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 rounded-xl text-xs font-bold flex items-center gap-1 transition shadow-sm active:scale-95 cursor-pointer flex-shrink-0"
                 title="Return to Manager Dashboard"
               >
