@@ -265,17 +265,27 @@ export const Dashboard: React.FC<DashboardProps> = ({
     e.target.value = '';
   };
 
-  // Filter runs to ONLY include fully finished test plan executions (status === 'completed')
+  // Filter runs to ONLY include fully finished test plan executions (100% of steps completed)
   const completedRuns = useMemo(() => {
     const map = new Map<string, TestRun>();
     const combined = [...archivedRuns, ...testRuns];
     combined.forEach(run => {
-      if (run.status === 'completed') {
+      if (run.status !== 'completed') return;
+      const plan = testPlans.find(p => p.id === run.planId);
+      if (!plan || plan.steps.length === 0) return;
+
+      // 100% of all plan steps must have a non-pending result!
+      const nonPendingResults = plan.steps.filter(s => {
+        const res = run.results?.[s.id];
+        return res && res.status && res.status !== 'pending';
+      });
+
+      if (nonPendingResults.length >= plan.steps.length) {
         map.set(run.id, run);
       }
     });
     return Array.from(map.values());
-  }, [testRuns, archivedRuns]);
+  }, [testRuns, archivedRuns, testPlans]);
 
   // Unique devices populated across bug logs and completed test runs
   const uniqueDevices = Array.from(
@@ -380,11 +390,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return Object.values(datesMap).sort((a, b) => b.dateStr.localeCompare(a.dateStr));
   }, [completedRuns, bugLogs, todayStr]);
 
-  // Aggregate step results ONLY from fully completed test runs for the selected Daily Session Date
-  // (In-progress runs NEVER touch or contaminate the Features page until the user finishes their test)
+  // Aggregate step results ONLY from 100% fully finished test runs for the selected Daily Session Date
+  // (In-progress runs NEVER touch or contaminate the Features page until the user finishes 100% of the test)
   completedRuns.forEach(run => {
+    if (run.status !== 'completed') return;
     const plan = testPlans.find(p => p.id === run.planId);
-    if (!plan) return;
+    if (!plan || plan.steps.length === 0) return;
+
+    // Strict 100% verification: Every single step in the plan must have been executed
+    const executedSteps = plan.steps.filter(s => {
+      const res = run.results?.[s.id];
+      return res && res.status && res.status !== 'pending';
+    });
+    if (executedSteps.length < plan.steps.length) return;
+
     plan.steps.forEach(step => {
       const res = run.results[step.id];
       if (!res || !res.status || res.status === 'pending') return;
@@ -420,18 +439,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
   });
 
   // Aggregate bug counts for the selected Daily Session Date
-  // In-progress test run defects do not appear on Features page until the run completes
+  // Defects only appear on Features page if their test run is 100% finished
   bugLogs.forEach(bug => {
     if (selectedDailySessionDate !== 'all') {
       const bugDate = bug.timestamp ? getLocalDateStr(bug.timestamp) : '';
       if (bugDate && bugDate !== selectedDailySessionDate) return;
     }
 
-    // If bug belongs to an in-progress run that is not finished yet, do not aggregate
+    // If bug belongs to a test run, ONLY include it if the test run is 100% finished and in completedRuns
     if (bug.testRunId) {
-      const isCompleted = completedRuns.some(r => r.id === bug.testRunId);
-      const isInProgress = testRuns.some(r => r.id === bug.testRunId && r.status !== 'completed');
-      if (isInProgress && !isCompleted) {
+      const isFrom100PctCompleted = completedRuns.some(r => r.id === bug.testRunId);
+      if (!isFrom100PctCompleted) {
         return;
       }
     }

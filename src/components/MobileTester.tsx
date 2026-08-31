@@ -431,7 +431,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       });
     }
 
-    onUpdateRun(updatedRun);
     setShowSetupModal(false);
   };
 
@@ -445,7 +444,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       setSelectedStatus(prevStatus && prevStatus !== 'pending' ? prevStatus : null);
       if (activeRun) {
         const updated = { ...activeRun, currentStepIndex: prevIndex };
-        onUpdateRun(updated);
         if (currentPlan) {
           localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updated));
         }
@@ -463,7 +461,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       setSelectedStatus(nextStatus && nextStatus !== 'pending' ? nextStatus : null);
       if (activeRun) {
         const updated = { ...activeRun, currentStepIndex: nextIndex };
-        onUpdateRun(updated);
         if (currentPlan) {
           localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updated));
         }
@@ -480,7 +477,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       setSelectedStatus(existingStatus && existingStatus !== 'pending' ? existingStatus : null);
       if (activeRun) {
         const updated = { ...activeRun, currentStepIndex: targetIdx };
-        onUpdateRun(updated);
         if (currentPlan) {
           localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updated));
         }
@@ -573,7 +569,11 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       }
       setBugSuccessMessage(`🎉 Run complete! ${activeDevName || 'Device'} progress updated for today.`);
       setTimeout(() => setBugSuccessMessage(null), 4000);
+
+      // Commit 100% finished run to dashboard & cloud
+      onUpdateRun(updatedRun);
     } else {
+      // Intermediate step: Keep purely in local storage, do NOT touch dashboard or cloud until 100% finished
       if (currentPlan) {
         localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updatedRun));
       }
@@ -584,7 +584,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       setSelectedStatus(nextSavedStatus && nextSavedStatus !== 'pending' ? nextSavedStatus : null);
     }
 
-    onUpdateRun(updatedRun);
     setBugSuccessMessage(null);
   };
 
@@ -682,9 +681,11 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         ...activeRun,
         bugLogs: [...(activeRun.bugLogs || []), newBug]
       };
-      onUpdateRun(updatedRun);
+      if (currentPlan) {
+        localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updatedRun));
+      }
     } catch (err) {
-      console.warn('onUpdateRun error:', err);
+      console.warn('save bug error:', err);
     }
 
     setBugSuccessMessage(`Bug/Note logged at ${formattedTime}`);
