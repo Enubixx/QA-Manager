@@ -98,8 +98,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [newPersonRole, setNewPersonRole] = useState('Mobile Tester');
   const [quotaPlanMap, setQuotaPlanMap] = useState<Record<string, string>>({});
   const [quotaRunsMap, setQuotaRunsMap] = useState<Record<string, number>>({});
-  const [isRegisteredTestersCollapsed, setIsRegisteredTestersCollapsed] = useState(false);
+  const [showCreateTesterForm, setShowCreateTesterForm] = useState(false);
   const [testerViewMode, setTesterViewMode] = useState<'all' | 'active'>('all');
+  const [searchTesterQuery, setSearchTesterQuery] = useState('');
 
   // Determine active testers currently running a test session on a device
   const activeTesterMap = useMemo(() => {
@@ -722,6 +723,41 @@ export const Dashboard: React.FC<DashboardProps> = ({
     });
     return Array.from(set).sort().reverse();
   }, [testerProfilesMap]);
+
+  // Unified list combining registered tester profiles with live performance tracking data
+  const unifiedTesters = useMemo(() => {
+    const map = new Map<string, {
+      id?: string;
+      name: string;
+      role: string;
+      performanceProfile?: typeof testerProfilesMap[0];
+    }>();
+
+    // 1. Add all registered testers
+    testers.forEach(t => {
+      map.set(t.name.toLowerCase().trim(), {
+        id: t.id,
+        name: t.name,
+        role: t.role || 'Mobile Tester'
+      });
+    });
+
+    // 2. Attach performance data from runs and include any extra testers found in runs
+    testerProfilesMap.forEach(p => {
+      const key = p.testerName.toLowerCase().trim();
+      if (map.has(key)) {
+        map.get(key)!.performanceProfile = p;
+      } else {
+        map.set(key, {
+          name: p.testerName,
+          role: 'QA Tester',
+          performanceProfile: p
+        });
+      }
+    });
+
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [testers, testerProfilesMap]);
 
   // Sort Feature Metrics: Critical (Red) first -> Warning (Yellow) -> Healthy (Green)
   const statusPriority: Record<string, number> = { critical: 1, warning: 2, healthy: 3 };
@@ -1552,33 +1588,83 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
 
-      {/* Tab 3: QA Testers & Tester Profiles */}
+      {/* Tab: Unified QA Testers Directory & Live Performance Tracking */}
       {activeTab === 'testers' && (
-        <div className="space-y-8 animate-liquid-fade">
+        <div className="space-y-6 animate-liquid-fade">
           
-          {/* Header Banner */}
-          <div className="liquid-glass-panel rounded-3xl p-6 bg-gradient-to-r from-emerald-950/70 via-slate-900/80 to-teal-950/70 border-emerald-500/20 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-6">
-            <div className="space-y-1">
+          {/* Header & Live Testing Data Tracking Controls */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 liquid-glass-panel rounded-3xl p-6 shadow-2xl relative overflow-hidden">
+            <div className="space-y-1 relative z-10">
               <div className="flex items-center gap-2">
-                <UserCheck className="w-5 h-5 text-emerald-400" />
-                <h3 className="text-lg font-black text-white tracking-tight">QA Tester Profiles</h3>
+                <span className="text-[10px] font-extrabold text-emerald-300 uppercase tracking-wider bg-emerald-500/10 px-2.5 py-0.5 rounded-full border border-emerald-500/20">
+                  Tester Directory & Live Performance Tracking
+                </span>
+                {activeTesterMap.size > 0 && (
+                  <span className="text-[10px] font-extrabold text-emerald-400 font-mono flex items-center gap-1 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    {activeTesterMap.size} Active Testing Now
+                  </span>
+                )}
               </div>
-              <p className="text-xs text-slate-300">
-                Pre-register testers so field engineers can instantly select their name on mobile apps.
+              <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight flex items-center gap-2 mt-1">
+                <UserCheck className="w-6 h-6 text-emerald-400" />
+                <span>QA Testers & Performance Log</span>
+              </h2>
+              <p className="text-xs text-slate-300 font-medium">
+                Manage registered tester profiles and monitor live daily test run completions, execution speed, and device assignments.
               </p>
+            </div>
+
+            {/* Live Data Tracking Date Selector & Add Profile Button */}
+            <div className="flex flex-wrap items-center gap-3 relative z-10">
+              <div className="flex items-center gap-2 bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 shadow-inner">
+                <Calendar className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                <span className="text-xs font-bold text-slate-300">Log Date:</span>
+                <select
+                  value={selectedQaDate}
+                  onChange={e => setSelectedQaDate(e.target.value)}
+                  style={{ backgroundColor: '#0b101d', color: '#e0e7ff', WebkitAppearance: 'none' }}
+                  className="bg-slate-950 text-indigo-200 border border-slate-800 rounded-lg px-2.5 py-1 text-xs font-bold focus:outline-none cursor-pointer"
+                >
+                  <option value={todayStr}>Today ({todayStr})</option>
+                  {allQaDatesList.filter(d => d !== todayStr).map(dateStr => (
+                    <option key={dateStr} value={dateStr}>
+                      {dateStr}
+                    </option>
+                  ))}
+                  <option value="all">All-Time Combined</option>
+                </select>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowCreateTesterForm(prev => !prev)}
+                className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
+              >
+                <Plus className={`w-4 h-4 transition-transform duration-200 ${showCreateTesterForm ? 'rotate-45' : ''}`} />
+                <span>{showCreateTesterForm ? 'Close Form' : 'New Tester'}</span>
+              </button>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            
-            {/* Left Form: Add Tester Profile */}
-            <div className="space-y-6">
-              <h3 className="text-base font-extrabold text-white flex items-center gap-2">
-                <Plus className="w-4 h-4 text-emerald-400" />
-                <span>Create Tester Profile</span>
-              </h3>
+          {/* Collapsible Create Tester Profile Form */}
+          {showCreateTesterForm && (
+            <div className="liquid-glass-panel rounded-3xl p-6 border border-emerald-500/30 bg-slate-900/80 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-200">
+              <div className="flex items-center justify-between pb-2 border-b border-white/10">
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <User className="w-4 h-4 text-emerald-400" />
+                  <span>Create New QA Tester Profile</span>
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setShowCreateTesterForm(false)}
+                  className="text-slate-400 hover:text-white p-1 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
 
-              <div className="liquid-glass-panel rounded-3xl p-5 border border-white/10 space-y-4 bg-slate-900/60 shadow-xl">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-300 mb-1">Full Name</label>
                   <input
@@ -1586,7 +1672,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     placeholder="e.g. Kevin Huang..."
                     value={newPersonName}
                     onChange={e => setNewPersonName(e.target.value)}
-                    className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
+                    className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
                   />
                 </div>
 
@@ -1597,10 +1683,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     placeholder="e.g. Lead QA / Mobile Specialist..."
                     value={newPersonRole}
                     onChange={e => setNewPersonRole(e.target.value)}
-                    className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
+                    className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
                   />
                 </div>
+              </div>
 
+              <div className="flex justify-end pt-2">
                 <button
                   type="button"
                   onClick={() => {
@@ -1612,204 +1700,304 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     };
                     if (onSaveTester) onSaveTester(newTester);
                     setNewPersonName('');
+                    setShowCreateTesterForm(false);
                   }}
-                  className="w-full py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all shadow-md active:scale-95"
+                  className="px-5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>Save Tester Profile</span>
                 </button>
               </div>
             </div>
+          )}
 
-            {/* Right List: Registered Testers Grid */}
-            <div className="lg:col-span-2 space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-1 border-b border-white/10">
-                <div className="flex items-center gap-2">
-                  <UserCheck className="w-4 h-4 text-emerald-400" />
-                  <h3 className="text-base font-extrabold text-white">Registered Testers ({testers.length})</h3>
-                  {activeTesterMap.size > 0 && (
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                      {activeTesterMap.size} Active
-                    </span>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {/* Filter: All vs Active Only */}
-                  <div className="flex items-center bg-slate-900/90 border border-slate-800 rounded-xl p-0.5 text-xs">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setTesterViewMode('all');
-                        setIsRegisteredTestersCollapsed(false);
-                      }}
-                      className={`px-2.5 py-1 rounded-lg font-semibold transition ${
-                        testerViewMode === 'all' && !isRegisteredTestersCollapsed
-                          ? 'bg-emerald-600 text-white shadow-sm'
-                          : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      All ({testers.length})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setTesterViewMode('active');
-                        setIsRegisteredTestersCollapsed(false);
-                      }}
-                      className={`px-2.5 py-1 rounded-lg font-semibold transition flex items-center gap-1 ${
-                        testerViewMode === 'active' || isRegisteredTestersCollapsed
-                          ? 'bg-emerald-600 text-white shadow-sm'
-                          : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      <span>Active Only ({activeTesterMap.size})</span>
-                    </button>
-                  </div>
-
-                  {/* Collapse / Expand Toggle */}
-                  <button
-                    type="button"
-                    onClick={() => setIsRegisteredTestersCollapsed(prev => !prev)}
-                    className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl border border-slate-800 text-xs font-semibold flex items-center gap-1.5 transition shadow-sm cursor-pointer"
-                    title={isRegisteredTestersCollapsed ? "Expand all registered testers" : "Collapse to see only active testers"}
-                  >
-                    <span>{isRegisteredTestersCollapsed ? 'Expand All' : 'Collapse'}</span>
-                    <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-300 ${isRegisteredTestersCollapsed ? 'rotate-180 text-emerald-400' : 'rotate-0'}`} />
-                  </button>
-                </div>
+          {/* Quick Filters Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900/40 p-2 rounded-2xl border border-white/5">
+            <div className="flex items-center gap-2">
+              <div className="flex items-center bg-slate-950/80 border border-slate-800 rounded-xl p-1 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setTesterViewMode('all')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition cursor-pointer ${
+                    testerViewMode === 'all'
+                      ? 'bg-emerald-600 text-white shadow-md'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  All Testers ({unifiedTesters.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTesterViewMode('active')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                    testerViewMode === 'active'
+                      ? 'bg-emerald-600 text-white shadow-md'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span>Active Now ({activeTesterMap.size})</span>
+                </button>
               </div>
-
-              {/* Collapsed Mode: Only shows Active Testers summary */}
-              {isRegisteredTestersCollapsed ? (
-                <div className="liquid-glass-panel rounded-2xl p-5 border border-white/10 space-y-3 bg-slate-900/60 shadow-lg">
-                  <div className="flex items-center justify-between text-xs text-slate-400">
-                    <span className="font-bold text-white flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                      Currently Active Testers ({activeTesterMap.size})
-                    </span>
-                    <span className="text-[11px] font-mono text-slate-500">{Math.max(0, testers.length - activeTesterMap.size)} registered idle</span>
-                  </div>
-
-                  {activeTesterMap.size === 0 ? (
-                    <div className="p-6 text-center text-slate-400 text-xs italic bg-slate-950/40 rounded-xl border border-slate-800/80">
-                      No testers are currently in an active testing session.
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {testers
-                        .filter(t => activeTesterMap.has(t.name.toLowerCase().trim()))
-                        .map(tester => {
-                          const activeInfo = activeTesterMap.get(tester.name.toLowerCase().trim());
-                          return (
-                            <div key={tester.id} className="p-3.5 rounded-xl border border-emerald-500/30 bg-emerald-950/30 flex items-center justify-between shadow-sm">
-                              <div className="flex items-center gap-3 min-w-0">
-                                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-300 font-extrabold text-xs flex items-center justify-center border border-emerald-400/40 shadow-inner flex-shrink-0">
-                                  {tester.name.charAt(0).toUpperCase()}
-                                </div>
-                                <div className="truncate">
-                                  <div className="text-xs font-extrabold text-white truncate flex items-center gap-1.5">
-                                    <span>{tester.name}</span>
-                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                                  </div>
-                                  <div className="text-[11px] text-emerald-300 font-medium truncate">
-                                    📱 {activeInfo?.deviceName || 'Device'}
-                                  </div>
-                                  {activeInfo?.planName && (
-                                    <div className="text-[10px] text-slate-400 font-mono truncate">
-                                      📋 {activeInfo.planName}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                /* Expanded Grid: filtered by testerViewMode ('all' or 'active') */
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {(() => {
-                    const displayedTesters = testerViewMode === 'active'
-                      ? testers.filter(t => activeTesterMap.has(t.name.toLowerCase().trim()))
-                      : testers;
-
-                    if (displayedTesters.length === 0) {
-                      return (
-                        <div className="sm:col-span-2 liquid-glass-card rounded-2xl p-8 text-center text-slate-400 text-xs italic">
-                          {testerViewMode === 'active'
-                            ? 'No testers are currently in an active testing session.'
-                            : 'No QA testers registered. Add testers using the form on the left.'}
-                        </div>
-                      );
-                    }
-
-                    return displayedTesters.map(tester => {
-                      const isActive = activeTesterMap.has(tester.name.toLowerCase().trim());
-                      const activeInfo = activeTesterMap.get(tester.name.toLowerCase().trim());
-
-                      return (
-                        <div
-                          key={tester.id}
-                          className={`liquid-glass-panel rounded-2xl p-4 border transition-all shadow-lg flex items-center justify-between ${
-                            isActive
-                              ? 'bg-slate-900/90 border-emerald-500/40 ring-1 ring-emerald-500/30'
-                              : 'bg-slate-900/60 border-white/10'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3.5 min-w-0">
-                            <div className={`w-10 h-10 rounded-2xl font-black text-sm flex items-center justify-center border shadow-inner flex-shrink-0 ${
-                              isActive
-                                ? 'bg-emerald-500/25 text-emerald-300 border-emerald-400/50'
-                                : 'bg-slate-800 text-slate-300 border-slate-700'
-                            }`}>
-                              {tester.name.charAt(0).toUpperCase()}
-                            </div>
-                            <div className="truncate">
-                              <div className="text-sm font-black text-white truncate flex items-center gap-1.5">
-                                <span>{tester.name}</span>
-                                {isActive && (
-                                  <span className="px-1.5 py-0.5 text-[9px] font-extrabold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 rounded-full flex items-center gap-1">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                                    Active
-                                  </span>
-                                )}
-                              </div>
-                              <div className="text-xs text-slate-400 font-semibold truncate">
-                                {isActive ? `📱 Testing on ${activeInfo?.deviceName}` : (tester.role || 'Mobile Tester')}
-                              </div>
-                              {isActive && activeInfo?.planName && (
-                                <div className="text-[10px] text-emerald-400/90 font-mono truncate">
-                                  Plan: {activeInfo.planName}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (confirm(`Delete tester profile "${tester.name}"?`)) {
-                                if (onDeleteTesterProfile) onDeleteTesterProfile(tester.id);
-                              }
-                            }}
-                            className="p-2 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-xl transition-colors flex-shrink-0 cursor-pointer"
-                            title="Delete Tester"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      );
-                    });
-                  })()}
-                </div>
-              )}
             </div>
 
+            <div className="relative flex-1 max-w-xs">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Search testers..."
+                value={searchTesterQuery}
+                onChange={e => setSearchTesterQuery(e.target.value)}
+                className="w-full bg-slate-950/80 border border-slate-800 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+              />
+              {searchTesterQuery && (
+                <button
+                  onClick={() => setSearchTesterQuery('')}
+                  className="absolute right-2.5 top-2 text-slate-500 hover:text-white text-xs"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
           </div>
+
+          {/* Unified Testers Cards Grid */}
+          {(() => {
+            let displayed = unifiedTesters;
+            if (testerViewMode === 'active') {
+              displayed = displayed.filter(t => activeTesterMap.has(t.name.toLowerCase().trim()));
+            }
+            if (searchTesterQuery.trim()) {
+              const q = searchTesterQuery.toLowerCase().trim();
+              displayed = displayed.filter(t => t.name.toLowerCase().includes(q) || t.role.toLowerCase().includes(q));
+            }
+
+            if (displayed.length === 0) {
+              return (
+                <div className="liquid-glass-panel rounded-3xl p-12 text-center space-y-3 border border-white/10">
+                  <div className="p-3 bg-slate-950 rounded-full border border-slate-800 text-slate-500 w-fit mx-auto">
+                    <UserCheck className="w-6 h-6" />
+                  </div>
+                  <h4 className="text-base font-bold text-white">
+                    {testerViewMode === 'active' ? 'No Testers Currently Active' : 'No Testers Found'}
+                  </h4>
+                  <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                    {testerViewMode === 'active'
+                      ? 'No tester is actively running a walkthrough on a device right now.'
+                      : 'Create a tester profile above to begin tracking.'}
+                  </p>
+                </div>
+              );
+            }
+
+            return (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+                {displayed.map(tester => {
+                  const profile = tester.performanceProfile;
+                  const dayData = !profile
+                    ? { completedCount: 0, totalDurationMs: 0, completedRuns: [] }
+                    : selectedQaDate === 'all'
+                      ? {
+                          completedCount: profile.allTimeCompletedCount,
+                          totalDurationMs: Object.values(profile.dailyStats).reduce((acc, d) => acc + d.totalDurationMs, 0),
+                          completedRuns: Object.values(profile.dailyStats).flatMap(d => d.completedRuns)
+                        }
+                      : profile.dailyStats[selectedQaDate] || {
+                          completedCount: 0,
+                          totalDurationMs: 0,
+                          completedRuns: []
+                        };
+
+                  const completedRunsList = dayData.completedRuns;
+                  const avgMs = dayData.completedCount > 0 ? Math.round(dayData.totalDurationMs / dayData.completedCount) : 0;
+                  const avgMins = Math.floor(avgMs / 60000);
+                  const avgSecs = Math.floor((avgMs % 60000) / 1000);
+                  const avgFormatted = avgMs > 0 ? `${avgMins}m ${avgSecs < 10 ? '0' : ''}${avgSecs}s` : 'N/A';
+
+                  const dayDevices = !profile
+                    ? []
+                    : selectedQaDate === 'all'
+                      ? Array.from(profile.devicesUsed)
+                      : Array.from(('devicesUsedOnDay' in dayData && dayData.devicesUsedOnDay instanceof Set) ? dayData.devicesUsedOnDay : []);
+                  const devicesStr = dayDevices.join(', ') || 'None';
+
+                  const isActive = activeTesterMap.has(tester.name.toLowerCase().trim());
+                  const activeInfo = activeTesterMap.get(tester.name.toLowerCase().trim());
+                  const isExpanded = !!expandedTesters[tester.name];
+
+                  return (
+                    <div
+                      key={tester.id || tester.name}
+                      className={`liquid-glass-panel rounded-3xl p-5 border transition-all duration-300 shadow-xl ${
+                        isActive
+                          ? 'border-emerald-500/40 bg-slate-900/90 ring-1 ring-emerald-500/30'
+                          : 'border-white/10 bg-slate-900/60'
+                      }`}
+                    >
+                      {/* Top Header: Avatar + Identity + Live Status Badge */}
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <div className={`w-11 h-11 rounded-2xl font-black text-sm flex items-center justify-center border shadow-inner flex-shrink-0 ${
+                            isActive
+                              ? 'bg-gradient-to-br from-emerald-500 to-teal-600 text-white border-emerald-400/50 shadow-emerald-500/25'
+                              : 'bg-slate-800 text-slate-200 border-slate-700'
+                          }`}>
+                            {tester.name.charAt(0).toUpperCase()}
+                          </div>
+                          <div className="truncate">
+                            <h4 className="text-sm font-black text-white truncate flex items-center gap-2">
+                              <span>{tester.name}</span>
+                            </h4>
+                            <div className="text-xs text-emerald-400 font-semibold truncate">{tester.role || 'Mobile Tester'}</div>
+                          </div>
+                        </div>
+
+                        {/* Live Status Pill */}
+                        <div className="flex-shrink-0">
+                          {isActive ? (
+                            <div className="px-2.5 py-1 rounded-xl text-[11px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1.5 shadow-sm">
+                              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                              <span>Active on {activeInfo?.deviceName || 'Device'}</span>
+                            </div>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-slate-800/80 text-slate-400 border border-slate-700">
+                              Idle
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Live Active Test Plan Banner if testing */}
+                      {isActive && activeInfo?.planName && (
+                        <div className="mt-3 bg-emerald-950/40 border border-emerald-500/30 rounded-xl p-2.5 flex items-center justify-between text-xs">
+                          <span className="text-[11px] text-emerald-300 font-bold flex items-center gap-1.5">
+                            <Layers className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>Currently Testing:</span>
+                            <span className="text-white font-mono">{activeInfo.planName}</span>
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Live Data Tracking KPI Cards 3-pack */}
+                      <div className="grid grid-cols-3 gap-2 mt-4">
+                        <div className="bg-slate-950/60 p-2.5 rounded-xl border border-white/5 text-center">
+                          <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">Finished</span>
+                          <span className="text-sm font-black text-emerald-400 font-mono mt-0.5 block">{dayData.completedCount} Plans</span>
+                        </div>
+
+                        <div className="bg-slate-950/60 p-2.5 rounded-xl border border-white/5 text-center">
+                          <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">Avg Speed</span>
+                          <span className="text-sm font-black text-indigo-300 font-mono mt-0.5 block">{avgFormatted}</span>
+                        </div>
+
+                        <div className="bg-slate-950/60 p-2.5 rounded-xl border border-white/5 text-center truncate">
+                          <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">Devices</span>
+                          <span className="text-xs font-bold text-purple-300 font-mono mt-1 block truncate" title={devicesStr}>{devicesStr}</span>
+                        </div>
+                      </div>
+
+                      {/* Card Footer: Accordion Toggle & Delete */}
+                      <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => toggleTesterExpand(tester.name)}
+                          className="px-3 py-1.5 bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl border border-slate-800 text-xs font-semibold flex items-center gap-1.5 transition shadow-sm cursor-pointer active:scale-95"
+                        >
+                          <span>{isExpanded ? 'Hide Runs' : `View Runs (${completedRunsList.length})`}</span>
+                          <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-300 ${isExpanded ? 'rotate-180 text-emerald-400' : 'rotate-0'}`} />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (confirm(`Delete tester "${tester.name}" and all associated performance data?`)) {
+                              if (tester.id && onDeleteTesterProfile) {
+                                onDeleteTesterProfile(tester.id);
+                              }
+                              if (onDeleteTester) {
+                                onDeleteTester(tester.name);
+                              } else if (onDeleteTestRun) {
+                                const runsToDelete = [...testRuns, ...archivedRuns].filter(r => r.testerName === tester.name);
+                                runsToDelete.forEach(r => onDeleteTestRun(r.id));
+                              }
+                            }
+                          }}
+                          className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-xl border border-slate-800 hover:border-rose-500/30 transition-all cursor-pointer active:scale-95"
+                          title={`Delete tester ${tester.name}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      {/* Expandable Accordion: Completed Test Runs Breakdown */}
+                      <div className={`liquid-accordion-wrapper ${isExpanded ? 'expanded' : ''}`}>
+                        <div className="liquid-accordion-inner">
+                          <div className="mt-3 pt-3 border-t border-white/10 space-y-2">
+                            <div className="flex items-center justify-between text-xs font-bold text-slate-300">
+                              <span>Executed Plans ({selectedQaDate === todayStr ? 'Today' : selectedQaDate}):</span>
+                              <span className="text-[10px] text-slate-400 font-mono">{completedRunsList.length} total</span>
+                            </div>
+
+                            {completedRunsList.length === 0 ? (
+                              <div className="bg-slate-950/40 p-3 rounded-xl text-center text-xs text-slate-500 font-medium">
+                                No test runs recorded for {selectedQaDate === todayStr ? 'today' : selectedQaDate}.
+                              </div>
+                            ) : (
+                              <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                                {completedRunsList.map((runItem, idx) => (
+                                  <div key={runItem.runId + idx} className="bg-slate-950/80 p-2.5 rounded-xl border border-white/10 flex items-center justify-between text-xs space-x-2">
+                                    <div className="truncate flex-1">
+                                      <div className="font-bold text-slate-200 truncate">{runItem.planName}</div>
+                                      <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
+                                        <span className="text-purple-300 font-mono flex items-center gap-1">
+                                          <Smartphone className="w-2.5 h-2.5" /> {runItem.deviceName}
+                                        </span>
+                                        <span>•</span>
+                                        <span className="font-mono text-slate-400">{runItem.completedAtFormatted}</span>
+                                      </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-2">
+                                      <div className="bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-lg font-mono text-[10px] font-extrabold flex items-center gap-1">
+                                        <Clock className="w-3 h-3 text-indigo-400" />
+                                        <span>{runItem.durationFormatted}</span>
+                                      </div>
+
+                                      <div className="flex items-center gap-1 text-[10px] font-mono">
+                                        <span className="text-emerald-400 font-bold">✓{runItem.greenCount}</span>
+                                        {runItem.yellowCount > 0 && <span className="text-amber-400 font-bold">!{runItem.yellowCount}</span>}
+                                        {runItem.redCount > 0 && <span className="text-rose-400 font-bold">✗{runItem.redCount}</span>}
+                                      </div>
+
+                                      {onDeleteTestRun && (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            if (confirm(`Delete run record for "${runItem.planName}"?`)) {
+                                              onDeleteTestRun(runItem.runId);
+                                            }
+                                          }}
+                                          className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors ml-1 cursor-pointer"
+                                          title="Delete this test run record"
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
 
         </div>
       )}
@@ -2142,236 +2330,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
 
-      {/* Tab: QA Testers Performance & Daily Metrics */}
-      {activeTab === 'testers' && (
-        <div className="space-y-6 animate-liquid-fade">
-          
-          {/* Header & Date Filter Bar */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 liquid-glass-panel rounded-3xl p-6 shadow-2xl">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-bold text-emerald-300 uppercase tracking-widest bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20 backdrop-blur-md">Tester Performance</span>
-                <span className="text-xs text-emerald-400 font-mono font-bold">Daily Tracking Log</span>
-              </div>
-              <h3 className="text-2xl font-extrabold text-white mt-1.5 tracking-tight flex items-center gap-2">
-                <UserCheck className="w-6 h-6 text-emerald-400" />
-                <span>QA Status & Daily Execution Metrics</span>
-              </h3>
-              <p className="text-xs text-slate-400 mt-1 font-medium">
-                Profiles of individual QA testers, test plan completion counts, and time taken per test run. Resets daily while preserving historical logs.
-              </p>
-            </div>
 
-            {/* Date Selector */}
-            <div className="flex items-center gap-3 bg-slate-900/90 border border-slate-800 p-2.5 rounded-2xl">
-              <Calendar className="w-4 h-4 text-emerald-400 ml-1" />
-              <span className="text-xs font-bold text-slate-300">Log Date:</span>
-              <select
-                value={selectedQaDate}
-                onChange={e => setSelectedQaDate(e.target.value)}
-                style={{ backgroundColor: '#0b101d', color: '#e0e7ff', WebkitAppearance: 'none' }}
-                className="bg-slate-950 text-indigo-200 border border-slate-800 rounded-xl px-3 py-1.5 text-xs font-bold focus:outline-none cursor-pointer"
-              >
-                <option value={todayStr}>Today ({todayStr})</option>
-                {allQaDatesList.filter(d => d !== todayStr).map(dateStr => (
-                  <option key={dateStr} value={dateStr}>
-                    {dateStr}
-                  </option>
-                ))}
-                <option value="all">All-Time Combined</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Tester Profiles List */}
-          {testerProfilesMap.length === 0 ? (
-            <div className="liquid-glass-panel rounded-3xl p-12 text-center space-y-3">
-              <div className="p-3 bg-slate-950 rounded-full border border-slate-800 text-slate-500 w-fit mx-auto">
-                <UserCheck className="w-6 h-6" />
-              </div>
-              <h4 className="text-base font-bold text-white">No Tester Activity Recorded</h4>
-              <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                Deploy a test plan to a mobile device and complete a walkthrough to populate QA tester status profiles.
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-              {testerProfilesMap.map(profile => {
-                const dayData = selectedQaDate === 'all'
-                  ? {
-                      completedCount: profile.allTimeCompletedCount,
-                      totalDurationMs: Object.values(profile.dailyStats).reduce((acc, d) => acc + d.totalDurationMs, 0),
-                      completedRuns: Object.values(profile.dailyStats).flatMap(d => d.completedRuns)
-                    }
-                  : profile.dailyStats[selectedQaDate] || {
-                      completedCount: 0,
-                      totalDurationMs: 0,
-                      completedRuns: []
-                    };
-
-                const completedRunsList = dayData.completedRuns;
-                const avgMs = dayData.completedCount > 0 ? Math.round(dayData.totalDurationMs / dayData.completedCount) : 0;
-                const avgMins = Math.floor(avgMs / 60000);
-                const avgSecs = Math.floor((avgMs % 60000) / 1000);
-                const avgFormatted = avgMs > 0 ? `${avgMins}m ${avgSecs < 10 ? '0' : ''}${avgSecs}s` : 'N/A';
-
-                const dayDevices = selectedQaDate === 'all'
-                  ? Array.from(profile.devicesUsed)
-                  : Array.from(('devicesUsedOnDay' in dayData && dayData.devicesUsedOnDay instanceof Set) ? dayData.devicesUsedOnDay : []);
-                const devicesStr = dayDevices.join(', ') || 'Mobile Device';
-
-                const isExpanded = !!expandedTesters[profile.testerName];
-
-                return (
-                  <div key={profile.testerName} className="liquid-glass-panel rounded-2xl p-4 shadow-xl border-white/10 transition-all duration-300">
-                    
-                    {/* Compact Tester Header Row */}
-                    <div className="flex items-center justify-between gap-3">
-                      
-                      {/* Left: Avatar + Name */}
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white font-extrabold flex items-center justify-center text-sm shadow-md border border-white/20 flex-shrink-0">
-                          {profile.testerName.charAt(0).toUpperCase()}
-                        </div>
-                        <div className="truncate">
-                          <h4 className="text-sm font-bold text-white truncate">{profile.testerName}</h4>
-                        </div>
-                      </div>
-
-                      {/* Middle: Compact Day Stats (Plans Finished) */}
-                      <div className="flex items-center gap-4 text-xs font-mono">
-                        <div className="text-right hidden sm:block">
-                          <span className="text-[9px] uppercase text-slate-400 block">Finished</span>
-                          <span className="font-extrabold text-emerald-300">{dayData.completedCount} Plans</span>
-                        </div>
-                      </div>
-
-                      {/* Right: Expand Accordion Chevron & Delete Actions */}
-                      <div className="flex items-center gap-1.5 flex-shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => toggleTesterExpand(profile.testerName)}
-                          className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl border border-slate-700 text-xs font-semibold transition-all duration-300 flex items-center gap-1.5 shadow-md active:scale-95 cursor-pointer"
-                        >
-                          <span>{isExpanded ? 'Hide' : 'Details'}</span>
-                          <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-500 ease-out ${isExpanded ? 'rotate-180 text-emerald-400' : 'rotate-0'}`} />
-                        </button>
-
-                        {(onDeleteTester || onDeleteTestRun) && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (confirm(`Delete all QA test performance data for tester "${profile.testerName}"?`)) {
-                                if (onDeleteTester) {
-                                  onDeleteTester(profile.testerName);
-                                } else if (onDeleteTestRun) {
-                                  const runsToDelete = [...testRuns, ...archivedRuns].filter(r => r.testerName === profile.testerName);
-                                  runsToDelete.forEach(r => onDeleteTestRun(r.id));
-                                }
-                              }
-                            }}
-                            className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 border border-slate-800 hover:border-rose-500/30 rounded-xl transition-all active:scale-95 cursor-pointer"
-                            title={`Delete all QA performance data for ${profile.testerName}`}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-
-                    </div>
-
-                    {/* Fluid Liquid Glass Accordion Expandable Details Section */}
-                    <div className={`liquid-accordion-wrapper ${isExpanded ? 'expanded' : ''}`}>
-                      <div className="liquid-accordion-inner">
-                        <div className="mt-4 pt-3 border-t border-white/10 space-y-3">
-                          {/* Devices Tested Banner */}
-                          <div className="flex items-center justify-between bg-slate-950/70 p-2.5 rounded-xl border border-white/10 text-xs">
-                            <span className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1">
-                              <Smartphone className="w-3 h-3 text-purple-400" />
-                              Devices Tested ({selectedQaDate === todayStr ? 'Today' : selectedQaDate}):
-                            </span>
-                            <span className="font-bold text-purple-300 font-mono truncate max-w-[220px]" title={devicesStr}>{devicesStr}</span>
-                          </div>
-
-                          {/* Day Key Stats Summary for Mobile */}
-                          <div className="grid grid-cols-2 gap-2 sm:hidden text-xs">
-                            <div className="bg-slate-950/60 p-2.5 rounded-xl border border-white/10">
-                              <span className="text-[10px] text-slate-400 block font-bold uppercase">Finished</span>
-                              <span className="text-base font-extrabold text-emerald-300 font-mono">{dayData.completedCount} Plans</span>
-                            </div>
-                            <div className="bg-slate-950/60 p-2.5 rounded-xl border border-white/10">
-                              <span className="text-[10px] text-slate-400 block font-bold uppercase">Avg Time</span>
-                              <span className="text-base font-extrabold text-indigo-300 font-mono">{avgFormatted}</span>
-                            </div>
-                          </div>
-
-                          <div className="text-xs font-bold text-slate-300 flex items-center justify-between">
-                            <span>Completed Test Plans Breakdown ({selectedQaDate === todayStr ? 'Today' : selectedQaDate}):</span>
-                            <span className="text-[10px] text-slate-400 font-mono">{completedRunsList.length} executed</span>
-                          </div>
-
-                          {completedRunsList.length === 0 ? (
-                            <div className="bg-slate-950/40 p-3 rounded-xl text-center text-xs text-slate-500 font-medium">
-                              No test plans completed on {selectedQaDate === todayStr ? 'today' : selectedQaDate}.
-                            </div>
-                          ) : (
-                            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                              {completedRunsList.map((runItem, idx) => (
-                                <div key={runItem.runId + idx} className="bg-slate-950/80 p-2.5 rounded-xl border border-white/10 flex items-center justify-between text-xs space-x-2">
-                                  <div className="truncate flex-1">
-                                    <div className="font-bold text-slate-200 truncate">{runItem.planName}</div>
-                                    <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
-                                      <span className="text-purple-300 font-mono flex items-center gap-1">
-                                        <Smartphone className="w-2.5 h-2.5" /> {runItem.deviceName}
-                                      </span>
-                                      <span>•</span>
-                                      <span className="font-mono text-slate-400">{runItem.completedAtFormatted}</span>
-                                    </div>
-                                  </div>
-
-                                  <div className="flex items-center gap-2">
-                                    <div className="bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-lg font-mono text-[10px] font-extrabold flex items-center gap-1">
-                                      <Clock className="w-3 h-3 text-indigo-400" />
-                                      <span>{runItem.durationFormatted}</span>
-                                    </div>
-
-                                    <div className="flex items-center gap-1 text-[10px] font-mono">
-                                      <span className="text-emerald-400 font-bold">✓{runItem.greenCount}</span>
-                                      {runItem.yellowCount > 0 && <span className="text-amber-400 font-bold">!{runItem.yellowCount}</span>}
-                                      {runItem.redCount > 0 && <span className="text-rose-400 font-bold">✗{runItem.redCount}</span>}
-                                    </div>
-
-                                    {onDeleteTestRun && (
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          if (confirm(`Delete run record for "${runItem.planName}"?`)) {
-                                            onDeleteTestRun(runItem.runId);
-                                          }
-                                        }}
-                                        className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors ml-1"
-                                        title="Delete this test run record"
-                                      >
-                                        <Trash2 className="w-3 h-3" />
-                                      </button>
-                                    )}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-        </div>
-      )}
 
       {/* Tab 2: Feature Health Metrics */}
       {activeTab === 'features' && (
