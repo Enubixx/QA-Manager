@@ -117,10 +117,13 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
       name: planName,
       description: planDescription,
       createdAt: initialPlan?.createdAt || new Date().toISOString(),
-      steps: steps.filter(s => s.title.trim() !== '').map(s => ({
-        ...s,
-        feature: s.feature?.trim() || 'General'
-      }))
+      steps: steps
+        .filter(s => (s.title && s.title.trim() !== '') || (s.description && s.description.trim() !== '') || (s.expectedOutcome && s.expectedOutcome.trim() !== ''))
+        .map((s, idx) => ({
+          ...s,
+          title: s.title?.trim() || s.description?.trim().slice(0, 40) || `Step ${idx + 1}`,
+          feature: s.feature?.trim() || 'General'
+        }))
     };
 
     onSavePlan(savedPlan);

@@ -86,6 +86,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [activeTab, setActiveTab] = useState<'overview' | 'devices' | 'testers' | 'features' | 'bugs'>('overview');
   const [selectedQaDate, setSelectedQaDate] = useState<string>(defaultTodayStr);
   const [expandedTesters, setExpandedTesters] = useState<Record<string, boolean>>({});
+  const [expandedPlanSteps, setExpandedPlanSteps] = useState<Record<string, boolean>>({});
 
   const [newDeviceName, setNewDeviceName] = useState('');
   const [newPersonName, setNewPersonName] = useState('');
@@ -217,9 +218,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const getEffectiveRunStatus = (run: TestRun) => {
     const plan = testPlans.find(p => p.id === run.planId);
     const totalSteps = plan?.steps.length || 0;
-    const completedCount = Object.keys(run.results || {}).length;
+    const stepEntries = Object.entries(run.results || {}).filter(
+      ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+    );
+    const completedCount = stepEntries.length;
 
-    if (run.status === 'completed' || (totalSteps > 0 && completedCount >= totalSteps)) {
+    if (run.status === 'completed' || (totalSteps > 0 && (completedCount >= totalSteps || (run.currentStepIndex !== undefined && run.currentStepIndex >= totalSteps)))) {
       return 'completed';
     }
     if (run.status === 'in_progress' || (run.testerName && run.deviceName)) {
@@ -266,8 +270,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
     combined.forEach(run => {
       const plan = testPlans.find(p => p.id === run.planId);
       const totalSteps = plan?.steps.length || 0;
-      const completedCount = Object.keys(run.results || {}).length;
-      const isDone = run.status === 'completed' || (totalSteps > 0 && completedCount >= totalSteps);
+      const stepEntries = Object.entries(run.results || {}).filter(
+        ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+      );
+      const completedCount = stepEntries.length;
+      const isDone = run.status === 'completed' || (totalSteps > 0 && (completedCount >= totalSteps || (run.currentStepIndex !== undefined && run.currentStepIndex >= totalSteps)));
 
       if (isDone) {
         map.set(run.id, run);
@@ -1703,7 +1710,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     {/* Step Count & Action Buttons */}
                     <div className="flex items-center justify-between pt-3.5 border-t border-white/10 text-xs text-slate-400 font-medium">
                       <div className="flex items-center gap-3">
-                        <span className="font-bold text-slate-200">{plan.steps.length} Steps</span>
+                        <button
+                          type="button"
+                          onClick={() => setExpandedPlanSteps(prev => ({ ...prev, [plan.id]: !prev[plan.id] }))}
+                          className="font-bold text-indigo-300 hover:text-white flex items-center gap-1.5 transition-colors cursor-pointer"
+                        >
+                          <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-300 ${expandedPlanSteps[plan.id] ? 'rotate-180 text-purple-400' : ''}`} />
+                          <span>{plan.steps.length} Steps {expandedPlanSteps[plan.id] ? '(Collapse)' : '(View Steps)'}</span>
+                        </button>
                         <span>•</span>
                         <span className="font-mono text-[11px]">Created {new Date(plan.createdAt).toLocaleDateString()}</span>
                       </div>
@@ -1716,6 +1730,59 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         Test on Phone App
                       </button>
                     </div>
+
+                    {/* Expandable Step Walkthrough Table/List */}
+                    {expandedPlanSteps[plan.id] && (
+                      <div className="mt-3 pt-3 border-t border-white/10 space-y-2 animate-in fade-in duration-200">
+                        <div className="flex items-center justify-between text-[11px] font-bold text-slate-300 pb-1">
+                          <span className="uppercase tracking-wider text-purple-300">Test Flow Step Sequence ({plan.steps.length} Steps)</span>
+                          <span className="text-slate-400 font-mono text-[10px]">Verify Step Order</span>
+                        </div>
+                        <div className="space-y-2">
+                          {plan.steps.map((step, sIdx) => {
+                            const isLastStep = sIdx === plan.steps.length - 1;
+                            return (
+                              <div
+                                key={step.id || `plan-step-${sIdx}`}
+                                className={`p-3 rounded-xl border text-xs space-y-1.5 transition-all ${
+                                  isLastStep
+                                    ? 'bg-amber-950/20 border-amber-500/40 shadow-sm'
+                                    : 'bg-slate-950/60 border-white/10'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-mono font-bold text-indigo-300 text-[11px] bg-indigo-500/20 px-2 py-0.5 rounded-lg border border-indigo-400/30">
+                                      Step #{sIdx + 1}
+                                    </span>
+                                    {isLastStep && (
+                                      <span className="font-bold text-amber-300 text-[10px] bg-amber-500/20 px-2 py-0.5 rounded-lg border border-amber-400/40 uppercase tracking-wide flex items-center gap-1">
+                                        🏁 Final Step
+                                      </span>
+                                    )}
+                                    <span className="font-bold text-white text-xs">{step.title}</span>
+                                  </div>
+                                  <span className="text-[10px] font-mono text-purple-300 bg-purple-500/20 px-2 py-0.5 rounded border border-purple-500/30">
+                                    {step.feature || 'General'}
+                                  </span>
+                                </div>
+                                {step.description && (
+                                  <p className="text-slate-300 text-[11px] leading-relaxed pl-1">
+                                    {step.description}
+                                  </p>
+                                )}
+                                {step.expectedOutcome && (
+                                  <div className="text-[11px] text-emerald-300 bg-emerald-950/40 p-2 rounded-lg border border-emerald-800/40">
+                                    <span className="text-emerald-400 font-bold uppercase tracking-wider text-[9px] block">Expected Outcome:</span>
+                                    {step.expectedOutcome}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1736,9 +1803,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 testRuns.map(run => {
                   const plan = testPlans.find(p => p.id === run.planId);
                   const totalSteps = plan?.steps.length || 1;
-                  const completedResults = Object.values(run.results || {});
+                  const stepEntries = Object.entries(run.results || {}).filter(
+                    ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+                  );
+                  const completedResults = stepEntries.map(([_, v]) => v as any);
                   const completedSteps = completedResults.length;
-                  const progressPct = Math.round((completedSteps / totalSteps) * 100);
+                  const progressPct = Math.min(100, Math.round((completedSteps / totalSteps) * 100));
                   const effectiveStatus = getEffectiveRunStatus(run);
 
                   const greenCount = completedResults.filter(r => r.status === 'green').length;

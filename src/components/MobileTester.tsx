@@ -382,6 +382,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         timestamp: isoTimestamp
       }
     };
+    // Ensure _meta never pollutes step result keys
+    delete (updatedResults as any)._meta;
 
     const nextIndex = currentStepIndex + 1;
     const isDone = nextIndex >= totalSteps;
@@ -394,7 +396,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         computedDurationMs = endMs - startMs;
       } else {
         const stepTs = Object.values(updatedResults)
-          .map(r => r.timestamp ? new Date(r.timestamp).getTime() : NaN)
+          .map(r => r && (r as any).timestamp ? new Date((r as any).timestamp).getTime() : NaN)
           .filter(t => !isNaN(t));
         if (stepTs.length > 0) {
           computedDurationMs = Math.max(1000, Math.max(...stepTs) - Math.min(...stepTs));
@@ -402,17 +404,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       }
     }
 
-    const finalResults = {
-      ...updatedResults,
-      _meta: {
-        startedAt: activeRun.startedAt || isoTimestamp,
-        durationMs: isDone ? computedDurationMs : activeRun.durationMs
-      }
-    };
-
     const updatedRun: TestRun = {
       ...activeRun,
-      results: finalResults as any,
+      results: updatedResults,
       currentStepIndex: nextIndex,
       status: isDone ? 'completed' : 'in_progress',
       completedAt: isDone ? isoTimestamp : undefined,
@@ -900,9 +894,16 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               
               <div className="space-y-3">
                 <div className="flex justify-between items-center">
-                  <span className="px-3 py-1 bg-indigo-500/20 text-indigo-200 border border-indigo-400/30 rounded-xl text-xs font-bold backdrop-blur-md">
-                    Step #{currentStepIndex + 1}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="px-3 py-1 bg-indigo-500/20 text-indigo-200 border border-indigo-400/30 rounded-xl text-xs font-bold backdrop-blur-md">
+                      Step #{currentStepIndex + 1}
+                    </span>
+                    {currentStepIndex >= totalSteps - 1 && (
+                      <span className="px-2.5 py-0.5 bg-gradient-to-r from-amber-500/20 to-orange-500/20 text-amber-300 border border-amber-400/40 rounded-xl text-[10px] font-extrabold uppercase tracking-wider backdrop-blur-md animate-pulse flex items-center gap-1">
+                        🏁 Final Step
+                      </span>
+                    )}
+                  </div>
 
                   <button
                     onClick={() => setShowBugModal(true)}
@@ -997,12 +998,24 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 onClick={handleConfirmStepStatus}
                 className={`w-full py-3.5 rounded-2xl font-black text-xs flex items-center justify-center gap-2 transition-all duration-300 shadow-xl ${
                   selectedStatus
-                    ? 'bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 text-white shadow-purple-500/30 border border-white/30 hover:scale-[1.02] active:scale-[0.98]'
+                    ? currentStepIndex >= totalSteps - 1
+                      ? 'bg-gradient-to-r from-emerald-500 via-teal-500 to-indigo-600 text-white shadow-emerald-500/30 border border-white/30 hover:scale-[1.02] active:scale-[0.98]'
+                      : 'bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 text-white shadow-purple-500/30 border border-white/30 hover:scale-[1.02] active:scale-[0.98]'
                     : 'liquid-glass-button text-slate-500 opacity-50 cursor-not-allowed'
                 }`}
               >
-                <span>{selectedStatus ? `Confirm ${selectedStatus.toUpperCase()} & Next Step` : 'Select Result Above'}</span>
-                <ArrowRight className="w-4 h-4" />
+                <span>
+                  {selectedStatus
+                    ? currentStepIndex >= totalSteps - 1
+                      ? `Confirm ${selectedStatus.toUpperCase()} & Finish Test Run`
+                      : `Confirm ${selectedStatus.toUpperCase()} & Next Step`
+                    : 'Select Result Above'}
+                </span>
+                {currentStepIndex >= totalSteps - 1 ? (
+                  <Check className="w-4 h-4 text-white" />
+                ) : (
+                  <ArrowRight className="w-4 h-4" />
+                )}
               </button>
             </div>
 
@@ -1012,7 +1025,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           (() => {
             const summaryRun = completedRunSummary || archivedCompletedRun || activeRun;
             const summaryResults = summaryRun?.results || {};
-            const summaryResultsArray = Object.values(summaryResults) as any[];
+            const summaryResultsArray = Object.entries(summaryResults)
+              .filter(([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any))
+              .map(([_, v]) => v) as any[];
             const summaryGreen = summaryResultsArray.filter((r: any) => r && r.status === 'green').length;
             const summaryYellow = summaryResultsArray.filter((r: any) => r && r.status === 'yellow').length;
             const summaryRed = summaryResultsArray.filter((r: any) => r && r.status === 'red').length;

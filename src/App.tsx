@@ -470,8 +470,13 @@ export function App() {
 
     const plan = testPlans.find(p => p.id === updatedRun.planId);
     const totalSteps = plan?.steps.length || 0;
-    const completedSteps = Object.keys(updatedRun.results || {}).length;
-    const isDone = updatedRun.status === 'completed' || (totalSteps > 0 && completedSteps >= totalSteps);
+    // Filter out non-step entries like _meta to get accurate completed step count
+    const stepResultsEntries = Object.entries(updatedRun.results || {}).filter(
+      ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in v
+    );
+    const completedSteps = stepResultsEntries.length;
+    // Run is only done if explicitly marked completed, or all steps have been executed
+    const isDone = updatedRun.status === 'completed' || (totalSteps > 0 && (completedSteps >= totalSteps || (updatedRun.currentStepIndex !== undefined && updatedRun.currentStepIndex >= totalSteps)));
 
     if (isDone) {
       const finishTimeIso = updatedRun.completedAt || new Date().toISOString();
@@ -479,17 +484,15 @@ export function App() {
       const endMs = new Date(finishTimeIso).getTime();
       const calcDurationMs = (startMs > 0 && endMs > startMs) ? (endMs - startMs) : updatedRun.durationMs;
 
-      const finalResults = {
-        ...(updatedRun.results || {}),
-        _meta: {
-          startedAt: updatedRun.startedAt || new Date().toISOString(),
-          durationMs: calcDurationMs
-        }
-      };
+      // Clean results to contain purely step results
+      const cleanedResults: Record<string, any> = {};
+      stepResultsEntries.forEach(([k, v]) => {
+        cleanedResults[k] = v;
+      });
 
       const completedRun: TestRun = {
         ...updatedRun,
-        results: finalResults as any,
+        results: cleanedResults as any,
         status: 'completed',
         completedAt: finishTimeIso,
         durationMs: calcDurationMs
