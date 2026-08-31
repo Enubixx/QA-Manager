@@ -62,7 +62,17 @@ export function App() {
   const [testRuns, setTestRuns] = useState<TestRun[]>(() => {
     try {
       const saved = localStorage.getItem('qa_test_runs');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed: TestRun[] = JSON.parse(saved);
+        const todayStr = new Date().toISOString().split('T')[0];
+        return parsed.filter(r => {
+          if (r.status === 'in_progress') {
+            const runDate = (r.startedAt || '').split('T')[0];
+            return runDate === todayStr;
+          }
+          return true;
+        });
+      }
     } catch (e) {}
     return [];
   });
@@ -136,26 +146,7 @@ export function App() {
     if (cloudData) {
       if (cloudData.testPlans) setTestPlans(cloudData.testPlans);
       if (cloudData.testRuns) {
-        setTestRuns(prev => {
-          const map = new Map<string, TestRun>();
-          cloudData.testRuns.forEach((r: TestRun) => map.set(r.id, r));
-          // Always preserve local in-progress runs so active testers are never booted
-          prev.forEach(localRun => {
-            if (localRun.status === 'in_progress') {
-              const cloudRun = map.get(localRun.id);
-              if (!cloudRun) {
-                map.set(localRun.id, localRun);
-              } else {
-                const localCount = Object.keys(localRun.results || {}).length;
-                const cloudCount = Object.keys(cloudRun.results || {}).length;
-                if (localCount >= cloudCount) {
-                  map.set(localRun.id, localRun);
-                }
-              }
-            }
-          });
-          return Array.from(map.values());
-        });
+        setTestRuns(cloudData.testRuns);
       }
       if (cloudData.archivedRuns) setArchivedRuns(cloudData.archivedRuns);
       if (cloudData.bugLogs) setBugLogs(cloudData.bugLogs);

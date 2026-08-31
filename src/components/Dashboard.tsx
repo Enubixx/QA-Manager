@@ -102,32 +102,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [testerViewMode, setTesterViewMode] = useState<'all' | 'active'>('all');
   const [searchTesterQuery, setSearchTesterQuery] = useState('');
 
-  // Determine active testers currently running a test session on a device
+  // Determine active testers currently running a test session on a device (strictly aligned with device status)
   const activeTesterMap = useMemo(() => {
     const map = new Map<string, { deviceName: string; planName?: string; runId?: string }>();
     devices.forEach(d => {
       if (d.activeTesterName && d.activeTesterName.trim()) {
         const activeRun = testRuns.find(r => 
-          r.status === 'in_progress' && 
-          (r.id === d.activeRunId || r.deviceId === d.id || (r.deviceName && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim()))
+          (d.activeRunId && r.id === d.activeRunId) || 
+          (r.deviceId === d.id && r.status === 'in_progress') ||
+          (r.deviceName && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim() && r.status === 'in_progress')
         );
         map.set(d.activeTesterName.toLowerCase().trim(), {
           deviceName: d.name,
           planName: activeRun?.planName,
           runId: d.activeRunId || activeRun?.id
         });
-      }
-    });
-    testRuns.forEach(r => {
-      if (r.status === 'in_progress' && r.testerName && r.testerName.trim()) {
-        const key = r.testerName.toLowerCase().trim();
-        if (!map.has(key)) {
-          map.set(key, {
-            deviceName: r.deviceName || 'Mobile Device',
-            planName: r.planName,
-            runId: r.id
-          });
-        }
       }
     });
     return map;

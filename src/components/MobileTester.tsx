@@ -578,11 +578,17 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     onUpdateRun(updatedRun);
 
     // Lock newly chosen device
-    if (matchedDev && onSaveDevice) {
+    if (onSaveDevice) {
+      const devToLock = selectedDeviceProfile || matchedDev || {
+        id: deviceIdToSave,
+        name: deviceNameToSave,
+        isReady: true,
+        quotas: []
+      };
       onSaveDevice({
-        ...matchedDev,
+        ...devToLock,
         activeRunId: updatedRun.id,
-        activeTesterName: trimmedReporter
+        activeTesterName: testerNameToSave
       });
     }
 
