@@ -904,10 +904,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               <button
                 type="button"
                 onClick={() => setShowQuitConfirmModal(true)}
-                className="px-2 py-1 bg-zinc-900 hover:bg-zinc-850 text-zinc-400 hover:text-rose-400 border border-zinc-800 rounded-xl text-[11px] font-bold flex items-center gap-1 transition shadow-sm active:scale-95 cursor-pointer"
+                className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white border border-rose-500/30 rounded-xl text-[11px] font-bold flex items-center gap-1 transition shadow-sm active:scale-95 cursor-pointer"
                 title="Quit test session and release device"
               >
-                <XCircle className="w-3 h-3 text-zinc-500" />
+                <XCircle className="w-3 h-3 text-white" />
                 <span>Quit</span>
               </button>
             )}
@@ -1459,7 +1459,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
             <form onSubmit={handleSaveSessionSetup} className="space-y-5 max-w-sm mx-auto w-full">
               
               <div className="text-center space-y-1.5">
-                <div className="p-3.5 bg-zinc-900 text-zinc-300 rounded-2xl w-fit mx-auto border border-zinc-800 backdrop-blur-md shadow-lg">
+                <div className="p-3.5 bg-sky-500/15 text-sky-400 rounded-2xl w-fit mx-auto border border-sky-500/30 backdrop-blur-md shadow-lg">
                   <Smartphone className="w-7 h-7" />
                 </div>
                 <h3 className="text-lg font-bold text-white tracking-tight">Start Field QA Session</h3>
@@ -1473,7 +1473,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 {/* QA Tester Custom Trigger */}
                 <div>
                   <label className="block text-xs font-semibold text-zinc-300 mb-1.5 flex items-center gap-1.5">
-                    <User className="w-3.5 h-3.5 text-zinc-400" />
+                    <User className="w-3.5 h-3.5 text-sky-400" />
                     Select QA Tester
                   </label>
                   {testers.length > 0 ? (
@@ -1482,12 +1482,16 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                       onClick={() => setOpenTesterPickerModal(true)}
                       className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left group cursor-pointer active:scale-[0.99] ${
                         inputReporterName
-                          ? 'bg-zinc-900 border-zinc-700 shadow-md ring-1 ring-zinc-700/50'
+                          ? 'bg-zinc-900 border-sky-500/50 shadow-md ring-1 ring-sky-500/25'
                           : 'bg-zinc-900/70 border-zinc-800 hover:border-zinc-700'
                       }`}
                     >
                       <div className="flex items-center gap-3 truncate">
-                        <div className="w-9 h-9 rounded-xl bg-zinc-800 text-zinc-200 border border-zinc-700 flex items-center justify-center font-bold text-xs shadow flex-shrink-0">
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs shadow flex-shrink-0 ${
+                          inputReporterName
+                            ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
+                            : 'bg-zinc-800 text-zinc-200 border border-zinc-700'
+                        }`}>
                           {selectedTesterProfile ? selectedTesterProfile.name.charAt(0).toUpperCase() : <User className="w-4 h-4 text-zinc-400" />}
                         </div>
                         <div className="truncate">
@@ -1499,7 +1503,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                           </div>
                         </div>
                       </div>
-                      <ChevronRight className="w-4 h-4 text-zinc-500 group-hover:text-white flex-shrink-0 transition-transform" />
+                      <ChevronRight className="w-4 h-4 text-sky-400 group-hover:text-white flex-shrink-0 transition-transform" />
                     </button>
                   ) : (
                     <div className="p-3 bg-amber-500/15 border border-amber-500/30 rounded-2xl text-amber-200 text-xs font-semibold text-center leading-relaxed">
@@ -1511,7 +1515,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 {/* Target Device Custom Trigger */}
                 <div>
                   <label className="block text-xs font-semibold text-zinc-300 mb-1.5 flex items-center gap-1.5">
-                    <Smartphone className="w-3.5 h-3.5 text-zinc-400" />
+                    <Smartphone className="w-3.5 h-3.5 text-sky-400" />
                     Select Target Device
                   </label>
                   {selectableDevices.length > 0 ? (
@@ -1520,19 +1524,23 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                       onClick={() => setOpenDevicePickerModal(true)}
                       className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left group cursor-pointer active:scale-[0.99] ${
                         inputDeviceName
-                          ? 'bg-zinc-900 border-zinc-700 shadow-md ring-1 ring-zinc-700/50'
+                          ? 'bg-zinc-900 border-sky-500/50 shadow-md ring-1 ring-sky-500/25'
                           : 'bg-zinc-900/70 border-zinc-800 hover:border-zinc-700'
                       }`}
                     >
                       <div className="flex items-center gap-3 truncate">
-                        <div className="w-9 h-9 rounded-xl bg-zinc-800 text-zinc-200 border border-zinc-700 flex items-center justify-center font-bold text-xs shadow flex-shrink-0">
-                          <Smartphone className="w-4 h-4 text-zinc-400" />
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs shadow flex-shrink-0 ${
+                          inputDeviceName
+                            ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
+                            : 'bg-zinc-800 text-zinc-200 border border-zinc-700'
+                        }`}>
+                          <Smartphone className="w-4 h-4 text-sky-400" />
                         </div>
                         <div className="truncate">
                           <div className="text-xs font-bold text-white truncate">
                             {selectedDeviceProfile ? selectedDeviceProfile.name : (inputDeviceName || 'Choose Mobile Device...')}
                           </div>
-                          <div className="text-[10px] text-zinc-400 truncate">
+                          <div className="text-[10px] text-sky-300/90 font-mono truncate">
                             {(() => {
                               if (!selectedDeviceProfile) return 'Tap to select mobile device';
                               const activeQuotas = (selectedDeviceProfile.quotas || []).filter(q => q.targetRunsPerDay > 0);
@@ -1552,7 +1560,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                           </div>
                         </div>
                       </div>
-                      <ChevronRight className="w-4 h-4 text-zinc-500 group-hover:text-white flex-shrink-0 transition-transform" />
+                      <ChevronRight className="w-4 h-4 text-sky-400 group-hover:text-white flex-shrink-0 transition-transform" />
                     </button>
                   ) : (
                     <div className="p-3 bg-amber-500/15 border border-amber-500/30 rounded-2xl text-amber-200 text-xs font-semibold text-center leading-relaxed">
@@ -1565,9 +1573,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
               <button
                 type="submit"
-                className="w-full py-3.5 bg-white hover:bg-zinc-200 text-black font-bold text-xs rounded-2xl shadow-md border border-white flex items-center justify-center gap-2 transition-all active:scale-[0.98] cursor-pointer"
+                className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm rounded-2xl shadow-lg border border-emerald-400/30 flex items-center justify-center gap-2 transition-all active:scale-[0.98] cursor-pointer"
               >
-                <span>Start QA Walkthrough</span>
+                <span>Start</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
 
@@ -1583,7 +1591,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
                 <div>
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                    <User className="w-4 h-4 text-zinc-400" />
+                    <User className="w-4 h-4 text-sky-400" />
                     <span>Select QA Tester</span>
                   </h3>
                   <p className="text-[11px] text-zinc-400">Choose who is running this QA walkthrough</p>
@@ -1610,21 +1618,27 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                       }}
                       className={`w-full p-3.5 rounded-2xl text-left border flex items-center justify-between gap-3 transition-all cursor-pointer ${
                         isSelected
-                          ? 'bg-zinc-900 border-white/40 shadow-md ring-1 ring-white/20 scale-[1.01]'
+                          ? 'bg-zinc-900 border-sky-500/60 shadow-md ring-1 ring-sky-500/40 scale-[1.01]'
                           : 'bg-zinc-950/80 border-zinc-800/80 hover:bg-zinc-900/60 hover:border-zinc-700'
                       }`}
                     >
                       <div className="flex items-center gap-3 truncate">
-                        <div className="w-10 h-10 rounded-xl bg-zinc-800 text-zinc-200 border border-zinc-700 flex items-center justify-center font-bold text-sm shadow flex-shrink-0">
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm shadow flex-shrink-0 ${
+                          isSelected
+                            ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
+                            : 'bg-zinc-800 text-zinc-200 border border-zinc-700'
+                        }`}>
                           {t.name.charAt(0).toUpperCase()}
                         </div>
                         <div className="truncate">
                           <div className="text-xs font-bold text-white truncate">{t.name}</div>
-                          <div className="text-[10px] text-zinc-400 font-medium truncate">{t.role || 'QA Tester'}</div>
+                          <div className={`text-[10px] font-medium truncate ${isSelected ? 'text-sky-400' : 'text-zinc-400'}`}>
+                            {t.role || 'QA Tester'}
+                          </div>
                         </div>
                       </div>
                       {isSelected && (
-                        <div className="w-6 h-6 rounded-full bg-white text-black flex items-center justify-center flex-shrink-0 shadow">
+                        <div className="w-6 h-6 rounded-full bg-sky-500 text-white flex items-center justify-center flex-shrink-0 shadow">
                           <Check className="w-3.5 h-3.5" />
                         </div>
                       )}
@@ -1643,7 +1657,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
                 <div>
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                    <Smartphone className="w-4 h-4 text-zinc-400" />
+                    <Smartphone className="w-4 h-4 text-sky-400" />
                     <span>Select Target Device</span>
                   </h3>
                   <p className="text-[11px] text-zinc-400">Devices configured with active daily quotas</p>
@@ -1695,23 +1709,27 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                       }}
                       className={`w-full p-3.5 rounded-2xl text-left border flex items-center justify-between gap-3 transition-all cursor-pointer ${
                         isSelected
-                          ? 'bg-zinc-900 border-white/40 shadow-md ring-1 ring-white/20 scale-[1.01]'
+                          ? 'bg-zinc-900 border-sky-500/60 shadow-md ring-1 ring-sky-500/40 scale-[1.01]'
                           : 'bg-zinc-950/80 border-zinc-800/80 hover:bg-zinc-900/60 hover:border-zinc-700'
                       }`}
                     >
                       <div className="flex items-center gap-3 truncate">
-                        <div className="w-10 h-10 rounded-xl bg-zinc-800 text-zinc-200 border border-zinc-700 flex items-center justify-center font-bold text-sm shadow flex-shrink-0">
-                          <Smartphone className="w-4 h-4 text-zinc-400" />
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm shadow flex-shrink-0 ${
+                          isSelected
+                            ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
+                            : 'bg-zinc-800 text-zinc-200 border border-zinc-700'
+                        }`}>
+                          <Smartphone className="w-4 h-4 text-sky-400" />
                         </div>
                         <div className="truncate">
                           <div className="text-xs font-bold text-white truncate">{dev.name}</div>
-                          <div className="text-[10px] text-zinc-400 font-mono font-medium truncate">
+                          <div className={`text-[10px] font-mono font-medium truncate ${isSelected ? 'text-sky-300' : 'text-zinc-400'}`}>
                             {quotaText ? `⚡ ${quotaText}` : 'Ready'}
                           </div>
                         </div>
                       </div>
                       {isSelected && (
-                        <div className="w-6 h-6 rounded-full bg-white text-black flex items-center justify-center flex-shrink-0 shadow">
+                        <div className="w-6 h-6 rounded-full bg-sky-500 text-white flex items-center justify-center flex-shrink-0 shadow">
                           <Check className="w-3.5 h-3.5" />
                         </div>
                       )}

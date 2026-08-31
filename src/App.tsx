@@ -14,6 +14,7 @@ import {
   deleteArchivedRunFromSupabase,
   syncBugLogToSupabase,
   deleteBugLogFromSupabase,
+  wipeAllBugsFromSupabase,
   syncPopulatedFeatureToSupabase,
   deletePopulatedFeatureFromSupabase,
   syncDeviceToSupabase,
@@ -621,6 +622,28 @@ export function App() {
     }));
   };
 
+  const handleWipeAllBugs = () => {
+    setBugLogs([]);
+    try {
+      localStorage.removeItem('qa_bug_logs');
+    } catch (e) {}
+    wipeAllBugsFromSupabase();
+
+    setTestRuns(prev => prev.map(r => {
+      if (!r.bugLogs || r.bugLogs.length === 0) return r;
+      const updated = { ...r, bugLogs: [] };
+      syncTestRunToSupabase(updated);
+      return updated;
+    }));
+
+    setArchivedRuns(prev => prev.map(r => {
+      if (!r.bugLogs || r.bugLogs.length === 0) return r;
+      const updated = { ...r, bugLogs: [] };
+      syncArchivedRunToSupabase(updated);
+      return updated;
+    }));
+  };
+
   const handleUpdateRun = (updatedRun: TestRun) => {
     if (updatedRun.deviceName) {
       handleAddPopulatedDevice(updatedRun.deviceName);
@@ -851,6 +874,7 @@ export function App() {
               onOpenMobileView={handleOpenMobileView}
               onDeletePlan={handleDeletePlan}
               onDeleteBug={handleDeleteBug}
+              onWipeAllBugs={handleWipeAllBugs}
               onClonePlan={handleClonePlan}
               onEditPlan={handleEditPlan}
               onLoadSampleData={handleLoadSampleData}

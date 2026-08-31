@@ -255,6 +255,11 @@ export const deleteBugLogFromSupabase = async (bugId: string) => {
   await supabase.from('bug_logs').delete().eq('id', bugId);
 };
 
+export const wipeAllBugsFromSupabase = async () => {
+  if (!supabase || !isSupabaseConfigured) return;
+  await supabase.from('bug_logs').delete().neq('id', 'all_bugs_delete_key');
+};
+
 export const syncPopulatedFeatureToSupabase = async (featureName: string) => {
   if (!supabase || !isSupabaseConfigured) return;
   await supabase.from('populated_features').upsert({

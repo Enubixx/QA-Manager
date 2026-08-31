@@ -17,6 +17,7 @@ interface DashboardProps {
   onOpenMobileView: (planId?: string) => void;
   onDeletePlan: (planId: string) => void;
   onDeleteBug: (bugId: string) => void;
+  onWipeAllBugs?: () => void;
   onClonePlan: (planId: string) => void;
   onEditPlan?: (plan: TestPlan) => void;
   onLoadSampleData: () => void;
@@ -68,6 +69,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onOpenMobileView,
   onDeletePlan,
   onDeleteBug,
+  onWipeAllBugs,
   onClonePlan,
   onEditPlan,
   onLoadSampleData,
@@ -2826,6 +2828,23 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </>
                 )}
               </button>
+
+              {/* Wipe All Bugs Button */}
+              {bugLogs.length > 0 && onWipeAllBugs && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm(`Are you sure you want to wipe all ${bugLogs.length} logged bug(s)? This will permanently remove all defect logs.`)) {
+                      onWipeAllBugs();
+                    }
+                  }}
+                  className="px-3.5 py-1.5 bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 rounded-2xl text-xs font-bold transition flex items-center gap-1.5 shadow-md active:scale-95 cursor-pointer"
+                  title="Permanently wipe all logged bugs"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Wipe All Bugs</span>
+                </button>
+              )}
 
               {/* Single Condensed Filter & Sort Menu Button & Popover */}
               <div className="relative">
