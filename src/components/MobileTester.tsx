@@ -1598,11 +1598,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           </div>
         )}
 
-        {/* Custom Tester Picker Bottom Sheet */}
+        {/* Custom Tester Picker Modal (Centered) */}
         {openTesterPickerModal && (
-          <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-xl z-[80] flex flex-col justify-end p-3 animate-in fade-in duration-200 rounded-[44px]">
-            <div className="bg-slate-900/95 border border-white/20 rounded-3xl p-5 space-y-4 max-h-[85%] flex flex-col shadow-2xl animate-in slide-in-from-bottom duration-200">
-              <div className="w-10 h-1 bg-white/25 rounded-full mx-auto" />
+          <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-xl z-[80] flex items-center justify-center p-4 animate-in fade-in duration-200 rounded-[44px]">
+            <div className="bg-slate-900/95 border border-white/20 rounded-3xl p-5 space-y-4 w-full max-h-[85%] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200">
               <div className="flex items-center justify-between pb-2 border-b border-white/10">
                 <div>
                   <h3 className="text-sm font-black text-white flex items-center gap-2">
@@ -1659,11 +1658,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           </div>
         )}
 
-        {/* Custom Target Device Picker Bottom Sheet */}
+        {/* Custom Target Device Picker Modal (Centered) */}
         {openDevicePickerModal && (
-          <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-xl z-[80] flex flex-col justify-end p-3 animate-in fade-in duration-200 rounded-[44px]">
-            <div className="bg-slate-900/95 border border-white/20 rounded-3xl p-5 space-y-4 max-h-[85%] flex flex-col shadow-2xl animate-in slide-in-from-bottom duration-200">
-              <div className="w-10 h-1 bg-white/25 rounded-full mx-auto" />
+          <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-xl z-[80] flex items-center justify-center p-4 animate-in fade-in duration-200 rounded-[44px]">
+            <div className="bg-slate-900/95 border border-white/20 rounded-3xl p-5 space-y-4 w-full max-h-[85%] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200">
               <div className="flex items-center justify-between pb-2 border-b border-white/10">
                 <div>
                   <h3 className="text-sm font-black text-white flex items-center gap-2">
