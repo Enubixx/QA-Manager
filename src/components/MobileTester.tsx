@@ -871,7 +871,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               </button>
             )}
             <div className="flex items-center gap-1.5 min-w-0">
-              <Layers className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
+              <Layers className="w-3.5 h-3.5 text-sky-400 flex-shrink-0" />
               <span className="font-bold text-white text-xs truncate max-w-[160px]" title={currentPlan?.name}>
                 {currentPlan?.name || 'No Plan Assigned'}
               </span>
@@ -1048,12 +1048,12 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
             {/* Step Walkthrough Header & Interactive Step Chips */}
             <div className="space-y-1.5">
               <div className="flex items-center justify-between text-xs font-semibold">
-                <span className="text-zinc-400 uppercase tracking-wider text-[10px] font-bold">Step Walkthrough</span>
+                <span className="text-sky-400 uppercase tracking-wider text-[10px] font-bold">Step Walkthrough</span>
                 <span className="font-mono text-zinc-400 text-[11px]">Step {currentStepIndex + 1} of {totalSteps}</span>
               </div>
 
-              {/* Sequential Step Row (Auto-centers active step chip) */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none pt-0.5 scroll-smooth">
+              {/* Sequential Step Row (Auto-centers active step chip without left cut-off) */}
+              <div className="flex items-center gap-1.5 overflow-x-auto px-1.5 py-1 scrollbar-none scroll-smooth">
                 {steps.map((s, idx) => {
                   const sRes = activeRun?.results?.[s.id];
                   const isCurrent = idx === currentStepIndex;
@@ -1071,7 +1071,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                       }}
                       className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0 border ${
                         isCurrent
-                          ? 'bg-white text-black border-white shadow-md ring-2 ring-white/20 scale-105'
+                          ? 'bg-zinc-700 text-zinc-100 border-zinc-400 shadow-md ring-1 ring-zinc-400/40'
                           : canGoBack
                           ? isDone
                             ? sRes.status === 'green'
@@ -1099,7 +1099,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
             {/* Test Plan Header Pill */}
             <div className="liquid-glass-pill rounded-2xl px-4 py-2 flex items-center justify-between border border-zinc-800">
               <div className="text-xs font-bold text-white truncate max-w-[220px]">{currentPlan?.name}</div>
-              <span className="text-[10px] font-mono text-zinc-300 font-bold bg-zinc-800 px-2 py-0.5 rounded-lg border border-zinc-700">
+              <span className="text-[10px] font-mono text-sky-300 font-bold bg-sky-500/20 px-2.5 py-0.5 rounded-lg border border-sky-500/35 shadow-sm">
                 {currentStep.feature || 'General'}
               </span>
             </div>
@@ -1110,7 +1110,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               <div className="space-y-3">
                 <div className="flex justify-between items-center">
                   <div className="flex items-center gap-2">
-                    <span className="px-3 py-1 bg-zinc-800 text-zinc-200 border border-zinc-700 rounded-xl text-xs font-bold">
+                    <span className="px-3 py-1 bg-sky-500/15 text-sky-300 border border-sky-500/30 rounded-xl text-xs font-bold">
                       Step #{currentStepIndex + 1}
                     </span>
                     {currentStepIndex >= totalSteps - 1 && (
@@ -1343,7 +1343,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                       {bugLogsList.map((bug: any) => (
                         <div key={bug.id} className="flex items-center justify-between bg-zinc-900/90 p-2 rounded-xl border border-zinc-800 text-[11px]">
                           <div className="truncate pr-2">
-                            <span className="font-mono text-zinc-400 mr-1 text-[10px]">[{bug.feature || 'General'}]</span>
+                            <span className="font-mono text-sky-400 mr-1.5 text-[10px] bg-sky-500/10 px-1.5 py-0.5 rounded-md border border-sky-500/25">[{bug.feature || 'General'}]</span>
                             <span className="text-zinc-200">{bug.note}</span>
                           </div>
                           <button
@@ -1741,8 +1741,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   </div>
                 </div>
 
-                <div className="liquid-glass-pill rounded-2xl p-2.5 text-xs text-zinc-300 flex items-center justify-between font-semibold border border-zinc-800">
-                  <span>Feature: <strong className="text-zinc-200 font-mono">{currentStep?.feature || 'General'}</strong></span>
+                <div className="liquid-glass-pill rounded-2xl p-2.5 text-xs text-sky-200 flex items-center justify-between font-semibold border border-sky-500/30 bg-sky-950/20">
+                  <span>Feature: <strong className="text-sky-300 font-mono">{currentStep?.feature || 'General'}</strong></span>
                 </div>
 
                 <div>
