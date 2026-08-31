@@ -1,0 +1,174 @@
+{
+  "version": "1.0",
+  "exportedAt": "2026-08-31T18:34:44.387Z",
+  "testPlans": [
+    {
+      "id": "plan-demo-1",
+      "name": "Mobile Auth & SSO Authentication Suite",
+      "description": "Verify login flows, OAuth provider single sign-on, token refresh, and session logout across mobile devices.",
+      "createdAt": "2026-08-24T10:00:00.000Z",
+      "steps": [
+        {
+          "id": "step-demo-101",
+          "title": "Launch Mobile App & Open Splash Screen",
+          "feature": "Authentication",
+          "description": "Open app from fresh install or cleared state and verify initial splash animation.",
+          "expectedOutcome": "Splash screen presents within 1.5s and transitions to welcome screen."
+        },
+        {
+          "id": "step-demo-102",
+          "title": "Tap \"Sign in with Google SSO\"",
+          "feature": "Authentication",
+          "description": "Tap Google sign-in button and grant OAuth permissions.",
+          "expectedOutcome": "Google Account picker opens successfully, user authenticates, returns bearer token."
+        },
+        {
+          "id": "step-demo-103",
+          "title": "Verify Two-Factor OTP Verification Code Prompt",
+          "feature": "Security",
+          "description": "Enter 6-digit SMS verification code received on device.",
+          "expectedOutcome": "Code is automatically recognized from SMS autofill and proceeds."
+        },
+        {
+          "id": "step-demo-104",
+          "title": "Execute User Logout Action",
+          "feature": "Authentication",
+          "description": "Navigate to Settings -> Account -> Logout and confirm prompt.",
+          "expectedOutcome": "Session token cleared from secure storage and user returned to onboarding."
+        }
+      ]
+    }
+  ],
+  "testRuns": [
+    {
+      "id": "run-plan-demo-1-subagent-1788201284386",
+      "planId": "plan-demo-1",
+      "planName": "Mobile Auth & SSO Authentication Suite",
+      "testerName": "Automated QA Subagent",
+      "deviceName": "Pixel 9 Pro (Simulated)",
+      "status": "completed",
+      "currentStepIndex": 4,
+      "results": {
+        "step-demo-101": {
+          "stepId": "step-demo-101",
+          "status": "green",
+          "feature": "Authentication",
+          "timestamp": "2026-08-31T18:00:00.000Z"
+        },
+        "step-demo-102": {
+          "stepId": "step-demo-102",
+          "status": "yellow",
+          "feature": "Authentication",
+          "timestamp": "2026-08-31T18:00:45.000Z"
+        },
+        "step-demo-103": {
+          "stepId": "step-demo-103",
+          "status": "green",
+          "feature": "Security",
+          "timestamp": "2026-08-31T18:01:30.000Z"
+        },
+        "step-demo-104": {
+          "stepId": "step-demo-104",
+          "status": "green",
+          "feature": "Authentication",
+          "timestamp": "2026-08-31T18:02:15.000Z"
+        }
+      },
+      "bugLogs": [
+        {
+          "id": "bug-subagent-1788201284387-1",
+          "testRunId": "run-plan-demo-1-subagent-1788201284386",
+          "planId": "plan-demo-1",
+          "stepId": "step-demo-102",
+          "stepTitle": "Tap \"Sign in with Google SSO\"",
+          "feature": "Authentication",
+          "testerName": "Automated QA Subagent",
+          "deviceName": "Pixel 9 Pro (Simulated)",
+          "severity": "medium",
+          "note": "Subagent automated verification: Google SSO redirect experienced 3.1s delay before returning authorization token.",
+          "timestamp": "2026-08-31T18:00:45.000Z",
+          "formattedTime": "11:01:15 AM"
+        }
+      ],
+      "startedAt": "2026-08-31T18:00:00.000Z",
+      "completedAt": "2026-08-31T18:03:00.000Z",
+      "durationMs": 180000
+    }
+  ],
+  "archivedRuns": [
+    {
+      "id": "run-plan-demo-1-subagent-1788201284386",
+      "planId": "plan-demo-1",
+      "planName": "Mobile Auth & SSO Authentication Suite",
+      "testerName": "Automated QA Subagent",
+      "deviceName": "Pixel 9 Pro (Simulated)",
+      "status": "completed",
+      "currentStepIndex": 4,
+      "results": {
+        "step-demo-101": {
+          "stepId": "step-demo-101",
+          "status": "green",
+          "feature": "Authentication",
+          "timestamp": "2026-08-31T18:00:00.000Z"
+        },
+        "step-demo-102": {
+          "stepId": "step-demo-102",
+          "status": "yellow",
+          "feature": "Authentication",
+          "timestamp": "2026-08-31T18:00:45.000Z"
+        },
+        "step-demo-103": {
+          "stepId": "step-demo-103",
+          "status": "green",
+          "feature": "Security",
+          "timestamp": "2026-08-31T18:01:30.000Z"
+        },
+        "step-demo-104": {
+          "stepId": "step-demo-104",
+          "status": "green",
+          "feature": "Authentication",
+          "timestamp": "2026-08-31T18:02:15.000Z"
+        }
+      },
+      "bugLogs": [
+        {
+          "id": "bug-subagent-1788201284387-1",
+          "testRunId": "run-plan-demo-1-subagent-1788201284386",
+          "planId": "plan-demo-1",
+          "stepId": "step-demo-102",
+          "stepTitle": "Tap \"Sign in with Google SSO\"",
+          "feature": "Authentication",
+          "testerName": "Automated QA Subagent",
+          "deviceName": "Pixel 9 Pro (Simulated)",
+          "severity": "medium",
+          "note": "Subagent automated verification: Google SSO redirect experienced 3.1s delay before returning authorization token.",
+          "timestamp": "2026-08-31T18:00:45.000Z",
+          "formattedTime": "11:01:15 AM"
+        }
+      ],
+      "startedAt": "2026-08-31T18:00:00.000Z",
+      "completedAt": "2026-08-31T18:03:00.000Z",
+      "durationMs": 180000
+    }
+  ],
+  "bugLogs": [
+    {
+      "id": "bug-subagent-1788201284387-1",
+      "testRunId": "run-plan-demo-1-subagent-1788201284386",
+      "planId": "plan-demo-1",
+      "stepId": "step-demo-102",
+      "stepTitle": "Tap \"Sign in with Google SSO\"",
+      "feature": "Authentication",
+      "testerName": "Automated QA Subagent",
+      "deviceName": "Pixel 9 Pro (Simulated)",
+      "severity": "medium",
+      "note": "Subagent automated verification: Google SSO redirect experienced 3.1s delay before returning authorization token.",
+      "timestamp": "2026-08-31T18:00:45.000Z",
+      "formattedTime": "11:01:15 AM"
+    }
+  ],
+  "populatedFeatures": [
+    "Authentication",
+    "Security"
+  ]
+}
