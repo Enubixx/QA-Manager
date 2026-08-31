@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile } from '../types';
-import { CheckCircle2, Clock, Bug, Smartphone, RefreshCw, Send, Check, Layers, ChevronDown, AlertTriangle, XCircle, ArrowRight, User, Download, Edit3, Trash2, Tag, Image, Camera, X } from 'lucide-react';
+import { CheckCircle2, Clock, Bug, Smartphone, RefreshCw, Send, Check, Layers, ChevronDown, AlertTriangle, XCircle, ArrowRight, ArrowLeft, ChevronLeft, Undo2, Sparkles, User, Download, Edit3, Trash2, Tag, Image, Camera, X } from 'lucide-react';
 import { exportTestRunToCSV } from '../utils/exportUtils';
 
 interface MobileTesterProps {
@@ -88,12 +88,45 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     return map;
   }, [archivedRuns, testRuns, devices, todayStr]);
 
+  // Persistent helper to get stored tester name & device name
+  const getStoredTesterName = () => {
+    try {
+      return localStorage.getItem('qa_tester_name') || sessionStorage.getItem('qa_tester_name') || '';
+    } catch (e) {
+      return '';
+    }
+  };
+
+  const getStoredDeviceName = () => {
+    try {
+      return localStorage.getItem('qa_device_name') || sessionStorage.getItem('qa_device_name') || '';
+    } catch (e) {
+      return '';
+    }
+  };
+
+  // Check localStorage for any persistent in-progress run for this plan
+  const localSavedRunJson = currentPlan ? localStorage.getItem(`qa_in_progress_run_${currentPlan.id}`) : null;
+  let localSavedRun: TestRun | null = null;
+  if (localSavedRunJson) {
+    try {
+      localSavedRun = JSON.parse(localSavedRunJson);
+      if (localSavedRun && localSavedRun.status === 'completed') {
+        localSavedRun = null;
+      }
+    } catch (e) {}
+  }
+
   // Find active run specifically for THIS device & plan
   let activeRun = testRuns.find(r => 
     r.planId === currentPlan?.id && 
     r.status !== 'completed' &&
-    (r.deviceId === deviceId || r.id.includes(deviceId))
+    (r.deviceId === deviceId || r.id.includes(deviceId) || (localSavedRun && r.id === localSavedRun.id))
   );
+
+  if (!activeRun && localSavedRun && localSavedRun.planId === currentPlan?.id) {
+    activeRun = localSavedRun;
+  }
 
   // Fallback: check if an unassigned active run matching legacy ID exists
   if (!activeRun && currentPlan) {
@@ -101,11 +134,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   }
 
   if (!activeRun && currentPlan) {
-    const savedName = sessionStorage.getItem('qa_tester_name') || '';
-    const savedDevice = sessionStorage.getItem('qa_device_name') || '';
-    const uniqueSuffix = Date.now().toString(36);
+    const savedName = getStoredTesterName();
+    const savedDevice = getStoredDeviceName();
     activeRun = {
-      id: `run-${currentPlan.id}-${deviceId}-${uniqueSuffix}`,
+      id: `run-${currentPlan.id}-${deviceId}`,
       planId: currentPlan.id,
       planName: currentPlan.name,
       deviceId: deviceId,
@@ -119,13 +151,13 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     };
   }
 
-  const [inputReporterName, setInputReporterName] = useState(() => sessionStorage.getItem('qa_tester_name') || '');
-  const [inputDeviceName, setInputDeviceName] = useState(() => sessionStorage.getItem('qa_device_name') || '');
+  const [inputReporterName, setInputReporterName] = useState(() => getStoredTesterName());
+  const [inputDeviceName, setInputDeviceName] = useState(() => getStoredDeviceName());
 
   // Selectable devices: Ready, not locked by another tester's active in-progress run, and quota not exhausted today
   const selectableDevices = useMemo(() => {
     if (!currentPlan) return devices;
-    const currentSavedDevName = sessionStorage.getItem('qa_device_name') || inputDeviceName || '';
+    const currentSavedDevName = getStoredDeviceName() || inputDeviceName || '';
 
     return devices.filter(dev => {
       if (!dev.isReady) return false;
@@ -148,34 +180,50 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     });
   }, [devices, currentPlan, todayRunsMap, activeRun, testRuns, inputDeviceName]);
 
-  // Clear legacy localStorage tester info so sessions require setup on fresh launch
+  // Keep tester identity reliably in localStorage and sessionStorage (NEVER wipe on mount)
   useEffect(() => {
-    localStorage.removeItem('qa_tester_name');
-    localStorage.removeItem('qa_device_name');
-
-    // On cold start / fresh launch, require setup screen without erasing past run results
-    if (!sessionStorage.getItem('qa_session_initialized')) {
-      sessionStorage.setItem('qa_session_initialized', 'true');
-      setShowSetupModal(true);
-      setInputReporterName('');
-      setInputDeviceName('');
+    const name = getStoredTesterName();
+    const dev = getStoredDeviceName();
+    if (name) {
+      localStorage.setItem('qa_tester_name', name);
+      sessionStorage.setItem('qa_tester_name', name);
+    }
+    if (dev) {
+      localStorage.setItem('qa_device_name', dev);
+      sessionStorage.setItem('qa_device_name', dev);
     }
   }, []);
 
   // Active Mobile View Tab: 'plans' (Configured Test Plans) vs 'bugs' (Logged Bugs)
   const [activeMobileTab, setActiveMobileTab] = useState<'plans' | 'bugs'>('plans');
 
-  // Pre-test Session Setup state (Reporter Name & Device Name) - Defaults to true on cold start
+  // Pre-test Session Setup state: only display if tester name or device is completely unconfigured
   const [showSetupModal, setShowSetupModal] = useState<boolean>(() => {
-    const savedName = sessionStorage.getItem('qa_tester_name');
-    const savedDevice = sessionStorage.getItem('qa_device_name');
-    return !savedName || !savedDevice || !activeRun?.testerName || !activeRun?.deviceName;
+    const savedName = getStoredTesterName();
+    const savedDevice = getStoredDeviceName();
+    const hasTester = Boolean(savedName || activeRun?.testerName);
+    const hasDevice = Boolean(savedDevice || activeRun?.deviceName);
+    return !hasTester || !hasDevice;
   });
 
   const steps = currentPlan?.steps || [];
-  const currentStepIndex = activeRun?.currentStepIndex || 0;
-  const currentStep = steps[currentStepIndex];
   const totalSteps = steps.length;
+
+  // Active Step Index State (allows jumping back and forth to inspect and fix mistakes)
+  const [activeStepIndex, setActiveStepIndex] = useState<number>(() => {
+    return activeRun?.currentStepIndex || 0;
+  });
+
+  // Sync active step with activeRun when plan or run changes
+  useEffect(() => {
+    if (activeRun && typeof activeRun.currentStepIndex === 'number') {
+      const clamped = Math.min(activeRun.currentStepIndex, Math.max(0, totalSteps - 1));
+      setActiveStepIndex(clamped);
+    }
+  }, [activeRun?.id, currentPlan?.id]);
+
+  const currentStepIndex = Math.min(activeStepIndex, Math.max(0, totalSteps - 1));
+  const currentStep = steps[currentStepIndex];
   
   // Explicit state for completion summary view
   const [completedRunSummary, setCompletedRunSummary] = useState<TestRun | null>(null);
@@ -214,6 +262,22 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   // Selected Status for current step
   const [selectedStatus, setSelectedStatus] = useState<'green' | 'yellow' | 'red' | null>(null);
+
+  // Whether current step already has a recorded status
+  const currentStepResult = currentStep && activeRun?.results?.[currentStep.id];
+  const hasExistingResult = Boolean(currentStepResult && currentStepResult.status && currentStepResult.status !== 'pending');
+
+  // Pre-load selectedStatus with recorded result when navigating between steps
+  useEffect(() => {
+    if (currentStep && activeRun?.results?.[currentStep.id]?.status) {
+      const recorded = activeRun.results[currentStep.id].status;
+      if (recorded !== 'pending') {
+        setSelectedStatus(recorded);
+      }
+    } else {
+      setSelectedStatus(null);
+    }
+  }, [currentStepIndex, currentStep?.id]);
 
   // Quit & Release Session Confirmation Modal state
   const [showQuitConfirmModal, setShowQuitConfirmModal] = useState(false);
@@ -316,7 +380,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
     const trimmedReporter = inputReporterName.trim();
     const trimmedDevice = inputDeviceName.trim();
-    const prevSavedDevice = sessionStorage.getItem('qa_device_name');
+    const prevSavedDevice = getStoredDeviceName();
 
     // Unlock any device previously locked by this session if selecting a new device
     devices.forEach(d => {
@@ -335,11 +399,11 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       }
     });
 
-    // Store in session storage so the info resets when the app is force quit
+    // Store in both localStorage and sessionStorage so tester identity is never lost
     sessionStorage.setItem('qa_tester_name', trimmedReporter);
     sessionStorage.setItem('qa_device_name', trimmedDevice);
-    localStorage.removeItem('qa_tester_name');
-    localStorage.removeItem('qa_device_name');
+    localStorage.setItem('qa_tester_name', trimmedReporter);
+    localStorage.setItem('qa_device_name', trimmedDevice);
 
     onAddPopulatedDevice(trimmedDevice);
 
@@ -351,6 +415,11 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       status: activeRun.status === 'not_started' ? 'in_progress' : activeRun.status,
       startedAt: (activeRun.status === 'not_started' || !activeRun.startedAt) ? new Date().toISOString() : activeRun.startedAt
     };
+
+    // Save in-progress run to localStorage immediately
+    if (currentPlan) {
+      localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updatedRun));
+    }
 
     // Lock newly chosen device
     const matchedDev = devices.find(d => d.name.toLowerCase().trim() === trimmedDevice.toLowerCase().trim() || d.id === trimmedDevice);
@@ -366,7 +435,81 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     setShowSetupModal(false);
   };
 
-  // Submit Step with Selected Status
+  // Navigate to previous step (to inspect or correct a mistake)
+  const handlePreviousStep = () => {
+    if (currentStepIndex > 0) {
+      const prevIndex = currentStepIndex - 1;
+      setActiveStepIndex(prevIndex);
+      const prevStep = steps[prevIndex];
+      const prevStatus = prevStep && activeRun?.results?.[prevStep.id]?.status;
+      setSelectedStatus(prevStatus && prevStatus !== 'pending' ? prevStatus : null);
+      if (activeRun) {
+        const updated = { ...activeRun, currentStepIndex: prevIndex };
+        onUpdateRun(updated);
+        if (currentPlan) {
+          localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updated));
+        }
+      }
+    }
+  };
+
+  // Skip forward to next step without changing existing status
+  const handleNextStepWithoutConfirm = () => {
+    if (currentStepIndex < totalSteps - 1) {
+      const nextIndex = currentStepIndex + 1;
+      setActiveStepIndex(nextIndex);
+      const nextStep = steps[nextIndex];
+      const nextStatus = nextStep && activeRun?.results?.[nextStep.id]?.status;
+      setSelectedStatus(nextStatus && nextStatus !== 'pending' ? nextStatus : null);
+      if (activeRun) {
+        const updated = { ...activeRun, currentStepIndex: nextIndex };
+        onUpdateRun(updated);
+        if (currentPlan) {
+          localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updated));
+        }
+      }
+    }
+  };
+
+  // Jump directly to any specific step
+  const handleGoToStep = (targetIdx: number) => {
+    if (targetIdx >= 0 && targetIdx < totalSteps) {
+      setActiveStepIndex(targetIdx);
+      const targetStep = steps[targetIdx];
+      const existingStatus = targetStep && activeRun?.results?.[targetStep.id]?.status;
+      setSelectedStatus(existingStatus && existingStatus !== 'pending' ? existingStatus : null);
+      if (activeRun) {
+        const updated = { ...activeRun, currentStepIndex: targetIdx };
+        onUpdateRun(updated);
+        if (currentPlan) {
+          localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updated));
+        }
+      }
+    }
+  };
+
+  // Current step defects (for reviewing or removing mistaken bugs)
+  const currentStepBugs = useMemo(() => {
+    if (!currentStep || !activeRun) return [];
+    return (activeRun.bugLogs || []).filter(b => b.stepId === currentStep.id);
+  }, [currentStep?.id, activeRun?.bugLogs]);
+
+  // Remove a mistake bug from the current step
+  const handleDeleteStepBug = (bugId: string) => {
+    if (onDeleteBug) onDeleteBug(bugId);
+    if (activeRun) {
+      const updatedBugLogs = (activeRun.bugLogs || []).filter(b => b.id !== bugId);
+      const updatedRun = { ...activeRun, bugLogs: updatedBugLogs };
+      onUpdateRun(updatedRun);
+      if (currentPlan) {
+        localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updatedRun));
+      }
+      setBugSuccessMessage('Defect removed from this step');
+      setTimeout(() => setBugSuccessMessage(null), 3000);
+    }
+  };
+
+  // Submit Step with Selected Status (or Update Existing Result)
   const handleConfirmStepStatus = () => {
     if (!currentStep || !activeRun || !selectedStatus) return;
 
@@ -385,8 +528,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     // Ensure _meta never pollutes step result keys
     delete (updatedResults as any)._meta;
 
-    const nextIndex = currentStepIndex + 1;
-    const isDone = nextIndex >= totalSteps;
+    const isLastStep = currentStepIndex >= totalSteps - 1;
+    const isDone = isLastStep;
+    const nextIndex = isLastStep ? totalSteps : currentStepIndex + 1;
 
     let computedDurationMs: number | undefined = undefined;
     if (isDone) {
@@ -415,6 +559,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
     if (isDone) {
       setCompletedRunSummary(updatedRun);
+      if (currentPlan) {
+        localStorage.removeItem(`qa_in_progress_run_${currentPlan.id}`);
+      }
       const activeDevName = activeRun.deviceName;
       const matchedDev = devices.find(d => (activeDevName && d.name.toLowerCase().trim() === activeDevName.toLowerCase().trim()) || d.activeRunId === activeRun.id);
       if (matchedDev && onSaveDevice) {
@@ -426,14 +573,22 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       }
       setBugSuccessMessage(`🎉 Run complete! ${activeDevName || 'Device'} progress updated for today.`);
       setTimeout(() => setBugSuccessMessage(null), 4000);
+    } else {
+      if (currentPlan) {
+        localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updatedRun));
+      }
+      setActiveStepIndex(nextIndex);
+      // Pre-select next step's recorded status if already tested previously
+      const nextStepObj = steps[nextIndex];
+      const nextSavedStatus = nextStepObj && updatedResults[nextStepObj.id]?.status;
+      setSelectedStatus(nextSavedStatus && nextSavedStatus !== 'pending' ? nextSavedStatus : null);
     }
 
     onUpdateRun(updatedRun);
-    setSelectedStatus(null);
     setBugSuccessMessage(null);
   };
 
-  // Keyboard Shortcuts listener (1 = Green, 2 = Yellow, 3 = Red, Enter = Confirm & Next, B = Log Bug)
+  // Keyboard Shortcuts listener (1 = Green, 2 = Yellow, 3 = Red, Enter = Confirm, B = Bug, Left = Prev, Right = Next)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const targetTag = (e.target as HTMLElement)?.tagName;
@@ -463,6 +618,14 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       } else if (e.key.toLowerCase() === 'b') {
         e.preventDefault();
         setShowBugModal(true);
+      } else if (e.key === 'ArrowLeft' || e.key === 'p' || e.key === 'P') {
+        e.preventDefault();
+        handlePreviousStep();
+      } else if (e.key === 'ArrowRight' || e.key === 'n' || e.key === 'N') {
+        if (currentStepIndex < totalSteps - 1) {
+          e.preventDefault();
+          handleNextStepWithoutConfirm();
+        }
       } else if (e.key === 'Enter' && selectedStatus) {
         e.preventDefault();
         handleConfirmStepStatus();
@@ -471,61 +634,17 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showSetupModal, isCompleted, showBugModal, selectedStatus, currentStep, activeRun]);
+  }, [showSetupModal, isCompleted, showBugModal, selectedStatus, currentStepIndex, totalSteps, steps, activeRun]);
 
-  // Real-Time Admin Boot Detection (kicks tester out in real time if session or tester is deleted on Desktop)
-  const [activeRunIdBeingTested, setActiveRunIdBeingTested] = useState<string | null>(null);
-  const [activeTesterNameBeingTested, setActiveTesterNameBeingTested] = useState<string | null>(null);
   const [bootMessage, setBootMessage] = useState<string | null>(null);
 
+  // Safe notice if currentPlan is missing
   useEffect(() => {
-    if (!showSetupModal && activeRun && activeRun.status === 'in_progress' && !isCompleted) {
-      setActiveRunIdBeingTested(activeRun.id);
-      if (activeRun.testerName) {
-        setActiveTesterNameBeingTested(activeRun.testerName);
-      }
-    }
-  }, [showSetupModal, activeRun, isCompleted]);
-
-  useEffect(() => {
-    if (showSetupModal || isCompleted) return;
-
-    // 1. Check if the active run session ID was deleted by Admin
-    if (activeRunIdBeingTested) {
-      const runStillActive = testRuns.some(r => r.id === activeRunIdBeingTested);
-      const runArchived = archivedRuns.some(r => r.id === activeRunIdBeingTested);
-
-      if (!runStillActive && !runArchived) {
-        setBootMessage(`⚠️ Session Terminated: An administrator has booted your QA session from the manager dashboard.`);
-        setShowSetupModal(true);
-        setActiveRunIdBeingTested(null);
-        setActiveTesterNameBeingTested(null);
-        return;
-      }
-    }
-
-    // 2. Check if the entire tester profile was deleted by Admin
-    if (activeTesterNameBeingTested) {
-      const testerNameLower = activeTesterNameBeingTested.trim().toLowerCase();
-      const hasAnyRuns = testRuns.some(r => r.testerName?.trim().toLowerCase() === testerNameLower) ||
-                         archivedRuns.some(r => r.testerName?.trim().toLowerCase() === testerNameLower);
-
-      if (!hasAnyRuns) {
-        setBootMessage(`⚠️ Session Terminated: Your tester profile (${activeTesterNameBeingTested}) was deleted by an administrator.`);
-        setShowSetupModal(true);
-        setActiveRunIdBeingTested(null);
-        setActiveTesterNameBeingTested(null);
-      }
-    }
-  }, [testRuns, archivedRuns, activeRunIdBeingTested, activeTesterNameBeingTested, showSetupModal, isCompleted]);
-
-  // Auto-kick user to setup screen if active run or plan gets deleted (bypassed if test plan is completed)
-  useEffect(() => {
-    if (completedRunSummary || isCompleted) return;
-    if (!currentPlan || !activeRun?.testerName || !activeRun?.deviceName) {
+    if (!currentPlan) {
+      setBootMessage('⚠️ Selected Test Plan was removed or is unavailable.');
       setShowSetupModal(true);
     }
-  }, [currentPlan, activeRun?.testerName, activeRun?.deviceName, completedRunSummary, isCompleted]);
+  }, [currentPlan]);
 
   // Submit Bug ONLY
   const handleReportBugSubmit = (e: React.FormEvent) => {
@@ -866,7 +985,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         ) : !isCompleted && currentStep ? (
           <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
             
-            {/* Step Progress Bar */}
+            {/* Step Progress Bar & Interactive Step Chips */}
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs font-semibold">
                 <span className="text-indigo-300 uppercase tracking-wider text-[10px]">Step Walkthrough</span>
@@ -878,6 +997,42 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   className="bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 h-full transition-all duration-300 shadow-md shadow-purple-500/20"
                   style={{ width: `${((currentStepIndex + 1) / totalSteps) * 100}%` }}
                 ></div>
+              </div>
+
+              {/* Interactive Step Jump Chips (Tap any step to review or correct) */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none pt-0.5">
+                {steps.map((s, idx) => {
+                  const sRes = activeRun?.results?.[s.id];
+                  const isCurrent = idx === currentStepIndex;
+                  const isDone = sRes && sRes.status && sRes.status !== 'pending';
+
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => handleGoToStep(idx)}
+                      className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[10px] font-bold transition-all flex-shrink-0 border cursor-pointer ${
+                        isCurrent
+                          ? 'bg-indigo-600 text-white border-indigo-300 shadow-md ring-2 ring-indigo-400/50 scale-105'
+                          : isDone
+                          ? sRes.status === 'green'
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
+                            : sRes.status === 'yellow'
+                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
+                            : 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
+                          : 'bg-slate-900/60 text-slate-400 border-white/10 hover:text-white'
+                      }`}
+                      title={`Jump to Step ${idx + 1}: ${s.title}`}
+                    >
+                      <span>{idx + 1}</span>
+                      {isDone && (
+                        <span>
+                          {sRes.status === 'green' ? '✓' : sRes.status === 'yellow' ? '!' : '✗'}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -929,6 +1084,51 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 <div className="text-xs font-medium text-emerald-100 leading-normal">{currentStep.expectedOutcome}</div>
               </div>
 
+              {/* Reviewing Recorded Step Banner */}
+              {hasExistingResult && (
+                <div className="bg-indigo-500/15 border border-indigo-400/30 backdrop-blur-md rounded-2xl p-2.5 text-[11px] font-semibold text-indigo-200 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 truncate">
+                    <Undo2 className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />
+                    <span className="truncate">Reviewing recorded step. Modify status below if needed.</span>
+                  </div>
+                  <span className={`px-2 py-0.5 rounded-lg text-[10px] font-extrabold uppercase shrink-0 ${
+                    currentStepResult?.status === 'green'
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                      : currentStepResult?.status === 'yellow'
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                      : 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                  }`}>
+                    Saved: {currentStepResult?.status || 'recorded'}
+                  </span>
+                </div>
+              )}
+
+              {/* Defects Logged on this Step (with 1-click removal for mistakes) */}
+              {currentStepBugs.length > 0 && (
+                <div className="space-y-1.5 pt-1">
+                  <div className="text-[10px] font-bold text-rose-400 uppercase tracking-widest px-1 flex items-center justify-between">
+                    <span>Logged Defects on this step ({currentStepBugs.length})</span>
+                    <span className="text-[9px] text-slate-400 lowercase font-normal">tap trash to remove if logged by mistake</span>
+                  </div>
+                  {currentStepBugs.map(b => (
+                    <div key={b.id} className="bg-rose-950/40 border border-rose-500/30 rounded-2xl p-2.5 flex items-center justify-between gap-2 text-xs">
+                      <div className="min-w-0 flex-1">
+                        <span className="font-bold text-rose-300">[{b.severity.toUpperCase()}]</span>{' '}
+                        <span className="text-slate-200">{b.note}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteStepBug(b.id)}
+                        className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/20 rounded-xl transition-colors shrink-0"
+                        title="Remove this mistake defect"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {/* Inline feedback if bug was logged */}
               {bugSuccessMessage && (
                 <div className="bg-rose-500/20 border border-rose-400/40 backdrop-blur-md rounded-2xl p-2.5 text-[11px] font-semibold text-rose-200 flex items-center gap-2">
@@ -941,8 +1141,15 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
             {/* 3 Status Selection Buttons: Green, Yellow, Red */}
             <div className="space-y-3 pt-1">
-              <div className="text-[11px] font-bold text-slate-300 uppercase tracking-wider px-1">
-                Select Step Result
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">
+                  {hasExistingResult ? 'Modify / Confirm Result' : 'Select Step Result'}
+                </span>
+                {hasExistingResult && currentStepResult && (
+                  <span className="text-[10px] text-purple-300 font-bold bg-purple-500/15 border border-purple-500/30 px-2 py-0.5 rounded-lg">
+                    Current: {currentStepResult.status.toUpperCase()}
+                  </span>
+                )}
               </div>
 
               <div className="grid grid-cols-3 gap-2.5">
@@ -951,7 +1158,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 <button
                   type="button"
                   onClick={() => setSelectedStatus('green')}
-                  className={`py-3 rounded-2xl font-bold text-xs flex flex-col items-center justify-center gap-1.5 transition-all border ${
+                  className={`py-3 rounded-2xl font-bold text-xs flex flex-col items-center justify-center gap-1.5 transition-all border cursor-pointer ${
                     selectedStatus === 'green'
                       ? 'bg-emerald-500/30 text-white border-emerald-400 shadow-xl shadow-emerald-500/30 ring-2 ring-emerald-400/50 scale-[1.02]'
                       : 'liquid-glass-button text-emerald-300 hover:bg-emerald-500/20 hover:border-emerald-400/40'
@@ -965,7 +1172,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 <button
                   type="button"
                   onClick={() => setSelectedStatus('yellow')}
-                  className={`py-3 rounded-2xl font-bold text-xs flex flex-col items-center justify-center gap-1.5 transition-all border ${
+                  className={`py-3 rounded-2xl font-bold text-xs flex flex-col items-center justify-center gap-1.5 transition-all border cursor-pointer ${
                     selectedStatus === 'yellow'
                       ? 'bg-amber-500/30 text-white border-amber-400 shadow-xl shadow-amber-500/30 ring-2 ring-amber-400/50 scale-[1.02]'
                       : 'liquid-glass-button text-amber-300 hover:bg-amber-500/20 hover:border-amber-400/40'
@@ -979,7 +1186,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 <button
                   type="button"
                   onClick={() => setSelectedStatus('red')}
-                  className={`py-3 rounded-2xl font-bold text-xs flex flex-col items-center justify-center gap-1.5 transition-all border ${
+                  className={`py-3 rounded-2xl font-bold text-xs flex flex-col items-center justify-center gap-1.5 transition-all border cursor-pointer ${
                     selectedStatus === 'red'
                       ? 'bg-rose-500/30 text-white border-rose-400 shadow-xl shadow-rose-500/30 ring-2 ring-rose-400/50 scale-[1.02]'
                       : 'liquid-glass-button text-rose-300 hover:bg-rose-500/20 hover:border-rose-400/40'
@@ -991,32 +1198,65 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
               </div>
 
-              {/* Confirm & Move to Next Step Button */}
-              <button
-                type="button"
-                disabled={!selectedStatus}
-                onClick={handleConfirmStepStatus}
-                className={`w-full py-3.5 rounded-2xl font-black text-xs flex items-center justify-center gap-2 transition-all duration-300 shadow-xl ${
-                  selectedStatus
-                    ? currentStepIndex >= totalSteps - 1
-                      ? 'bg-gradient-to-r from-emerald-500 via-teal-500 to-indigo-600 text-white shadow-emerald-500/30 border border-white/30 hover:scale-[1.02] active:scale-[0.98]'
-                      : 'bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 text-white shadow-purple-500/30 border border-white/30 hover:scale-[1.02] active:scale-[0.98]'
-                    : 'liquid-glass-button text-slate-500 opacity-50 cursor-not-allowed'
-                }`}
-              >
-                <span>
-                  {selectedStatus
-                    ? currentStepIndex >= totalSteps - 1
-                      ? `Confirm ${selectedStatus.toUpperCase()} & Finish Test Run`
-                      : `Confirm ${selectedStatus.toUpperCase()} & Next Step`
-                    : 'Select Result Above'}
-                </span>
-                {currentStepIndex >= totalSteps - 1 ? (
-                  <Check className="w-4 h-4 text-white" />
-                ) : (
-                  <ArrowRight className="w-4 h-4" />
+              {/* Navigation Action Buttons Row (Previous, Confirm/Update, Next) */}
+              <div className="flex items-center gap-2 pt-1">
+                {/* Back / Previous Step Button */}
+                {currentStepIndex > 0 && (
+                  <button
+                    type="button"
+                    onClick={handlePreviousStep}
+                    className="px-3.5 py-3.5 liquid-glass-button text-slate-300 hover:text-white rounded-2xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md active:scale-95 flex-shrink-0 cursor-pointer"
+                    title="Go back to previous step to review or fix a mistake"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                    <span>Previous</span>
+                  </button>
                 )}
-              </button>
+
+                {/* Confirm & Move to Next Step Button */}
+                <button
+                  type="button"
+                  disabled={!selectedStatus}
+                  onClick={handleConfirmStepStatus}
+                  className={`flex-1 py-3.5 rounded-2xl font-black text-xs flex items-center justify-center gap-2 transition-all duration-300 shadow-xl cursor-pointer ${
+                    selectedStatus
+                      ? currentStepIndex >= totalSteps - 1
+                        ? 'bg-gradient-to-r from-emerald-500 via-teal-500 to-indigo-600 text-white shadow-emerald-500/30 border border-white/30 hover:scale-[1.02] active:scale-[0.98]'
+                        : 'bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 text-white shadow-purple-500/30 border border-white/30 hover:scale-[1.02] active:scale-[0.98]'
+                      : 'liquid-glass-button text-slate-500 opacity-50 cursor-not-allowed'
+                  }`}
+                >
+                  <span>
+                    {selectedStatus
+                      ? currentStepIndex >= totalSteps - 1
+                        ? hasExistingResult
+                          ? `Update ${selectedStatus.toUpperCase()} & Finish Run`
+                          : `Confirm ${selectedStatus.toUpperCase()} & Finish Run`
+                        : hasExistingResult
+                          ? `Update ${selectedStatus.toUpperCase()} & Next`
+                          : `Confirm ${selectedStatus.toUpperCase()} & Next Step`
+                      : 'Select Result Above'}
+                  </span>
+                  {currentStepIndex >= totalSteps - 1 ? (
+                    <Check className="w-4 h-4 text-white" />
+                  ) : (
+                    <ArrowRight className="w-4 h-4" />
+                  )}
+                </button>
+
+                {/* Optional Next button if step already answered */}
+                {currentStepIndex < totalSteps - 1 && hasExistingResult && (
+                  <button
+                    type="button"
+                    onClick={handleNextStepWithoutConfirm}
+                    className="px-3.5 py-3.5 liquid-glass-button text-slate-300 hover:text-white rounded-2xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md active:scale-95 flex-shrink-0 cursor-pointer"
+                    title="Skip to next step without modifying"
+                  >
+                    <span>Next</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
             </div>
 
           </div>

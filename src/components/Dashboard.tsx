@@ -390,9 +390,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return Object.values(datesMap).sort((a, b) => b.dateStr.localeCompare(a.dateStr));
   }, [completedRuns, bugLogs, todayStr]);
 
-  // Aggregate step results from ALL runs (active & completed) for the selected Daily Session Date
-  const allRunsList = [...archivedRuns, ...testRuns];
-  allRunsList.forEach(run => {
+  // Aggregate step results ONLY from fully completed test runs for the selected Daily Session Date
+  // (In-progress runs NEVER touch or contaminate the Features page until the user finishes their test)
+  completedRuns.forEach(run => {
     const plan = testPlans.find(p => p.id === run.planId);
     if (!plan) return;
     plan.steps.forEach(step => {
@@ -430,10 +430,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
   });
 
   // Aggregate bug counts for the selected Daily Session Date
+  // In-progress test run defects do not appear on Features page until the run completes
   bugLogs.forEach(bug => {
     if (selectedDailySessionDate !== 'all') {
       const bugDate = bug.timestamp ? getLocalDateStr(bug.timestamp) : '';
       if (bugDate && bugDate !== selectedDailySessionDate) return;
+    }
+
+    // If bug belongs to an in-progress run that is not finished yet, do not aggregate
+    if (bug.testRunId) {
+      const isCompleted = completedRuns.some(r => r.id === bug.testRunId);
+      const isInProgress = testRuns.some(r => r.id === bug.testRunId && r.status !== 'completed');
+      if (isInProgress && !isCompleted) {
+        return;
+      }
     }
 
     const featureName = bug.feature;

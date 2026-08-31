@@ -128,7 +128,28 @@ export function App() {
     const cloudData = await fetchAllSupabaseData();
     if (cloudData) {
       if (cloudData.testPlans) setTestPlans(cloudData.testPlans);
-      if (cloudData.testRuns) setTestRuns(cloudData.testRuns);
+      if (cloudData.testRuns) {
+        setTestRuns(prev => {
+          const map = new Map<string, TestRun>();
+          cloudData.testRuns.forEach((r: TestRun) => map.set(r.id, r));
+          // Always preserve local in-progress runs so active testers are never booted
+          prev.forEach(localRun => {
+            if (localRun.status === 'in_progress') {
+              const cloudRun = map.get(localRun.id);
+              if (!cloudRun) {
+                map.set(localRun.id, localRun);
+              } else {
+                const localCount = Object.keys(localRun.results || {}).length;
+                const cloudCount = Object.keys(cloudRun.results || {}).length;
+                if (localCount >= cloudCount) {
+                  map.set(localRun.id, localRun);
+                }
+              }
+            }
+          });
+          return Array.from(map.values());
+        });
+      }
       if (cloudData.archivedRuns) setArchivedRuns(cloudData.archivedRuns);
       if (cloudData.bugLogs) setBugLogs(cloudData.bugLogs);
       if (cloudData.populatedFeatures && cloudData.populatedFeatures.length > 0) {
