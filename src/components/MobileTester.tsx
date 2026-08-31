@@ -568,7 +568,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       });
     }
 
-    triggerHaptic('medium');
+    triggerHaptic('light');
     setShowSetupModal(false);
   };
 
@@ -701,7 +701,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       setBugSuccessMessage(`🎉 Run complete! ${activeDevName || 'Device'} progress updated for today.`);
       setTimeout(() => setBugSuccessMessage(null), 4000);
     } else {
-      triggerHaptic('medium');
+      triggerHaptic('light');
       if (currentPlan) {
         localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updatedRun));
       }
@@ -1511,7 +1511,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        triggerHaptic('soft');
+                        triggerHaptic('light');
                         setOpenTesterPickerModal(true);
                       }}
                       className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left group cursor-pointer active:scale-[0.99] ${
@@ -1556,7 +1556,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        triggerHaptic('soft');
+                        triggerHaptic('light');
                         setOpenDevicePickerModal(true);
                       }}
                       className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left group cursor-pointer active:scale-[0.99] ${
@@ -1650,7 +1650,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                       key={t.id}
                       type="button"
                       onClick={() => {
-                        triggerHaptic('soft');
+                        triggerHaptic('light');
                         setInputReporterName(t.name);
                         setOpenTesterPickerModal(false);
                       }}
@@ -1728,7 +1728,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                       key={dev.id}
                       type="button"
                       onClick={() => {
-                        triggerHaptic('soft');
+                        triggerHaptic('light');
                         const chosenDevName = dev.name;
                         setInputDeviceName(chosenDevName);
                         // Check if current plan is supported by this device

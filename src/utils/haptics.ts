@@ -19,16 +19,9 @@ export const triggerHaptic = (type: HapticFeedbackType = 'light') => {
   // 1. Native Capacitor Haptics (uses Android's native KEYBOARD_TAP / EFFECT_CLICK)
   if (Capacitor.isNativePlatform()) {
     try {
-      if (type === 'soft' || type === 'selection') {
-        Haptics.selectionChanged().catch(() => {
-          Haptics.impact({ style: ImpactStyle.Light }).catch(() => {});
-        });
-      } else if (type === 'light') {
+      if (type === 'soft' || type === 'selection' || type === 'light' || type === 'medium') {
         // Exact Android keyboard keypress click
         Haptics.impact({ style: ImpactStyle.Light }).catch(() => {});
-      } else if (type === 'medium') {
-        // Firmer keypress (like Enter / Spacebar)
-        Haptics.impact({ style: ImpactStyle.Medium }).catch(() => {});
       } else if (type === 'heavy') {
         Haptics.impact({ style: ImpactStyle.Heavy }).catch(() => {});
       } else if (type === 'success') {
@@ -48,13 +41,9 @@ export const triggerHaptic = (type: HapticFeedbackType = 'light') => {
       switch (type) {
         case 'soft':
         case 'selection':
-          navigator.vibrate(8);
-          break;
         case 'light':
-          navigator.vibrate(10);
-          break;
         case 'medium':
-          navigator.vibrate(16);
+          navigator.vibrate(10);
           break;
         case 'heavy':
           navigator.vibrate(26);
