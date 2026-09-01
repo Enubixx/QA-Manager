@@ -151,7 +151,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       });
     };
 
-    // 1. Check devices that are currently locked by a tester
+    // 1. Check devices that are currently locked by a tester WITH an active in_progress run
     devices.forEach(d => {
       const activeTester = d.activeTesterName?.trim();
       if (activeTester) {
@@ -163,7 +163,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
             (r.testerName && r.testerName.toLowerCase().trim() === activeTester.toLowerCase())
           )
         );
-        computeMetrics(activeTester, d.name, activeRun);
+        if (activeRun) {
+          computeMetrics(activeTester, d.name, activeRun);
+        }
       }
     });
 

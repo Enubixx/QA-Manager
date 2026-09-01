@@ -339,19 +339,6 @@ export const syncDevicesListToCloud = async (devices: DeviceProfile[]) => {
         cloudDevices.forEach(cloudDev => {
           if (!localMap.has(cloudDev.id)) {
             mergedDevices.push(cloudDev);
-          } else {
-            const localDev = localMap.get(cloudDev.id)!;
-            // Preserve concurrent cloud locks on other devices if local didn't modify that device
-            if (cloudDev.activeTesterName && !localDev.activeTesterName && !localDev.activeRunId) {
-              const idx = mergedDevices.findIndex(d => d.id === cloudDev.id);
-              if (idx !== -1) {
-                mergedDevices[idx] = {
-                  ...mergedDevices[idx],
-                  activeRunId: cloudDev.activeRunId,
-                  activeTesterName: cloudDev.activeTesterName
-                };
-              }
-            }
           }
         });
       } catch (e) {}
