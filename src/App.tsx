@@ -26,6 +26,15 @@ import {
   subscribeToSupabaseRealtime,
 } from './services/supabaseService';
 import { isSupabaseConfigured } from './lib/supabase';
+import { getLocalDateStr } from './utils/dateUtils';
+import {
+  drainOfflineQueue,
+  safeSyncTestRun,
+  safeSyncArchivedRun,
+  safeSyncBugLog,
+  safeDeleteTestRun,
+  safeSyncDevices
+} from './services/offlineSyncQueue';
 
 export function App() {
   const [currentView, setCurrentView] = useState<'dashboard' | 'mobile' | 'plan-builder'>(() => {
@@ -64,10 +73,10 @@ export function App() {
       const saved = localStorage.getItem('qa_test_runs');
       if (saved) {
         const parsed: TestRun[] = JSON.parse(saved);
-        const todayStr = new Date().toISOString().split('T')[0];
+        const todayStr = getLocalDateStr();
         return parsed.filter(r => {
           if (r.status === 'in_progress') {
-            const runDate = (r.startedAt || '').split('T')[0];
+            const runDate = r.startedAt ? getLocalDateStr(r.startedAt) : '';
             return runDate === todayStr;
           }
           return true;
@@ -142,6 +151,7 @@ export function App() {
   // Supabase Initial Fetch & Real-Time Sync Subscription
   const loadCloudData = async () => {
     if (!isSupabaseConfigured) return;
+    await drainOfflineQueue();
     const cloudData = await fetchAllSupabaseData();
     if (cloudData) {
       if (cloudData.testPlans) setTestPlans(cloudData.testPlans);
@@ -167,8 +177,38 @@ export function App() {
     const unsubscribe = subscribeToSupabaseRealtime(() => {
       loadCloudData();
     });
+
+    // Handle Mobile Screen Unlock / App Resume via Capacitor native plugin
+    let capSub: any = null;
+    import('@capacitor/app')
+      .then(({ App: CapApp }) => {
+        CapApp.addListener('appStateChange', (state) => {
+          if (state.isActive) {
+            loadCloudData();
+          }
+        }).then(sub => { capSub = sub; });
+      })
+      .catch(() => {});
+
+    // Web visibility and window focus triggers
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        loadCloudData();
+      }
+    };
+    const handleWindowFocus = () => loadCloudData();
+    const handleOnline = () => loadCloudData();
+
+    window.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleWindowFocus);
+    window.addEventListener('online', handleOnline);
+
     return () => {
       unsubscribe();
+      if (capSub && typeof capSub.remove === 'function') capSub.remove();
+      window.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleWindowFocus);
+      window.removeEventListener('online', handleOnline);
     };
   }, []);
 
@@ -203,7 +243,23 @@ export function App() {
   }, [archivedRuns]);
 
   useEffect(() => {
-    localStorage.setItem('qa_bug_logs', JSON.stringify(bugLogs));
+    try {
+      localStorage.setItem('qa_bug_logs', JSON.stringify(bugLogs));
+    } catch (err) {
+      console.warn('localStorage quota exceeded for qa_bug_logs, stripping older screenshot payloads:', err);
+      try {
+        // Keep images for the 5 most recent bugs, strip data URLs from older ones
+        const trimmedBugs = bugLogs.map((b, idx) => {
+          if (idx >= 5 && b.imageUrl && b.imageUrl.startsWith('data:')) {
+            return { ...b, imageUrl: undefined };
+          }
+          return b;
+        });
+        localStorage.setItem('qa_bug_logs', JSON.stringify(trimmedBugs));
+      } catch (innerErr) {
+        console.error('Critical quota error saving bug logs:', innerErr);
+      }
+    }
   }, [bugLogs]);
 
   useEffect(() => {
@@ -629,7 +685,7 @@ export function App() {
       return [updatedRun, ...prev];
     });
 
-    syncTestRunToSupabase(updatedRun);
+    safeSyncTestRun(updatedRun);
 
     const plan = testPlans.find(p => p.id === updatedRun.planId);
     const totalSteps = plan?.steps.length || 0;
@@ -670,8 +726,8 @@ export function App() {
         return [completedRun, ...prev];
       });
 
-      deleteTestRunFromSupabase(completedRun.id);
-      syncArchivedRunToSupabase(completedRun);
+      safeDeleteTestRun(completedRun.id);
+      safeSyncArchivedRun(completedRun);
 
       // Release device lock: if test is finished, device is no longer in use
       setDevices(prev => {
@@ -689,7 +745,7 @@ export function App() {
         });
         if (changed) {
           localStorage.setItem('qa_devices_list', JSON.stringify(next));
-          syncDevicesListToCloud(next);
+          safeSyncDevices(next);
         }
         return next;
       });
@@ -702,7 +758,7 @@ export function App() {
         return [updatedRun, ...prev];
       });
 
-      syncTestRunToSupabase(updatedRun);
+      safeSyncTestRun(updatedRun);
     }
   };
 
@@ -714,7 +770,7 @@ export function App() {
       handleAddPopulatedFeature(newBug.feature);
     }
     setBugLogs(prev => [newBug, ...prev]);
-    syncBugLogToSupabase(newBug);
+    safeSyncBugLog(newBug);
   };
 
   const handleRestartRun = (runIdOrPlanId: string) => {

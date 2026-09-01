@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile } from '../types';
-import { CheckCircle2, Clock, Bug, Smartphone, RefreshCw, Send, Check, Layers, ChevronDown, AlertTriangle, XCircle, ArrowRight, ArrowLeft, ChevronLeft, ChevronRight, Undo2, Sparkles, User, Download, Edit3, Trash2, Tag, Image, Camera, X } from 'lucide-react';
+import { CheckCircle2, Clock, Bug, Smartphone, RefreshCw, Send, Check, Layers, ChevronDown, AlertTriangle, XCircle, ArrowRight, ArrowLeft, ChevronLeft, ChevronRight, Undo2, Sparkles, User, Download, Edit3, Trash2, Tag, Image, Camera, X, Mic, WifiOff } from 'lucide-react';
 import { exportTestRunToCSV } from '../utils/exportUtils';
 import { triggerHaptic } from '../utils/haptics';
 
@@ -458,6 +458,60 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   const [bugImageUrl, setBugImageUrl] = useState('');
   const [bugSeverity, setBugSeverity] = useState<'low' | 'medium' | 'high' | 'critical'>('medium');
   const [bugSuccessMessage, setBugSuccessMessage] = useState<string | null>(null);
+  const [isListeningSpeech, setIsListeningSpeech] = useState(false);
+  const speechRecognitionRef = useRef<any>(null);
+
+  // Toggle Speech-to-Text for Voice Bug Notes
+  const toggleSpeechRecognition = () => {
+    const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognitionClass) {
+      alert('Speech recognition is not available in this browser environment. You can type your note directly.');
+      return;
+    }
+
+    if (isListeningSpeech) {
+      if (speechRecognitionRef.current) {
+        try { speechRecognitionRef.current.stop(); } catch (e) {}
+      }
+      setIsListeningSpeech(false);
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognitionClass();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+
+      recognition.onstart = () => {
+        setIsListeningSpeech(true);
+        triggerHaptic('light');
+      };
+
+      recognition.onresult = (event: any) => {
+        const transcript = event.results?.[0]?.[0]?.transcript;
+        if (transcript) {
+          setBugNote(prev => (prev ? `${prev.trim()} ${transcript}` : transcript));
+          triggerHaptic('light');
+        }
+      };
+
+      recognition.onerror = (err: any) => {
+        console.warn('Speech recognition error:', err);
+        setIsListeningSpeech(false);
+      };
+
+      recognition.onend = () => {
+        setIsListeningSpeech(false);
+      };
+
+      speechRecognitionRef.current = recognition;
+      recognition.start();
+    } catch (err) {
+      console.warn('Speech recognition start error:', err);
+      setIsListeningSpeech(false);
+    }
+  };
 
   // Native Mobile Photo Upload Handler (with canvas compression to avoid quota issues)
   const handlePhotoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -471,8 +525,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         const img = new window.Image();
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 800;
-          const MAX_HEIGHT = 800;
+          const MAX_WIDTH = 640;
+          const MAX_HEIGHT = 640;
           let width = img.width;
           let height = img.height;
 
@@ -493,7 +547,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           const ctx = canvas.getContext('2d');
           if (ctx) {
             ctx.drawImage(img, 0, 0, width, height);
-            const compressed = canvas.toDataURL('image/jpeg', 0.7);
+            const compressed = canvas.toDataURL('image/jpeg', 0.6);
             setBugImageUrl(compressed);
           } else {
             setBugImageUrl(rawDataUrl);
@@ -1866,15 +1920,38 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-bold text-zinc-400 mb-1.5 uppercase tracking-wider">Bug Description / Notes</label>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
+                      Bug Description / Notes
+                    </label>
+                    <button
+                      type="button"
+                      onClick={toggleSpeechRecognition}
+                      className={`px-2.5 py-1 rounded-xl text-[10px] font-bold flex items-center gap-1.5 transition shadow-sm cursor-pointer ${
+                        isListeningSpeech
+                          ? 'bg-rose-500/20 text-rose-300 border border-rose-500/50 animate-pulse'
+                          : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700'
+                      }`}
+                      title={isListeningSpeech ? 'Stop recording voice note' : 'Click to speak note'}
+                    >
+                      <Mic className={`w-3 h-3 ${isListeningSpeech ? 'text-rose-400 animate-bounce' : 'text-zinc-400'}`} />
+                      <span>{isListeningSpeech ? 'Listening...' : 'Voice Dictate'}</span>
+                    </button>
+                  </div>
                   <textarea
                     rows={3}
-                    placeholder="Describe what went wrong or observation notes..."
+                    placeholder="Describe what went wrong or observation notes (or click Voice Dictate to speak)..."
                     value={bugNote}
                     onChange={e => setBugNote(e.target.value)}
                     className="w-full liquid-glass-input rounded-2xl p-3.5 text-xs text-white placeholder-zinc-500 border border-zinc-800 focus:border-zinc-600 focus:outline-none font-medium leading-relaxed"
                     required
                   />
+                  {isListeningSpeech && (
+                    <div className="mt-1.5 text-[10px] text-rose-400 flex items-center gap-1.5 font-medium animate-pulse">
+                      <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping" />
+                      Listening... speak into your microphone
+                    </div>
+                  )}
                 </div>
 
                 <div>

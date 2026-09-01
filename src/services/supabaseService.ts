@@ -322,10 +322,45 @@ export const deleteTesterFromSupabase = async (testerId: string) => {
 export const syncDevicesListToCloud = async (devices: DeviceProfile[]) => {
   if (!supabase || !isSupabaseConfigured) return;
   try {
+    // 1. Fetch current cloud devices to safely merge concurrent updates from other testers
+    const { data } = await supabase
+      .from('populated_features')
+      .select('feature_name')
+      .like('feature_name', '__GLOBAL_DEVICES_CONFIG__:%')
+      .limit(1);
+
+    let mergedDevices = [...devices];
+    if (data && data[0]?.feature_name) {
+      try {
+        const cloudDevices: DeviceProfile[] = JSON.parse(
+          data[0].feature_name.replace('__GLOBAL_DEVICES_CONFIG__:', '')
+        );
+        const localMap = new Map(devices.map(d => [d.id, d]));
+        cloudDevices.forEach(cloudDev => {
+          if (!localMap.has(cloudDev.id)) {
+            mergedDevices.push(cloudDev);
+          } else {
+            const localDev = localMap.get(cloudDev.id)!;
+            // Preserve concurrent cloud locks on other devices if local didn't modify that device
+            if (cloudDev.activeTesterName && !localDev.activeTesterName && !localDev.activeRunId) {
+              const idx = mergedDevices.findIndex(d => d.id === cloudDev.id);
+              if (idx !== -1) {
+                mergedDevices[idx] = {
+                  ...mergedDevices[idx],
+                  activeRunId: cloudDev.activeRunId,
+                  activeTesterName: cloudDev.activeTesterName
+                };
+              }
+            }
+          }
+        });
+      } catch (e) {}
+    }
+
     await supabase.from('populated_features').delete().like('feature_name', '__GLOBAL_DEVICES_CONFIG__%');
     await supabase.from('populated_features').delete().like('feature_name', '__CONFIG_DEVICES__%');
     await supabase.from('populated_features').upsert({
-      feature_name: '__GLOBAL_DEVICES_CONFIG__:' + JSON.stringify(devices)
+      feature_name: '__GLOBAL_DEVICES_CONFIG__:' + JSON.stringify(mergedDevices)
     });
   } catch (err) {
     console.error('syncDevicesListToCloud error:', err);
@@ -335,10 +370,33 @@ export const syncDevicesListToCloud = async (devices: DeviceProfile[]) => {
 export const syncTestersListToCloud = async (testers: TesterProfile[]) => {
   if (!supabase || !isSupabaseConfigured) return;
   try {
+    // 1. Fetch current cloud testers to safely merge concurrent additions
+    const { data } = await supabase
+      .from('populated_features')
+      .select('feature_name')
+      .like('feature_name', '__GLOBAL_TESTERS_CONFIG__:%')
+      .limit(1);
+
+    let mergedTesters = [...testers];
+    if (data && data[0]?.feature_name) {
+      try {
+        const cloudTesters: TesterProfile[] = JSON.parse(
+          data[0].feature_name.replace('__GLOBAL_TESTERS_CONFIG__:', '')
+        );
+        const localNames = new Set(testers.map(t => t.name.toLowerCase().trim()));
+        cloudTesters.forEach(cloudT => {
+          if (!localNames.has(cloudT.name.toLowerCase().trim())) {
+            mergedTesters.push(cloudT);
+            localNames.add(cloudT.name.toLowerCase().trim());
+          }
+        });
+      } catch (e) {}
+    }
+
     await supabase.from('populated_features').delete().like('feature_name', '__GLOBAL_TESTERS_CONFIG__%');
     await supabase.from('populated_features').delete().like('feature_name', '__CONFIG_TESTERS__%');
     await supabase.from('populated_features').upsert({
-      feature_name: '__GLOBAL_TESTERS_CONFIG__:' + JSON.stringify(testers)
+      feature_name: '__GLOBAL_TESTERS_CONFIG__:' + JSON.stringify(mergedTesters)
     });
   } catch (err) {
     console.error('syncTestersListToCloud error:', err);

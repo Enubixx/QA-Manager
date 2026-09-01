@@ -1,5 +1,6 @@
-import React from 'react';
-import { ShieldCheck } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ShieldCheck, WifiOff, RefreshCw } from 'lucide-react';
+import { onQueueCountChange } from '../services/offlineSyncQueue';
 
 interface NavbarProps {
   currentView: 'dashboard' | 'mobile' | 'plan-builder';
@@ -8,6 +9,24 @@ interface NavbarProps {
 }
 
 export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate }) => {
+  const [pendingCount, setPendingCount] = useState(0);
+  const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+
+  useEffect(() => {
+    const unsub = onQueueCountChange(setPendingCount);
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      unsub();
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
   return (
     <header className="bg-slate-950/60 backdrop-blur-2xl border-b border-white/10 sticky top-0 z-50 shadow-2xl shadow-black/40">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -20,7 +39,19 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate }) => {
           <div>
             <h1 className="font-bold text-base text-white flex items-center gap-2 tracking-tight">
               QA Manager
-              <span className="text-[10px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold uppercase tracking-wider backdrop-blur-md">Live Sync</span>
+              {!isOnline ? (
+                <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1 backdrop-blur-md">
+                  <WifiOff className="w-3 h-3 text-amber-400" /> Offline {pendingCount > 0 ? `(${pendingCount} pending)` : ''}
+                </span>
+              ) : pendingCount > 0 ? (
+                <span className="text-[10px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1 backdrop-blur-md animate-pulse">
+                  <RefreshCw className="w-3 h-3 animate-spin text-indigo-400" /> Syncing ({pendingCount})
+                </span>
+              ) : (
+                <span className="text-[10px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold uppercase tracking-wider backdrop-blur-md flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> Live Sync
+                </span>
+              )}
             </h1>
             <p className="text-xs text-slate-400 font-medium">Field QA Management & Execution System</p>
           </div>
