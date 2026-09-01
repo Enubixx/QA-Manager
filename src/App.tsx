@@ -166,28 +166,40 @@ export function App() {
       if (cloudData.devices) {
         const inProgressRuns = (cloudData.testRuns || []).filter(r => r.status === 'in_progress');
         let needsSync = false;
-        const sanitizedDevices = cloudData.devices.map(d => {
-          if (d.activeTesterName || d.activeRunId) {
-            const hasRun = inProgressRuns.some(r =>
-              (d.activeRunId && r.id === d.activeRunId) ||
-              (r.deviceId === d.id) ||
-              (r.deviceName && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim()) ||
-              (d.activeTesterName && r.testerName && r.testerName.toLowerCase().trim() === d.activeTesterName.toLowerCase().trim())
-            );
-            if (!hasRun) {
+        const syncedDevices = cloudData.devices.map(d => {
+          // Check if there is an active test run on this device
+          const matchingRun = inProgressRuns.find(r =>
+            (d.activeRunId && r.id === d.activeRunId) ||
+            (r.deviceId === d.id) ||
+            (r.deviceName && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim())
+          );
+
+          if (matchingRun) {
+            if (d.activeRunId !== matchingRun.id || d.activeTesterName !== matchingRun.testerName) {
               needsSync = true;
-              return { ...d, activeRunId: undefined, activeTesterName: undefined };
+              return {
+                ...d,
+                activeRunId: matchingRun.id,
+                activeTesterName: matchingRun.testerName
+              };
             }
+          } else if (d.activeTesterName || d.activeRunId) {
+            needsSync = true;
+            return {
+              ...d,
+              activeRunId: undefined,
+              activeTesterName: undefined
+            };
           }
           return d;
         });
 
-        if (JSON.stringify(sanitizedDevices) !== JSON.stringify(devicesRef.current)) {
-          setDevices(sanitizedDevices);
+        if (JSON.stringify(syncedDevices) !== JSON.stringify(devicesRef.current)) {
+          setDevices(syncedDevices);
         }
         if (needsSync) {
-          localStorage.setItem('qa_devices_list', JSON.stringify(sanitizedDevices));
-          safeSyncDevices(sanitizedDevices);
+          localStorage.setItem('qa_devices_list', JSON.stringify(syncedDevices));
+          safeSyncDevices(syncedDevices);
         }
       }
       if (cloudData.testers && JSON.stringify(cloudData.testers) !== JSON.stringify(testersRef.current)) {
