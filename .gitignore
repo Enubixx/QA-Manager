@@ -34,4 +34,5 @@ jdk17/
 android/
 twa-manifest.json
 *.apk
+!public/*.apk
 .env*

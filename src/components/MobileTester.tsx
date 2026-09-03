@@ -901,11 +901,12 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   };
 
   // Resilient multi-attribute matching: verifies if a boot signal targets this phone/tester/device
-  const checkSignalMatchesThisPhone = (signal: { testerName?: string; deviceName?: string; deviceId?: string; runId?: string }) => {
+  const checkSignalMatchesThisPhone = (signal: { testerName?: string; deviceName?: string; deviceId?: string; runId?: string; timestamp?: number }) => {
     const sigTester = (signal.testerName || '').toLowerCase().trim();
     const sigDevName = (signal.deviceName || '').toLowerCase().trim();
     const sigDevId = (signal.deviceId || '').toLowerCase().trim();
     const sigRunId = (signal.runId || '').trim();
+    const sigTimestamp = signal.timestamp || 0;
 
     const myTesters = [
       inputReporterName,
@@ -932,19 +933,27 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       activeRunIdRef.current
     ].filter(Boolean) as string[];
 
-    // 1. Device Name match (e.g. "GM3" === "GM3")
+    // 1. Direct Run ID match (always valid)
+    if (sigRunId && myRunIds.some(id => id === sigRunId)) {
+      return true;
+    }
+
+    // 2. If matching by tester or device without runId, ensure signal is not older than this session's startedAt
+    const runStartedAtMs = activeRun?.startedAt ? new Date(activeRun.startedAt).getTime() : 0;
+    if (sigTimestamp && runStartedAtMs && sigTimestamp < (runStartedAtMs - 10000)) {
+      return false;
+    }
+
+    // 3. Device Name match (e.g. "GM3" === "GM3")
     const matchesDevName = sigDevName && myDevNames.some(d => d === sigDevName);
 
-    // 2. Device ID match (supports suffixes like dev-123-xyz containing dev-123)
+    // 4. Device ID match (supports suffixes like dev-123-xyz containing dev-123)
     const matchesDevId = sigDevId && myDevIds.some(id => id === sigDevId || id.includes(sigDevId) || sigDevId.includes(id));
 
-    // 3. Tester Name match (supports full name or partial substring match)
+    // 5. Tester Name match (supports full name or partial substring match)
     const matchesTester = sigTester && myTesters.some(t => t === sigTester || t.includes(sigTester) || sigTester.includes(t));
 
-    // 4. Run ID match
-    const matchesRun = sigRunId && myRunIds.some(id => id === sigRunId);
-
-    return Boolean(matchesDevName || matchesDevId || matchesTester || matchesRun);
+    return Boolean(matchesDevName || matchesDevId || matchesTester);
   };
 
   // Channel 1: Real-time WebSocket broadcast channel subscription (instant sub-second kick)
@@ -987,12 +996,14 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       const bootDevId = parts[2] || '';
       const bootRunId = parts[3] || '';
       const bootDevName = parts[4] || '';
+      const bootTimestamp = parts[5] ? parseInt(parts[5], 10) : undefined;
 
       if (checkSignalMatchesThisPhone({
         testerName: bootTester,
         deviceId: bootDevId,
         runId: bootRunId,
-        deviceName: bootDevName
+        deviceName: bootDevName,
+        timestamp: bootTimestamp
       })) {
         terminateSession('Session Terminated: You have been remotely kicked from this device by the administrator. Device has been released.');
         break;
@@ -1023,11 +1034,13 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
     const terminatedRun = testRuns.find(r => {
       if ((r.status as any) !== 'terminated') return false;
+      const termTimestamp = r.completedAt ? new Date(r.completedAt).getTime() : (r.startedAt ? new Date(r.startedAt).getTime() : undefined);
       return checkSignalMatchesThisPhone({
         runId: r.id,
         testerName: r.testerName,
         deviceName: r.deviceName,
-        deviceId: r.deviceId
+        deviceId: r.deviceId,
+        timestamp: termTimestamp
       });
     });
 
@@ -1839,7 +1852,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
         {/* Admin Boot Termination Modal */}
         {bootMessage && (
-          <div className="absolute inset-0 bg-black/95 backdrop-blur-2xl p-6 flex flex-col items-center justify-center text-center z-[100] animate-in fade-in duration-200 rounded-[44px]">
+          <div className="fixed inset-0 bg-black/95 backdrop-blur-2xl p-6 flex flex-col items-center justify-center text-center z-[100] animate-in fade-in duration-200">
             <div className="p-4 bg-rose-500/20 text-rose-400 rounded-full border border-rose-500/40 mb-4 shadow-xl shadow-rose-500/20">
               <AlertTriangle className="w-8 h-8 text-rose-400" />
             </div>
