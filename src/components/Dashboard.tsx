@@ -26,7 +26,7 @@ interface DashboardProps {
   onAddFeature?: (featureName: string) => void;
   onDeleteFeature?: (featureName: string) => void;
   onDeleteTestRun?: (runId: string) => void;
-  onBootTester?: (runId: string, deviceId?: string, testerName?: string) => void;
+  onBootTester?: (runId: string, deviceId?: string, testerName?: string, deviceName?: string) => void;
   onDeleteTester?: (testerName: string) => void;
   onResetActiveDay?: (dateStr: string) => void;
   onResetDailyQuotas?: () => void;
@@ -2028,7 +2028,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               type="button"
                               onClick={() => {
                                 if (confirm(`Remote Boot: Kick "${tester.name}" off "${activeInfo?.deviceName || 'device'}" and release device to Maintenance? (Completed runs today will NOT be deleted)`)) {
-                                  onBootTester(activeInfo?.runId || '', activeInfo?.deviceId, tester.name);
+                                  onBootTester(activeInfo?.runId || '', activeInfo?.deviceId, tester.name, activeInfo?.deviceName);
                                 }
                               }}
                               className="px-2.5 py-1 rounded-xl text-[11px] font-extrabold bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 hover:text-white border border-rose-500/30 flex items-center gap-1 shadow-sm transition-all cursor-pointer active:scale-95"
@@ -2573,7 +2573,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             onClick={() => {
                               if (confirm(`Boot tester "${run.testerName || 'Tester'}" off phone mode and terminate this active session?`)) {
                                 if (onBootTester) {
-                                  onBootTester(run.id, run.deviceId, run.testerName);
+                                  onBootTester(run.id, run.deviceId, run.testerName, run.deviceName);
                                 } else if (onDeleteTestRun) {
                                   onDeleteTestRun(run.id);
                                 }

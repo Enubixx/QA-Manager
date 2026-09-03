@@ -338,9 +338,15 @@ export function App() {
       setLastBootSignal(signal);
     });
 
+    // Fast polling fallback for mobile devices (1.5s interval) ensures instant reaction even if WebSockets disconnect
+    const pollTimer = setInterval(() => {
+      loadCloudData();
+    }, 1500);
+
     return () => {
       unsubscribe();
       unsubCmds();
+      clearInterval(pollTimer);
       if (debounceTimer) clearTimeout(debounceTimer);
       if (capSub && typeof capSub.remove === 'function') capSub.remove();
       window.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -738,52 +744,81 @@ export function App() {
   };
 
   // Remote Boot Tester: kicks active user on phone, wipes ONLY active in-progress cache, frees device to Maintenance
-  const handleBootTester = (runId: string, deviceId?: string, testerName?: string) => {
+  const handleBootTester = (runId: string, deviceId?: string, testerName?: string, deviceName?: string) => {
+    const trimmedTester = (testerName || '').trim();
+    const trimmedDevName = (deviceName || '').trim();
+    const trimmedDevId = (deviceId || '').trim();
+
     // 1. Broadcast instant real-time boot signal over WebSocket to all phones
     const bootSignal: BootSignal = {
       runId: runId || undefined,
-      deviceId: deviceId || undefined,
-      testerName: testerName || undefined,
+      deviceId: trimmedDevId || undefined,
+      deviceName: trimmedDevName || undefined,
+      testerName: trimmedTester || undefined,
       timestamp: Date.now()
     };
     broadcastBootSignal(bootSignal);
     setLastBootSignal(bootSignal);
 
-    // 2. Redundant persistent boot trigger in Supabase populated_features (fires Postgres realtime replication)
-    const bootFeatureKey = `__BOOT__:${(testerName || '').toLowerCase().trim()}:${(deviceId || '').toLowerCase().trim()}:${runId || ''}:${Date.now()}`;
+    // 2. Redundant persistent boot trigger in Supabase populated_features
+    const bootFeatureKey = `__BOOT__:${trimmedTester.toLowerCase()}:${trimmedDevId.toLowerCase()}:${runId || ''}:${trimmedDevName.toLowerCase()}:${Date.now()}`;
     syncPopulatedFeatureToSupabase(bootFeatureKey);
     setPopulatedFeatures(prev => [...prev.filter(f => !f.startsWith('__BOOT__')), bootFeatureKey]);
 
-    // 3. Mark target run as 'terminated' so phone real-time listener terminates immediately
-    if (runId) {
-      setTestRuns(prev => prev.map(r => r.id === runId ? { ...r, status: 'terminated' as any } : r));
-      const targetRun = testRuns.find(r => r.id === runId);
-      if (targetRun) {
-        safeSyncTestRun({ ...targetRun, status: 'terminated' as any });
-      }
-      setTimeout(() => {
-        deleteTestRunFromSupabase(runId);
-        setTestRuns(prev => prev.filter(r => r.id !== runId));
-      }, 4000);
-    }
+    // 3. Mark all matching runs as 'terminated' in state & Supabase (DO NOT DELETE THEM so phone detector stays triggered)
+    setTestRuns(prev => {
+      let matchedAny = false;
+      const next = prev.map(r => {
+        const matchesRun = runId && r.id === runId;
+        const matchesTester = trimmedTester && r.testerName && r.testerName.toLowerCase().trim() === trimmedTester.toLowerCase();
+        const matchesDev = trimmedDevName && r.deviceName && r.deviceName.toLowerCase().trim() === trimmedDevName.toLowerCase();
+        const matchesId = trimmedDevId && (r.deviceId === trimmedDevId || (r.deviceId && trimmedDevId.includes(r.deviceId)) || (r.deviceId && r.deviceId.includes(trimmedDevId)));
+        if (matchesRun || matchesTester || matchesDev || matchesId) {
+          matchedAny = true;
+          const terminatedRun = { ...r, status: 'terminated' as any };
+          safeSyncTestRun(terminatedRun);
+          return terminatedRun;
+        }
+        return r;
+      });
 
-    // 4. Free device lock and flip device to Maintenance (isReady: false)
+      // If run was not in local state, still upsert a terminated run entry to Supabase
+      if (!matchedAny && (runId || trimmedTester)) {
+        const syntheticTerminated: TestRun = {
+          id: runId || `run-terminated-${Date.now()}`,
+          planId: '',
+          planName: '',
+          testerName: trimmedTester,
+          deviceName: trimmedDevName,
+          deviceId: trimmedDevId,
+          status: 'terminated' as any,
+          currentStepIndex: 0,
+          results: {},
+          bugLogs: [],
+          startedAt: new Date().toISOString()
+        };
+        safeSyncTestRun(syntheticTerminated);
+      }
+
+      return next;
+    });
+
+    // 4. Free device lock and flip device to Maintenance (isReady: false) in state AND sync to cloud!
     setDevices(prev => {
       let changed = false;
       const next = prev.map(d => {
-        const matchesDevId = deviceId && (d.id === deviceId || d.name.toLowerCase().trim() === deviceId.toLowerCase().trim());
+        const matchesDevId = trimmedDevId && (d.id === trimmedDevId || trimmedDevId.includes(d.id) || d.id.includes(trimmedDevId));
+        const matchesDevName = trimmedDevName && d.name.toLowerCase().trim() === trimmedDevName.toLowerCase();
         const matchesRunId = runId && d.activeRunId === runId;
-        const matchesTester = testerName && d.activeTesterName && d.activeTesterName.toLowerCase().trim() === testerName.toLowerCase().trim();
-        if (matchesDevId || matchesRunId || matchesTester) {
+        const matchesTester = trimmedTester && d.activeTesterName && d.activeTesterName.toLowerCase().trim() === trimmedTester.toLowerCase();
+        if (matchesDevId || matchesDevName || matchesRunId || matchesTester) {
           changed = true;
-          const released = {
+          return {
             ...d,
             activeRunId: undefined,
             activeTesterName: undefined,
             isReady: false // Auto Maintenance upon boot
           };
-          syncDeviceToSupabase(released);
-          return released;
         }
         return d;
       });

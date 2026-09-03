@@ -885,17 +885,13 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   // Terminate active test session immediately (wiping ONLY active in-progress run storage)
   const terminateSession = (reason?: string) => {
-    const planToClean = currentPlan?.id || activePlanIdRef.current;
-    if (planToClean) {
-      try {
-        localStorage.removeItem(`qa_in_progress_run_${planToClean}`);
-      } catch (e) {}
-    }
-    if (activePlanIdRef.current && activePlanIdRef.current !== planToClean) {
-      try {
-        localStorage.removeItem(`qa_in_progress_run_${activePlanIdRef.current}`);
-      } catch (e) {}
-    }
+    try {
+      Object.keys(localStorage).forEach(key => {
+        if (key.startsWith('qa_in_progress_run_')) {
+          localStorage.removeItem(key);
+        }
+      });
+    } catch (e) {}
 
     activeRunIdRef.current = null;
     setActiveStepIndex(0);
@@ -904,28 +900,60 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     setShowSetupModal(true);
   };
 
+  // Resilient multi-attribute matching: verifies if a boot signal targets this phone/tester/device
+  const checkSignalMatchesThisPhone = (signal: { testerName?: string; deviceName?: string; deviceId?: string; runId?: string }) => {
+    const sigTester = (signal.testerName || '').toLowerCase().trim();
+    const sigDevName = (signal.deviceName || '').toLowerCase().trim();
+    const sigDevId = (signal.deviceId || '').toLowerCase().trim();
+    const sigRunId = (signal.runId || '').trim();
+
+    const myTesters = [
+      inputReporterName,
+      getStoredTesterName(),
+      selectedTesterProfile?.name,
+      activeRun?.testerName
+    ].filter(Boolean).map(t => (t as string).toLowerCase().trim());
+
+    const myDevNames = [
+      inputDeviceName,
+      getStoredDeviceName(),
+      currentDevice?.name,
+      activeRun?.deviceName
+    ].filter(Boolean).map(d => (d as string).toLowerCase().trim());
+
+    const myDevIds = [
+      currentDevice?.id,
+      activeRun?.deviceId,
+      deviceId
+    ].filter(Boolean).map(id => (id as string).toLowerCase().trim());
+
+    const myRunIds = [
+      activeRun?.id,
+      activeRunIdRef.current
+    ].filter(Boolean) as string[];
+
+    // 1. Device Name match (e.g. "GM3" === "GM3")
+    const matchesDevName = sigDevName && myDevNames.some(d => d === sigDevName);
+
+    // 2. Device ID match (supports suffixes like dev-123-xyz containing dev-123)
+    const matchesDevId = sigDevId && myDevIds.some(id => id === sigDevId || id.includes(sigDevId) || sigDevId.includes(id));
+
+    // 3. Tester Name match (supports full name or partial substring match)
+    const matchesTester = sigTester && myTesters.some(t => t === sigTester || t.includes(sigTester) || sigTester.includes(t));
+
+    // 4. Run ID match
+    const matchesRun = sigRunId && myRunIds.some(id => id === sigRunId);
+
+    return Boolean(matchesDevName || matchesDevId || matchesTester || matchesRun);
+  };
+
   // Channel 1: Real-time WebSocket broadcast channel subscription (instant sub-second kick)
   useEffect(() => {
     const unsub = subscribeToSystemCommands((signal) => {
       const isRunning = !showSetupModal || (activeRun && activeRun.status === 'in_progress');
       if (!isRunning) return;
 
-      const myTester = (inputReporterName || getStoredTesterName()).toLowerCase().trim();
-      const myDevName = (inputDeviceName || getStoredDeviceName()).toLowerCase().trim();
-      const myDevId = (currentDevice?.id || deviceId).toLowerCase().trim();
-      const myRunId = activeRunIdRef.current || activeRun?.id;
-
-      const sigTester = signal.testerName ? signal.testerName.toLowerCase().trim() : '';
-      const sigDevId = signal.deviceId ? signal.deviceId.toLowerCase().trim() : '';
-      const sigDevName = signal.deviceName ? signal.deviceName.toLowerCase().trim() : '';
-      const sigRunId = signal.runId || '';
-
-      const matchesTester = sigTester && myTester && sigTester === myTester;
-      const matchesDevId = sigDevId && myDevId && (sigDevId === myDevId || sigDevId === myDevName);
-      const matchesDevName = sigDevName && myDevName && sigDevName === myDevName;
-      const matchesRun = sigRunId && myRunId && sigRunId === myRunId;
-
-      if (matchesTester || matchesDevId || matchesDevName || matchesRun) {
+      if (checkSignalMatchesThisPhone(signal)) {
         terminateSession('Session Terminated: You have been remotely kicked from this device by the administrator. Device has been released.');
       }
     });
@@ -933,7 +961,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     return () => {
       unsub();
     };
-  }, [showSetupModal, inputReporterName, inputDeviceName, currentDevice?.id, deviceId, activeRun?.id, activeRun?.status]);
+  }, [showSetupModal, inputReporterName, inputDeviceName, currentDevice?.id, currentDevice?.name, deviceId, activeRun?.id, activeRun?.status, activeRun?.testerName, activeRun?.deviceName]);
 
   // Channel 2: lastBootSignal prop trigger
   useEffect(() => {
@@ -941,53 +969,36 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     const isRunning = !showSetupModal || (activeRun && activeRun.status === 'in_progress');
     if (!isRunning) return;
 
-    const myTester = (inputReporterName || getStoredTesterName()).toLowerCase().trim();
-    const myDevName = (inputDeviceName || getStoredDeviceName()).toLowerCase().trim();
-    const myDevId = (currentDevice?.id || deviceId).toLowerCase().trim();
-    const myRunId = activeRunIdRef.current || activeRun?.id;
-
-    const sigTester = lastBootSignal.testerName ? lastBootSignal.testerName.toLowerCase().trim() : '';
-    const sigDevId = lastBootSignal.deviceId ? lastBootSignal.deviceId.toLowerCase().trim() : '';
-    const sigDevName = lastBootSignal.deviceName ? lastBootSignal.deviceName.toLowerCase().trim() : '';
-    const sigRunId = lastBootSignal.runId || '';
-
-    const matchesTester = sigTester && myTester && sigTester === myTester;
-    const matchesDevId = sigDevId && myDevId && (sigDevId === myDevId || sigDevId === myDevName);
-    const matchesDevName = sigDevName && myDevName && sigDevName === myDevName;
-    const matchesRun = sigRunId && myRunId && sigRunId === myRunId;
-
-    if (matchesTester || matchesDevId || matchesDevName || matchesRun) {
+    if (checkSignalMatchesThisPhone(lastBootSignal)) {
       terminateSession('Session Terminated: You have been remotely kicked from this device by the administrator. Device has been released.');
     }
-  }, [lastBootSignal, showSetupModal, inputReporterName, inputDeviceName, currentDevice?.id, deviceId, activeRun?.id, activeRun?.status]);
+  }, [lastBootSignal, showSetupModal, inputReporterName, inputDeviceName, currentDevice?.id, currentDevice?.name, deviceId, activeRun?.id, activeRun?.status, activeRun?.testerName, activeRun?.deviceName]);
 
-  // Channel 3: Populated Features Cloud State Trigger (__BOOT__:<tester>:<devId>:<runId>:<timestamp>)
+  // Channel 3: Populated Features Cloud State Trigger (__BOOT__:<tester>:<devId>:<runId>:<devName>:<timestamp>)
   useEffect(() => {
     if (!populatedFeatures || populatedFeatures.length === 0) return;
     const isRunning = !showSetupModal || (activeRun && activeRun.status === 'in_progress');
     if (!isRunning) return;
 
-    const myTester = (inputReporterName || getStoredTesterName()).toLowerCase().trim();
-    const myDevId = (currentDevice?.id || deviceId).toLowerCase().trim();
-    const myRunId = activeRunIdRef.current || activeRun?.id;
-
-    const bootEntries = populatedFeatures.filter(f => f.startsWith('__BOOT__:'));
+    const bootEntries = populatedFeatures.filter(f => f.startsWith('__BOOT__'));
     for (const entry of bootEntries) {
       const parts = entry.split(':');
-      const bootTester = (parts[1] || '').trim().toLowerCase();
-      const bootDevId = (parts[2] || '').trim().toLowerCase();
-      const bootRunId = (parts[3] || '').trim();
+      const bootTester = parts[1] || '';
+      const bootDevId = parts[2] || '';
+      const bootRunId = parts[3] || '';
+      const bootDevName = parts[4] || '';
 
-      const matchesTester = bootTester && myTester && bootTester === myTester;
-      const matchesDevId = bootDevId && myDevId && (bootDevId === myDevId || bootDevId === (currentDevice?.name || '').toLowerCase().trim());
-      const matchesRun = bootRunId && myRunId && bootRunId === myRunId;
-
-      if (matchesTester || matchesDevId || matchesRun) {
+      if (checkSignalMatchesThisPhone({
+        testerName: bootTester,
+        deviceId: bootDevId,
+        runId: bootRunId,
+        deviceName: bootDevName
+      })) {
         terminateSession('Session Terminated: You have been remotely kicked from this device by the administrator. Device has been released.');
         break;
       }
     }
-  }, [populatedFeatures, showSetupModal, inputReporterName, currentDevice?.id, currentDevice?.name, deviceId, activeRun?.id, activeRun?.status]);
+  }, [populatedFeatures, showSetupModal, inputReporterName, inputDeviceName, currentDevice?.id, currentDevice?.name, deviceId, activeRun?.id, activeRun?.status, activeRun?.testerName, activeRun?.deviceName]);
 
   // Channel 4: Device State Changed to Maintenance (isReady === false) or Reassigned
   useEffect(() => {
@@ -1008,13 +1019,33 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   // Channel 5: Test Run Status Terminated
   useEffect(() => {
-    if (!activeRunIdRef.current || showSetupModal) return;
-    const trackedRunId = activeRunIdRef.current;
-    const matchingRunInCloud = testRuns.find(r => r.id === trackedRunId);
-    if (matchingRunInCloud && (matchingRunInCloud.status as any) === 'terminated') {
+    if (showSetupModal || !activeRun || activeRun.status !== 'in_progress') return;
+
+    const terminatedRun = testRuns.find(r => {
+      if ((r.status as any) !== 'terminated') return false;
+      return checkSignalMatchesThisPhone({
+        runId: r.id,
+        testerName: r.testerName,
+        deviceName: r.deviceName,
+        deviceId: r.deviceId
+      });
+    });
+
+    if (terminatedRun) {
       terminateSession('Session Terminated: You have been remotely kicked from this device by the administrator. Device has been released.');
     }
-  }, [testRuns, showSetupModal]);
+  }, [testRuns, showSetupModal, activeRun?.status, inputReporterName, currentDevice?.id, currentDevice?.name]);
+
+  // Continuous active monitor while session is in progress (checks every 1s)
+  useEffect(() => {
+    if (showSetupModal) return;
+    const interval = setInterval(() => {
+      if (currentDevice && currentDevice.isReady === false && activeRun && activeRun.status === 'in_progress') {
+        terminateSession('Session Terminated: This device has been placed in Maintenance mode by the administrator.');
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [showSetupModal, currentDevice?.isReady, activeRun?.status]);
 
   // Safe notice if currentPlan is missing
   useEffect(() => {
