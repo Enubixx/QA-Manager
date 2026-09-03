@@ -5,6 +5,7 @@ import { CheckCircle2, Clock, Bug, Smartphone, RefreshCw, Send, Check, Layers, C
 import { exportTestRunToCSV } from '../utils/exportUtils';
 import { triggerHaptic } from '../utils/haptics';
 import { APP_VERSION_CODE, APP_VERSION_NAME } from '../constants';
+import { BootSignal, subscribeToSystemCommands } from '../services/supabaseService';
 
 interface MobileTesterProps {
   testPlans: TestPlan[];
@@ -14,6 +15,8 @@ interface MobileTesterProps {
   devices?: DeviceProfile[];
   testers?: TesterProfile[];
   minAppVersion?: number;
+  populatedFeatures?: string[];
+  lastBootSignal?: BootSignal | null;
   onSaveDevice?: (device: DeviceProfile) => void;
   selectedPlanId: string;
   populatedDevices: string[];
@@ -35,6 +38,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   devices = [],
   testers = [],
   minAppVersion,
+  populatedFeatures = [],
+  lastBootSignal,
   onSaveDevice,
   selectedPlanId,
   populatedDevices,
@@ -878,39 +883,138 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     }
   }, [activeRun?.id, activeRun?.status, showSetupModal, currentPlan?.id]);
 
-  // Real-time Remote Boot / Termination Detector
+  // Terminate active test session immediately (wiping ONLY active in-progress run storage)
+  const terminateSession = (reason?: string) => {
+    const planToClean = currentPlan?.id || activePlanIdRef.current;
+    if (planToClean) {
+      try {
+        localStorage.removeItem(`qa_in_progress_run_${planToClean}`);
+      } catch (e) {}
+    }
+    if (activePlanIdRef.current && activePlanIdRef.current !== planToClean) {
+      try {
+        localStorage.removeItem(`qa_in_progress_run_${activePlanIdRef.current}`);
+      } catch (e) {}
+    }
+
+    activeRunIdRef.current = null;
+    setActiveStepIndex(0);
+    setSelectedStatus(null);
+    setBootMessage(reason || 'Session Terminated: You have been remotely kicked from this device by the administrator. Device has been released.');
+    setShowSetupModal(true);
+  };
+
+  // Channel 1: Real-time WebSocket broadcast channel subscription (instant sub-second kick)
+  useEffect(() => {
+    const unsub = subscribeToSystemCommands((signal) => {
+      const isRunning = !showSetupModal || (activeRun && activeRun.status === 'in_progress');
+      if (!isRunning) return;
+
+      const myTester = (inputReporterName || getStoredTesterName()).toLowerCase().trim();
+      const myDevName = (inputDeviceName || getStoredDeviceName()).toLowerCase().trim();
+      const myDevId = (currentDevice?.id || deviceId).toLowerCase().trim();
+      const myRunId = activeRunIdRef.current || activeRun?.id;
+
+      const sigTester = signal.testerName ? signal.testerName.toLowerCase().trim() : '';
+      const sigDevId = signal.deviceId ? signal.deviceId.toLowerCase().trim() : '';
+      const sigDevName = signal.deviceName ? signal.deviceName.toLowerCase().trim() : '';
+      const sigRunId = signal.runId || '';
+
+      const matchesTester = sigTester && myTester && sigTester === myTester;
+      const matchesDevId = sigDevId && myDevId && (sigDevId === myDevId || sigDevId === myDevName);
+      const matchesDevName = sigDevName && myDevName && sigDevName === myDevName;
+      const matchesRun = sigRunId && myRunId && sigRunId === myRunId;
+
+      if (matchesTester || matchesDevId || matchesDevName || matchesRun) {
+        terminateSession('Session Terminated: You have been remotely kicked from this device by the administrator. Device has been released.');
+      }
+    });
+
+    return () => {
+      unsub();
+    };
+  }, [showSetupModal, inputReporterName, inputDeviceName, currentDevice?.id, deviceId, activeRun?.id, activeRun?.status]);
+
+  // Channel 2: lastBootSignal prop trigger
+  useEffect(() => {
+    if (!lastBootSignal) return;
+    const isRunning = !showSetupModal || (activeRun && activeRun.status === 'in_progress');
+    if (!isRunning) return;
+
+    const myTester = (inputReporterName || getStoredTesterName()).toLowerCase().trim();
+    const myDevName = (inputDeviceName || getStoredDeviceName()).toLowerCase().trim();
+    const myDevId = (currentDevice?.id || deviceId).toLowerCase().trim();
+    const myRunId = activeRunIdRef.current || activeRun?.id;
+
+    const sigTester = lastBootSignal.testerName ? lastBootSignal.testerName.toLowerCase().trim() : '';
+    const sigDevId = lastBootSignal.deviceId ? lastBootSignal.deviceId.toLowerCase().trim() : '';
+    const sigDevName = lastBootSignal.deviceName ? lastBootSignal.deviceName.toLowerCase().trim() : '';
+    const sigRunId = lastBootSignal.runId || '';
+
+    const matchesTester = sigTester && myTester && sigTester === myTester;
+    const matchesDevId = sigDevId && myDevId && (sigDevId === myDevId || sigDevId === myDevName);
+    const matchesDevName = sigDevName && myDevName && sigDevName === myDevName;
+    const matchesRun = sigRunId && myRunId && sigRunId === myRunId;
+
+    if (matchesTester || matchesDevId || matchesDevName || matchesRun) {
+      terminateSession('Session Terminated: You have been remotely kicked from this device by the administrator. Device has been released.');
+    }
+  }, [lastBootSignal, showSetupModal, inputReporterName, inputDeviceName, currentDevice?.id, deviceId, activeRun?.id, activeRun?.status]);
+
+  // Channel 3: Populated Features Cloud State Trigger (__BOOT__:<tester>:<devId>:<runId>:<timestamp>)
+  useEffect(() => {
+    if (!populatedFeatures || populatedFeatures.length === 0) return;
+    const isRunning = !showSetupModal || (activeRun && activeRun.status === 'in_progress');
+    if (!isRunning) return;
+
+    const myTester = (inputReporterName || getStoredTesterName()).toLowerCase().trim();
+    const myDevId = (currentDevice?.id || deviceId).toLowerCase().trim();
+    const myRunId = activeRunIdRef.current || activeRun?.id;
+
+    const bootEntries = populatedFeatures.filter(f => f.startsWith('__BOOT__:'));
+    for (const entry of bootEntries) {
+      const parts = entry.split(':');
+      const bootTester = (parts[1] || '').trim().toLowerCase();
+      const bootDevId = (parts[2] || '').trim().toLowerCase();
+      const bootRunId = (parts[3] || '').trim();
+
+      const matchesTester = bootTester && myTester && bootTester === myTester;
+      const matchesDevId = bootDevId && myDevId && (bootDevId === myDevId || bootDevId === (currentDevice?.name || '').toLowerCase().trim());
+      const matchesRun = bootRunId && myRunId && bootRunId === myRunId;
+
+      if (matchesTester || matchesDevId || matchesRun) {
+        terminateSession('Session Terminated: You have been remotely kicked from this device by the administrator. Device has been released.');
+        break;
+      }
+    }
+  }, [populatedFeatures, showSetupModal, inputReporterName, currentDevice?.id, currentDevice?.name, deviceId, activeRun?.id, activeRun?.status]);
+
+  // Channel 4: Device State Changed to Maintenance (isReady === false) or Reassigned
+  useEffect(() => {
+    if (showSetupModal || !activeRun || activeRun.status !== 'in_progress') return;
+
+    if (currentDevice) {
+      if (currentDevice.isReady === false) {
+        terminateSession('Session Terminated: This device has been placed in Maintenance mode by the administrator.');
+        return;
+      }
+      const myTester = (inputReporterName || getStoredTesterName()).toLowerCase().trim();
+      if (currentDevice.activeTesterName && myTester && currentDevice.activeTesterName.toLowerCase().trim() !== myTester) {
+        terminateSession('Session Terminated: This device has been reassigned by the administrator.');
+        return;
+      }
+    }
+  }, [currentDevice?.isReady, currentDevice?.activeTesterName, showSetupModal, activeRun?.status, inputReporterName]);
+
+  // Channel 5: Test Run Status Terminated
   useEffect(() => {
     if (!activeRunIdRef.current || showSetupModal) return;
     const trackedRunId = activeRunIdRef.current;
-    const trackedPlanId = activePlanIdRef.current;
-
     const matchingRunInCloud = testRuns.find(r => r.id === trackedRunId);
-    const isTerminated = matchingRunInCloud && (matchingRunInCloud.status as any) === 'terminated';
-    const isDeletedFromCloud = !matchingRunInCloud && testRuns.length > 0;
-
-    if (isTerminated || isDeletedFromCloud) {
-      // 1. Wipe ONLY active in-progress run storage for this plan
-      if (trackedPlanId) {
-        try {
-          localStorage.removeItem(`qa_in_progress_run_${trackedPlanId}`);
-        } catch (e) {}
-      }
-      try {
-        if (currentPlan?.id) {
-          localStorage.removeItem(`qa_in_progress_run_${currentPlan.id}`);
-        }
-      } catch (e) {}
-
-      // 2. Reset in-progress session references
-      activeRunIdRef.current = null;
-      setActiveStepIndex(0);
-      setSelectedStatus(null);
-
-      // 3. Trigger Session Terminated screen and return to setup
-      setBootMessage('Session Terminated: You have been remotely kicked from this device by the administrator. Device has been released.');
-      setShowSetupModal(true);
+    if (matchingRunInCloud && (matchingRunInCloud.status as any) === 'terminated') {
+      terminateSession('Session Terminated: You have been remotely kicked from this device by the administrator. Device has been released.');
     }
-  }, [testRuns, showSetupModal, currentPlan?.id]);
+  }, [testRuns, showSetupModal]);
 
   // Safe notice if currentPlan is missing
   useEffect(() => {

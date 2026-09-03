@@ -24,6 +24,9 @@ import {
   syncDevicesListToCloud,
   syncTestersListToCloud,
   subscribeToSupabaseRealtime,
+  subscribeToSystemCommands,
+  broadcastBootSignal,
+  BootSignal,
 } from './services/supabaseService';
 import { isSupabaseConfigured } from './lib/supabase';
 import { getLocalDateStr } from './utils/dateUtils';
@@ -157,6 +160,8 @@ export function App() {
 
   const populatedFeaturesRef = useRef(populatedFeatures);
   useEffect(() => { populatedFeaturesRef.current = populatedFeatures; }, [populatedFeatures]);
+
+  const [lastBootSignal, setLastBootSignal] = useState<BootSignal | null>(null);
 
   const devicesRef = useRef(devices);
   useEffect(() => { devicesRef.current = devices; }, [devices]);
@@ -329,8 +334,13 @@ export function App() {
     window.addEventListener('focus', handleWindowFocus);
     window.addEventListener('online', handleOnline);
 
+    const unsubCmds = subscribeToSystemCommands((signal) => {
+      setLastBootSignal(signal);
+    });
+
     return () => {
       unsubscribe();
+      unsubCmds();
       if (debounceTimer) clearTimeout(debounceTimer);
       if (capSub && typeof capSub.remove === 'function') capSub.remove();
       window.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -729,26 +739,40 @@ export function App() {
 
   // Remote Boot Tester: kicks active user on phone, wipes ONLY active in-progress cache, frees device to Maintenance
   const handleBootTester = (runId: string, deviceId?: string, testerName?: string) => {
-    // 1. Mark target run as 'terminated' so phone real-time listener terminates immediately
-    setTestRuns(prev => prev.map(r => r.id === runId ? { ...r, status: 'terminated' as any } : r));
-    const targetRun = testRuns.find(r => r.id === runId);
-    if (targetRun) {
-      safeSyncTestRun({ ...targetRun, status: 'terminated' as any });
-      // Remove from database after short buffer so real-time push is received by phone
+    // 1. Broadcast instant real-time boot signal over WebSocket to all phones
+    const bootSignal: BootSignal = {
+      runId: runId || undefined,
+      deviceId: deviceId || undefined,
+      testerName: testerName || undefined,
+      timestamp: Date.now()
+    };
+    broadcastBootSignal(bootSignal);
+    setLastBootSignal(bootSignal);
+
+    // 2. Redundant persistent boot trigger in Supabase populated_features (fires Postgres realtime replication)
+    const bootFeatureKey = `__BOOT__:${(testerName || '').toLowerCase().trim()}:${(deviceId || '').toLowerCase().trim()}:${runId || ''}:${Date.now()}`;
+    syncPopulatedFeatureToSupabase(bootFeatureKey);
+    setPopulatedFeatures(prev => [...prev.filter(f => !f.startsWith('__BOOT__')), bootFeatureKey]);
+
+    // 3. Mark target run as 'terminated' so phone real-time listener terminates immediately
+    if (runId) {
+      setTestRuns(prev => prev.map(r => r.id === runId ? { ...r, status: 'terminated' as any } : r));
+      const targetRun = testRuns.find(r => r.id === runId);
+      if (targetRun) {
+        safeSyncTestRun({ ...targetRun, status: 'terminated' as any });
+      }
       setTimeout(() => {
         deleteTestRunFromSupabase(runId);
         setTestRuns(prev => prev.filter(r => r.id !== runId));
-      }, 2000);
-    } else {
-      deleteTestRunFromSupabase(runId);
+      }, 4000);
     }
 
-    // 2. Free device lock and flip device to Maintenance (isReady: false)
+    // 4. Free device lock and flip device to Maintenance (isReady: false)
     setDevices(prev => {
       let changed = false;
       const next = prev.map(d => {
         const matchesDevId = deviceId && (d.id === deviceId || d.name.toLowerCase().trim() === deviceId.toLowerCase().trim());
-        const matchesRunId = d.activeRunId === runId;
+        const matchesRunId = runId && d.activeRunId === runId;
         const matchesTester = testerName && d.activeTesterName && d.activeTesterName.toLowerCase().trim() === testerName.toLowerCase().trim();
         if (matchesDevId || matchesRunId || matchesTester) {
           changed = true;
@@ -1171,6 +1195,8 @@ export function App() {
               devices={devices}
               testers={testers}
               minAppVersion={minAppVersion}
+              populatedFeatures={populatedFeatures}
+              lastBootSignal={lastBootSignal}
               onSaveDevice={handleSaveDevice}
               selectedPlanId={selectedPlanId}
               populatedDevices={populatedDevices}

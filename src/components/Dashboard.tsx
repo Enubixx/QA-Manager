@@ -141,6 +141,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const activeTesterMap = useMemo(() => {
     const map = new Map<string, { 
       deviceName: string; 
+      deviceId?: string;
       planName?: string; 
       runId?: string;
       startedAt?: string;
@@ -154,7 +155,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       isAway: boolean;
     }>();
 
-    const computeMetrics = (testerName: string, devName: string, run?: TestRun) => {
+    const computeMetrics = (testerName: string, devName: string, run?: TestRun, devId?: string) => {
       if (!testerName) return;
       const key = testerName.toLowerCase().trim();
       const plan = run ? testPlans.find(p => p.id === run.planId) : undefined;
@@ -183,6 +184,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       map.set(key, {
         deviceName: devName || run?.deviceName || 'Mobile Device',
+        deviceId: devId || run?.deviceId,
         planName: run?.planName || plan?.name || 'Test Plan',
         runId: run?.id,
         startedAt: run?.startedAt,
@@ -209,9 +211,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             (r.testerName && r.testerName.toLowerCase().trim() === activeTester.toLowerCase())
           )
         );
-        if (activeRun) {
-          computeMetrics(activeTester, d.name, activeRun);
-        }
+        computeMetrics(activeTester, d.name, activeRun, d.id);
       }
     });
 
@@ -224,7 +224,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         const currentEntriesCount = Object.keys(r.results || {}).length;
         const existingCount = existing ? (existing.greenCount + existing.yellowCount + existing.redCount) : -1;
         if (!existing || currentEntriesCount >= existingCount) {
-          computeMetrics(r.testerName, r.deviceName || 'Mobile Device', r);
+          computeMetrics(r.testerName, r.deviceName || 'Mobile Device', r, r.deviceId);
         }
       }
     });
@@ -1574,23 +1574,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                       </span>
                                     )}
                                   </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      if (confirm(`Remote Boot: Kick "${inUseTesterName}" off "${device.name}" and release device to Maintenance? (Completed runs today will NOT be deleted)`)) {
-                                        if (onBootTester && activeRunForDevice) {
-                                          onBootTester(activeRunForDevice.id, device.id, inUseTesterName);
-                                        } else if (onSaveDevice) {
-                                          if (activeRunForDevice && onDeleteTestRun) onDeleteTestRun(activeRunForDevice.id);
-                                          onSaveDevice({ ...device, activeRunId: undefined, activeTesterName: undefined, isReady: false });
-                                        }
-                                      }
-                                    }}
-                                    className="ml-1 text-[9px] text-rose-300 hover:text-white underline font-bold cursor-pointer"
-                                    title="Remote boot tester off session and set device to Maintenance"
-                                  >
-                                    Boot
-                                  </button>
                                 </span>
                               ) : !device.isReady ? (
                                 <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-extrabold flex items-center gap-1">
@@ -2037,6 +2020,23 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             <span className="px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-slate-800/80 text-slate-400 border border-slate-700">
                               Idle
                             </span>
+                          )}
+
+                          {/* Remote Boot Tester Button */}
+                          {isActive && onBootTester && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (confirm(`Remote Boot: Kick "${tester.name}" off "${activeInfo?.deviceName || 'device'}" and release device to Maintenance? (Completed runs today will NOT be deleted)`)) {
+                                  onBootTester(activeInfo?.runId || '', activeInfo?.deviceId, tester.name);
+                                }
+                              }}
+                              className="px-2.5 py-1 rounded-xl text-[11px] font-extrabold bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 hover:text-white border border-rose-500/30 flex items-center gap-1 shadow-sm transition-all cursor-pointer active:scale-95"
+                              title={`Remote boot ${tester.name} off session and release device`}
+                            >
+                              <Trash2 className="w-3 h-3 text-rose-400" />
+                              <span>Boot</span>
+                            </button>
                           )}
                         </div>
                       </div>
@@ -2573,7 +2573,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             onClick={() => {
                               if (confirm(`Boot tester "${run.testerName || 'Tester'}" off phone mode and terminate this active session?`)) {
                                 if (onBootTester) {
-                                  onBootTester(run.id, run.deviceId);
+                                  onBootTester(run.id, run.deviceId, run.testerName);
                                 } else if (onDeleteTestRun) {
                                   onDeleteTestRun(run.id);
                                 }

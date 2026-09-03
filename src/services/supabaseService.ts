@@ -406,3 +406,58 @@ export const subscribeToSupabaseRealtime = (onChangeCallback: () => void) => {
     }
   };
 };
+
+export interface BootSignal {
+  testerName?: string;
+  deviceId?: string;
+  deviceName?: string;
+  runId?: string;
+  timestamp: number;
+}
+
+let globalCommandsChannel: any = null;
+
+export const getCommandsChannel = () => {
+  if (!supabase || !isSupabaseConfigured) return null;
+  if (!globalCommandsChannel) {
+    globalCommandsChannel = supabase.channel('qa-system-commands', {
+      config: { broadcast: { self: true } }
+    });
+    globalCommandsChannel.subscribe();
+  }
+  return globalCommandsChannel;
+};
+
+export const subscribeToSystemCommands = (onBootReceived: (signal: BootSignal) => void) => {
+  if (!supabase || !isSupabaseConfigured) return () => {};
+
+  const channel = getCommandsChannel();
+  if (!channel) return () => {};
+
+  const handler = (msg: any) => {
+    if (msg && msg.payload) {
+      onBootReceived(msg.payload);
+    }
+  };
+
+  channel.on('broadcast', { event: 'BOOT_TESTER' }, handler);
+
+  return () => {
+    // Keep channel subscription alive
+  };
+};
+
+export const broadcastBootSignal = async (signal: BootSignal) => {
+  if (!supabase || !isSupabaseConfigured) return;
+  try {
+    const channel = getCommandsChannel();
+    if (!channel) return;
+    await channel.send({
+      type: 'broadcast',
+      event: 'BOOT_TESTER',
+      payload: signal
+    });
+  } catch (err) {
+    console.error('broadcastBootSignal error:', err);
+  }
+};
