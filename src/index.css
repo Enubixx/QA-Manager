@@ -157,22 +157,18 @@ select.dark-select-input {
   appearance: none !important;
 }
 
-/* Fluid Liquid Glass Tab Fade-In & Blur Entrance */
+/* Fluid Liquid Glass Tab Fade-In (Smooth, without jarring blur or black-out flash) */
 @keyframes liquidFadeIn {
   0% {
-    opacity: 0;
-    transform: translateY(12px) scale(0.99);
-    filter: blur(4px);
+    opacity: 0.88;
   }
   100% {
     opacity: 1;
-    transform: translateY(0) scale(1);
-    filter: blur(0px);
   }
 }
 
 .animate-liquid-fade {
-  animation: liquidFadeIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: liquidFadeIn 0.15s ease-out forwards;
 }
 
 /* Fluid Liquid Glass Accordion Animation */

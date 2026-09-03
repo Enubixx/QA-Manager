@@ -4,6 +4,7 @@ import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile } from '../type
 import { CheckCircle2, Clock, Bug, Smartphone, RefreshCw, Send, Check, Layers, ChevronDown, AlertTriangle, XCircle, ArrowRight, ArrowLeft, ChevronLeft, ChevronRight, Undo2, Sparkles, User, Download, Edit3, Trash2, Tag, Image, Camera, X, Mic, WifiOff } from 'lucide-react';
 import { exportTestRunToCSV } from '../utils/exportUtils';
 import { triggerHaptic } from '../utils/haptics';
+import { APP_VERSION_CODE, APP_VERSION_NAME } from '../constants';
 
 interface MobileTesterProps {
   testPlans: TestPlan[];
@@ -12,6 +13,7 @@ interface MobileTesterProps {
   bugLogs?: BugLog[];
   devices?: DeviceProfile[];
   testers?: TesterProfile[];
+  minAppVersion?: number;
   onSaveDevice?: (device: DeviceProfile) => void;
   selectedPlanId: string;
   populatedDevices: string[];
@@ -32,6 +34,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   bugLogs = [],
   devices = [],
   testers = [],
+  minAppVersion,
   onSaveDevice,
   selectedPlanId,
   populatedDevices,
@@ -151,22 +154,34 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   if (localSavedRunJson) {
     try {
       localSavedRun = JSON.parse(localSavedRunJson);
-      if (localSavedRun && localSavedRun.status === 'completed') {
+      if (localSavedRun && ((localSavedRun.status as any) === 'completed' || (localSavedRun.status as any) === 'terminated')) {
         localSavedRun = null;
       }
     } catch (e) {}
+  }
+
+  // If this local run was terminated or booted in cloud, purge it so stale sessions don't resurrect
+  if (localSavedRun) {
+    const isTerminatedInCloud = testRuns.some(r => r.id === localSavedRun?.id && (r.status as any) === 'terminated');
+    if (isTerminatedInCloud) {
+      try {
+        if (currentPlan?.id) localStorage.removeItem(`qa_in_progress_run_${currentPlan.id}`);
+      } catch (e) {}
+      localSavedRun = null;
+    }
   }
 
   // Find active run specifically for THIS device & plan
   let activeRun = testRuns.find(r => 
     r.planId === currentPlan?.id && 
     r.status !== 'completed' &&
+    (r.status as any) !== 'terminated' &&
     (r.deviceId === deviceId || r.id.includes(deviceId) || (localSavedRun && r.id === localSavedRun.id))
   );
 
   // Fallback: check if an unassigned active run matching legacy ID exists
   if (!activeRun && currentPlan) {
-    activeRun = testRuns.find(r => r.id === 'run-' + currentPlan.id && r.status !== 'completed');
+    activeRun = testRuns.find(r => r.id === 'run-' + currentPlan.id && r.status !== 'completed' && (r.status as any) !== 'terminated');
   }
 
   // Merge with locally persisted in-progress run so step results are NEVER lost
@@ -454,12 +469,21 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   // Bug Modal state
   const [showBugModal, setShowBugModal] = useState(false);
+  const [editingBug, setEditingBug] = useState<BugLog | null>(null);
   const [bugNote, setBugNote] = useState('');
   const [bugImageUrl, setBugImageUrl] = useState('');
   const [bugSeverity, setBugSeverity] = useState<'low' | 'medium' | 'high' | 'critical'>('medium');
   const [bugSuccessMessage, setBugSuccessMessage] = useState<string | null>(null);
   const [isListeningSpeech, setIsListeningSpeech] = useState(false);
   const speechRecognitionRef = useRef<any>(null);
+
+  const handleStartEditBug = (bug: BugLog) => {
+    setEditingBug(bug);
+    setBugNote(bug.note);
+    setBugSeverity(bug.severity || 'medium');
+    setBugImageUrl(bug.imageUrl || '');
+    setShowBugModal(true);
+  };
 
   // Toggle Speech-to-Text for Voice Bug Notes
   const toggleSpeechRecognition = () => {
@@ -843,6 +867,51 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   const [bootMessage, setBootMessage] = useState<string | null>(null);
 
+  // Active run and plan tracking for real-time remote boot detection
+  const activeRunIdRef = useRef<string | null>(null);
+  const activePlanIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!showSetupModal && activeRun && activeRun.status === 'in_progress') {
+      activeRunIdRef.current = activeRun.id;
+      activePlanIdRef.current = currentPlan?.id || activeRun.planId;
+    }
+  }, [activeRun?.id, activeRun?.status, showSetupModal, currentPlan?.id]);
+
+  // Real-time Remote Boot / Termination Detector
+  useEffect(() => {
+    if (!activeRunIdRef.current || showSetupModal) return;
+    const trackedRunId = activeRunIdRef.current;
+    const trackedPlanId = activePlanIdRef.current;
+
+    const matchingRunInCloud = testRuns.find(r => r.id === trackedRunId);
+    const isTerminated = matchingRunInCloud && (matchingRunInCloud.status as any) === 'terminated';
+    const isDeletedFromCloud = !matchingRunInCloud && testRuns.length > 0;
+
+    if (isTerminated || isDeletedFromCloud) {
+      // 1. Wipe ONLY active in-progress run storage for this plan
+      if (trackedPlanId) {
+        try {
+          localStorage.removeItem(`qa_in_progress_run_${trackedPlanId}`);
+        } catch (e) {}
+      }
+      try {
+        if (currentPlan?.id) {
+          localStorage.removeItem(`qa_in_progress_run_${currentPlan.id}`);
+        }
+      } catch (e) {}
+
+      // 2. Reset in-progress session references
+      activeRunIdRef.current = null;
+      setActiveStepIndex(0);
+      setSelectedStatus(null);
+
+      // 3. Trigger Session Terminated screen and return to setup
+      setBootMessage('Session Terminated: You have been remotely kicked from this device by the administrator. Device has been released.');
+      setShowSetupModal(true);
+    }
+  }, [testRuns, showSetupModal, currentPlan?.id]);
+
   // Safe notice if currentPlan is missing
   useEffect(() => {
     if (!currentPlan) {
@@ -851,10 +920,55 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     }
   }, [currentPlan]);
 
-  // Submit Bug ONLY
+  // Submit or Update Bug
   const handleReportBugSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!bugNote.trim() || !activeRun || !currentPlan) return;
+    if (!bugNote.trim()) return;
+
+    if (editingBug) {
+      const updatedBug: BugLog = {
+        ...editingBug,
+        note: bugNote.trim(),
+        severity: bugSeverity,
+        imageUrl: bugImageUrl.trim() || undefined
+      };
+
+      try {
+        onLogBug(updatedBug);
+      } catch (err) {
+        console.warn('onLogBug error:', err);
+      }
+
+      if (activeRun) {
+        const updatedRun: TestRun = {
+          ...activeRun,
+          bugLogs: (activeRun.bugLogs || []).map(b => b.id === updatedBug.id ? updatedBug : b)
+        };
+        if (currentPlan) {
+          localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updatedRun));
+        }
+        onUpdateRun(updatedRun);
+      }
+
+      if (completedRunSummary) {
+        setCompletedRunSummary(prev => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            bugLogs: (prev.bugLogs || []).map(b => b.id === updatedBug.id ? updatedBug : b)
+          };
+        });
+      }
+
+      setBugSuccessMessage('Defect updated successfully');
+      setEditingBug(null);
+      setBugNote('');
+      setBugImageUrl('');
+      setShowBugModal(false);
+      return;
+    }
+
+    if (!activeRun || !currentPlan) return;
 
     const now = new Date();
     const isoTimestamp = now.toISOString();
@@ -935,6 +1049,34 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       if (sub && typeof sub.remove === 'function') sub.remove();
     };
   }, [previewImageUrl, showBugModal, showQuitConfirmModal, openTesterPickerModal, openDevicePickerModal, showSetupModal, activeRun, onNavigateToDashboard]);
+
+  // Requirement 5: App Version Enforcement Blocker
+  if (minAppVersion && minAppVersion > APP_VERSION_CODE) {
+    return (
+      <div className="fixed inset-0 z-[999999] bg-slate-950 flex flex-col items-center justify-center p-6 text-center select-none">
+        <div className="w-20 h-20 rounded-3xl bg-rose-500/20 border-2 border-rose-500/40 flex items-center justify-center mb-6 shadow-2xl shadow-rose-500/20 animate-pulse">
+          <AlertTriangle className="w-10 h-10 text-rose-400" />
+        </div>
+        <h1 className="text-2xl font-black text-white tracking-tight mb-2">Update Required</h1>
+        <p className="text-xs text-slate-300 max-w-xs mb-6 leading-relaxed font-medium">
+          Your installed tester build (v{APP_VERSION_NAME}) is outdated. The QA system requires version {minAppVersion}.0 or higher to continue testing.
+        </p>
+        <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 w-full max-w-xs space-y-2 mb-6">
+          <div className="flex justify-between text-xs">
+            <span className="text-slate-400 font-medium">Current Build:</span>
+            <span className="font-mono font-bold text-rose-400">v{APP_VERSION_NAME} (code {APP_VERSION_CODE})</span>
+          </div>
+          <div className="flex justify-between text-xs">
+            <span className="text-slate-400 font-medium">Required Build:</span>
+            <span className="font-mono font-bold text-emerald-400">v{minAppVersion}.0.0+ (code {minAppVersion})</span>
+          </div>
+        </div>
+        <p className="text-[11px] text-slate-500 max-w-xs">
+          Please download and install the latest QA Manager APK from your administrator to resume testing.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-black p-0 sm:p-6 select-none font-sans relative">
@@ -1113,14 +1255,24 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                           {bug.stepTitle || bug.feature || 'Bug'}
                         </span>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => onDeleteBug(bug.id)}
-                        className="text-zinc-400 hover:text-rose-400 p-1 rounded-lg transition cursor-pointer"
-                        title="Delete Bug"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleStartEditBug(bug)}
+                          className="text-zinc-400 hover:text-sky-400 p-1 rounded-lg transition cursor-pointer"
+                          title="Edit Bug"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDeleteBug(bug.id)}
+                          className="text-zinc-400 hover:text-rose-400 p-1 rounded-lg transition cursor-pointer"
+                          title="Delete Bug"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
 
                     <div className="text-xs text-zinc-300 font-medium leading-relaxed">
@@ -1278,14 +1430,24 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                           <span className="font-bold text-rose-300">[{b.severity.toUpperCase()}]</span>{' '}
                           <span className="text-zinc-200">{b.note}</span>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteStepBug(b.id)}
-                          className="text-zinc-400 hover:text-rose-400 p-1 rounded-lg transition cursor-pointer"
-                          title="Remove bug logged on this step"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleStartEditBug(b)}
+                            className="text-zinc-400 hover:text-sky-400 p-1 rounded-lg transition cursor-pointer"
+                            title="Edit defect note"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteStepBug(b.id)}
+                            className="text-zinc-400 hover:text-rose-400 p-1 rounded-lg transition cursor-pointer"
+                            title="Remove bug logged on this step"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -1476,14 +1638,24 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                             <span className="font-mono text-sky-400 mr-1.5 text-[10px] bg-sky-500/10 px-1.5 py-0.5 rounded-md border border-sky-500/25">[{bug.feature || 'General'}]</span>
                             <span className="text-zinc-200">{bug.note}</span>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => onDeleteBug(bug.id)}
-                            className="text-zinc-400 hover:text-rose-400 p-1 flex-shrink-0 cursor-pointer"
-                            title="Delete Bug Log"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          <div className="flex items-center gap-1 flex-shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleStartEditBug(bug)}
+                              className="text-zinc-400 hover:text-sky-400 p-1 cursor-pointer"
+                              title="Edit Bug Log"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onDeleteBug(bug.id)}
+                              className="text-zinc-400 hover:text-rose-400 p-1 cursor-pointer"
+                              title="Delete Bug Log"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -1889,7 +2061,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
                   <h4 className="text-sm font-bold text-rose-400 flex items-center gap-1.5 tracking-tight">
                     <Bug className="w-4 h-4 text-rose-400" />
-                    Bug / Note Entry
+                    {editingBug ? 'Edit Bug / Defect Log' : 'Bug / Note Entry'}
                   </h4>
                   <div className="text-[10px] font-mono text-zinc-400 bg-zinc-900 px-2.5 py-1 rounded-xl border border-zinc-800 backdrop-blur-md flex items-center gap-1">
                     <Clock className="w-3 h-3 text-zinc-400" />
@@ -1898,13 +2070,42 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 </div>
 
                 <div className="liquid-glass-pill rounded-2xl p-2.5 text-xs text-sky-200 flex items-center justify-between font-semibold border border-sky-500/30 bg-sky-950/20">
-                  <span>Feature: <strong className="text-sky-300 font-mono">{currentStep?.feature || 'General'}</strong></span>
+                  <span>Feature: <strong className="text-sky-300 font-mono">{editingBug?.feature || currentStep?.feature || 'General'}</strong></span>
                 </div>
 
                 <div>
                   <label className="block text-[11px] font-bold text-zinc-400 mb-1.5 uppercase tracking-wider">Step Target</label>
                   <div className="text-xs font-bold text-white liquid-glass-card p-3 rounded-2xl border border-zinc-800 bg-zinc-900/60">
-                    Step #{currentStepIndex + 1}: {currentStep?.title}
+                    {editingBug ? editingBug.stepTitle || 'Defect Entry' : `Step #${currentStepIndex + 1}: ${currentStep?.title || 'Current Step'}`}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-zinc-400 mb-1.5 uppercase tracking-wider">Severity Level</label>
+                  <div className="grid grid-cols-4 gap-2">
+                    {(['low', 'medium', 'high', 'critical'] as const).map(sev => {
+                      const isSelected = bugSeverity === sev;
+                      return (
+                        <button
+                          key={sev}
+                          type="button"
+                          onClick={() => setBugSeverity(sev)}
+                          className={`py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border cursor-pointer ${
+                            isSelected
+                              ? sev === 'critical'
+                                ? 'bg-rose-500/30 text-rose-300 border-rose-500 shadow-md shadow-rose-500/20 ring-1 ring-rose-400'
+                                : sev === 'high'
+                                ? 'bg-amber-500/30 text-amber-300 border-amber-500 shadow-md shadow-amber-500/20 ring-1 ring-amber-400'
+                                : sev === 'medium'
+                                ? 'bg-indigo-500/30 text-indigo-300 border-indigo-500 shadow-md shadow-indigo-500/20 ring-1 ring-indigo-400'
+                                : 'bg-emerald-500/30 text-emerald-300 border-emerald-500 shadow-md shadow-emerald-500/20 ring-1 ring-emerald-400'
+                              : 'bg-zinc-900/80 text-zinc-400 border-zinc-800 hover:border-zinc-700'
+                          }`}
+                        >
+                          {sev}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -2000,7 +2201,12 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               <div className="flex gap-2.5 pt-3 border-t border-zinc-800">
                 <button
                   type="button"
-                  onClick={() => setShowBugModal(false)}
+                  onClick={() => {
+                    setEditingBug(null);
+                    setBugNote('');
+                    setBugImageUrl('');
+                    setShowBugModal(false);
+                  }}
                   className="w-1/3 py-3 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white font-bold text-xs rounded-2xl border border-zinc-800 transition-all cursor-pointer"
                 >
                   Cancel
@@ -2010,7 +2216,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   className="w-2/3 py-3 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-2xl shadow-md border border-rose-500/30 flex items-center justify-center gap-1.5 transition-all cursor-pointer"
                 >
                   <Send className="w-3.5 h-3.5" />
-                  <span>Save Bug Log</span>
+                  <span>{editingBug ? 'Update Defect' : 'Save Bug Log'}</span>
                 </button>
               </div>
 

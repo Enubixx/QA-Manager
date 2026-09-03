@@ -26,14 +26,18 @@ interface DashboardProps {
   onAddFeature?: (featureName: string) => void;
   onDeleteFeature?: (featureName: string) => void;
   onDeleteTestRun?: (runId: string) => void;
+  onBootTester?: (runId: string, deviceId?: string, testerName?: string) => void;
   onDeleteTester?: (testerName: string) => void;
   onResetActiveDay?: (dateStr: string) => void;
+  onResetDailyQuotas?: () => void;
   onSaveDevice?: (device: DeviceProfile) => void;
   onDeleteDevice?: (deviceId: string) => void;
   onSaveTester?: (tester: TesterProfile) => void;
   onDeleteTesterProfile?: (testerId: string) => void;
   archivedRuns?: TestRun[];
   onRunSubagentTest?: (planId?: string) => void;
+  minAppVersion?: number;
+  onUpdateMinAppVersion?: (versionCode: number) => void;
 }
 
 interface FeatureMetric {
@@ -78,13 +82,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onAddFeature,
   onDeleteFeature,
   onDeleteTestRun,
+  onBootTester,
   onDeleteTester,
   onResetActiveDay,
+  onResetDailyQuotas,
   onSaveDevice,
   onDeleteDevice,
   onSaveTester,
   onDeleteTesterProfile,
-  onRunSubagentTest
+  onRunSubagentTest,
+  minAppVersion,
+  onUpdateMinAppVersion
 }) => {
   const defaultTodayStr = getLocalDateStr(new Date());
   const [activeTab, setActiveTab] = useState<'overview' | 'devices' | 'testers' | 'features' | 'bugs'>('overview');
@@ -102,12 +110,40 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [testerViewMode, setTesterViewMode] = useState<'all' | 'active'>('all');
   const [searchTesterQuery, setSearchTesterQuery] = useState('');
 
+  // Live ongoing test duration ticker (updates every second for real-time counters)
+  const [liveTickerTime, setLiveTickerTime] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setLiveTickerTime(Date.now());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatOngoingDuration = (startedAt?: string): string => {
+    if (!startedAt) return '0s';
+    const startMs = new Date(startedAt).getTime();
+    if (isNaN(startMs) || startMs <= 0) return '0s';
+    const diffMs = Math.max(0, liveTickerTime - startMs);
+    const totalSecs = Math.floor(diffMs / 1000);
+    const hrs = Math.floor(totalSecs / 3600);
+    const mins = Math.floor((totalSecs % 3600) / 60);
+    const secs = totalSecs % 60;
+    if (hrs > 0) {
+      return `${hrs}h ${mins}m ${secs.toString().padStart(2, '0')}s`;
+    }
+    if (mins > 0) {
+      return `${mins}m ${secs.toString().padStart(2, '0')}s`;
+    }
+    return `${secs}s`;
+  };
+
   // Determine active testers currently running a test session on a device (with live step and status metrics)
   const activeTesterMap = useMemo(() => {
     const map = new Map<string, { 
       deviceName: string; 
       planName?: string; 
       runId?: string;
+      startedAt?: string;
       currentStepIndex: number;
       totalSteps: number;
       currentStepTitle?: string;
@@ -115,6 +151,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       yellowCount: number;
       redCount: number;
       progressPct: number;
+      isAway: boolean;
     }>();
 
     const computeMetrics = (testerName: string, devName: string, run?: TestRun) => {
@@ -137,17 +174,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
       const currentStep = plan?.steps[Math.min(currentStepIdx, totalSteps - 1)];
       const currentStepTitle = currentStep ? (currentStep.title || currentStep.feature || `Step ${currentStepIdx + 1}`) : undefined;
 
+      const lastResultTimestamp = Object.values(run?.results || {})
+        .map((r: any) => r.timestamp ? new Date(r.timestamp).getTime() : 0)
+        .filter((t: number) => t > 0)
+        .sort((a: number, b: number) => b - a)[0];
+      const lastActivityTime = lastResultTimestamp || (run?.startedAt ? new Date(run.startedAt).getTime() : 0);
+      const isAway = lastActivityTime > 0 && (Date.now() - lastActivityTime > 3 * 60 * 1000);
+
       map.set(key, {
         deviceName: devName || run?.deviceName || 'Mobile Device',
         planName: run?.planName || plan?.name || 'Test Plan',
         runId: run?.id,
+        startedAt: run?.startedAt,
         currentStepIndex: Math.min(currentStepIdx + 1, totalSteps),
         totalSteps,
         currentStepTitle,
         greenCount,
         yellowCount,
         redCount,
-        progressPct
+        progressPct,
+        isAway
       });
     };
 
@@ -1370,7 +1416,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       {/* Tab 2: Devices & Daily Target Quotas */}
       {activeTab === 'devices' && (
-        <div className="space-y-8 animate-liquid-fade">
+        <div className="space-y-8">
           
           {/* Fleet Daily Quota Overview Badge Banner */}
           <div className="liquid-glass-panel rounded-3xl p-6 bg-gradient-to-r from-purple-950/70 via-slate-900/80 to-indigo-950/70 border-purple-500/20 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -1384,7 +1430,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </p>
             </div>
 
-            <div className="flex items-center gap-6">
+            <div className="flex items-center gap-4 flex-wrap justify-end">
               <div className="text-right">
                 <div className="text-2xl font-black text-purple-300 font-mono">
                   {fleetProgress.totalCompleted} / {fleetProgress.totalTarget} <span className="text-xs text-slate-400 font-sans font-normal">runs completed</span>
@@ -1399,11 +1445,41 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     if (onResetActiveDay) onResetActiveDay(getLocalDateStr(new Date()));
                   }
                 }}
-                className="px-4 py-2 bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 border border-purple-400/40 rounded-2xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md active:scale-95"
+                className="px-3.5 py-2 bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 border border-purple-400/40 rounded-2xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
               >
                 <RefreshCw className="w-3.5 h-3.5 text-purple-400" />
-                <span>Reset Daily Progress</span>
+                <span>Reset Counters</span>
               </button>
+
+              {onResetDailyQuotas && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (confirm('Reset all device quotas to "No Plan Assigned" for today? (This clears plan assignments so you can assign new ones for the day)')) {
+                      onResetDailyQuotas();
+                    }
+                  }}
+                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-2xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
+                  title="Clear all device assignments to No Plan Assigned"
+                >
+                  <Layers className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Clear to No Plan</span>
+                </button>
+              )}
+
+              {onUpdateMinAppVersion && (
+                <div className="flex items-center gap-1.5 bg-slate-900/90 border border-slate-700/70 px-3 py-1.5 rounded-2xl text-xs">
+                  <span className="text-[11px] text-slate-400 font-semibold">Required APK:</span>
+                  <select
+                    value={minAppVersion || 1}
+                    onChange={(e) => onUpdateMinAppVersion(parseInt(e.target.value, 10))}
+                    className="bg-purple-950/80 text-purple-300 font-bold border border-purple-500/40 rounded-lg px-2 py-0.5 text-xs focus:outline-none cursor-pointer"
+                  >
+                    <option value={1}>v1.0 (Allow All)</option>
+                    <option value={2}>v2.0+ (Enforce v2)</option>
+                  </select>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1479,24 +1555,47 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             <div className="flex items-center gap-2">
                               <h4 className="text-sm font-extrabold text-white">{device.name}</h4>
                               {isInUse ? (
-                                <span className="px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-extrabold flex items-center gap-1.5 animate-pulse">
-                                  <Timer className="w-3 h-3 text-rose-400" />
-                                  <span>In Use by {inUseTesterName}</span>
-                                  {onSaveDevice && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        if (activeRunForDevice && onDeleteTestRun) {
-                                          onDeleteTestRun(activeRunForDevice.id);
-                                        }
-                                        onSaveDevice({ ...device, activeRunId: undefined, activeTesterName: undefined });
-                                      }}
-                                      className="ml-1 text-[9px] text-rose-400 hover:text-white underline font-semibold cursor-pointer"
-                                      title="Clear in-use lock"
-                                    >
-                                      Clear
-                                    </button>
+                                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold flex items-center gap-1.5 ${
+                                  activeTesterMap.get(inUseTesterName.toLowerCase().trim())?.isAway
+                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                                    : 'bg-rose-500/20 text-rose-300 border border-rose-500/30 animate-pulse'
+                                }`}>
+                                  {activeTesterMap.get(inUseTesterName.toLowerCase().trim())?.isAway ? (
+                                    <Clock className="w-3 h-3 text-amber-400" />
+                                  ) : (
+                                    <Timer className="w-3 h-3 text-rose-400" />
                                   )}
+                                  <span>
+                                    {activeTesterMap.get(inUseTesterName.toLowerCase().trim())?.isAway ? 'Away: ' : 'In Use by '}
+                                    {inUseTesterName}
+                                    {activeRunForDevice?.startedAt && (
+                                      <span className="ml-1.5 font-mono text-[9px] text-rose-200/90 font-bold">
+                                        ({formatOngoingDuration(activeRunForDevice.startedAt)})
+                                      </span>
+                                    )}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (confirm(`Remote Boot: Kick "${inUseTesterName}" off "${device.name}" and release device to Maintenance? (Completed runs today will NOT be deleted)`)) {
+                                        if (onBootTester && activeRunForDevice) {
+                                          onBootTester(activeRunForDevice.id, device.id, inUseTesterName);
+                                        } else if (onSaveDevice) {
+                                          if (activeRunForDevice && onDeleteTestRun) onDeleteTestRun(activeRunForDevice.id);
+                                          onSaveDevice({ ...device, activeRunId: undefined, activeTesterName: undefined, isReady: false });
+                                        }
+                                      }
+                                    }}
+                                    className="ml-1 text-[9px] text-rose-300 hover:text-white underline font-bold cursor-pointer"
+                                    title="Remote boot tester off session and set device to Maintenance"
+                                  >
+                                    Boot
+                                  </button>
+                                </span>
+                              ) : !device.isReady ? (
+                                <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-extrabold flex items-center gap-1">
+                                  <XCircle className="w-3 h-3 text-amber-400" />
+                                  <span>Maintenance {assignedQuota && doneToday >= targetRuns ? '(Quota Met)' : ''}</span>
                                 </span>
                               ) : (
                                 <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-bold flex items-center gap-1">
@@ -1652,7 +1751,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       {/* Tab: Unified QA Testers Directory & Live Performance Tracking */}
       {activeTab === 'testers' && (
-        <div className="space-y-6 animate-liquid-fade">
+        <div className="space-y-6">
           
           {/* Header & Live Testing Data Tracking Controls */}
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 liquid-glass-panel rounded-3xl p-6 shadow-2xl relative overflow-hidden">
@@ -1914,13 +2013,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           </div>
                         </div>
 
-                        {/* Live Status Pill */}
-                        <div className="flex-shrink-0">
-                          {isActive ? (
-                            <div className="px-2.5 py-1 rounded-xl text-[11px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1.5 shadow-sm">
-                              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                              <span>Active on {activeInfo?.deviceName || 'Device'}</span>
+                        {/* Live Status Pill & Ongoing Counter */}
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          {isActive && activeInfo?.startedAt && (
+                            <div className="px-2.5 py-1 rounded-xl text-[11px] font-mono font-extrabold bg-indigo-950/70 text-indigo-300 border border-indigo-500/40 flex items-center gap-1.5 shadow-sm">
+                              <Timer className="w-3 h-3 text-indigo-400 animate-pulse" />
+                              <span>{formatOngoingDuration(activeInfo.startedAt)}</span>
                             </div>
+                          )}
+                          {isActive ? (
+                            activeInfo?.isAway ? (
+                              <div className="px-2.5 py-1 rounded-xl text-[11px] font-extrabold bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1.5 shadow-sm">
+                                <Clock className="w-3 h-3 text-amber-400" />
+                                <span>Away on {activeInfo?.deviceName || 'Device'}</span>
+                              </div>
+                            ) : (
+                              <div className="px-2.5 py-1 rounded-xl text-[11px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1.5 shadow-sm">
+                                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                                <span>Active on {activeInfo?.deviceName || 'Device'}</span>
+                              </div>
+                            )
                           ) : (
                             <span className="px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-slate-800/80 text-slate-400 border border-slate-700">
                               Idle
@@ -1937,9 +2049,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               <Layers className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                               <span className="truncate">{activeInfo.planName || 'Live Walkthrough'}</span>
                             </span>
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 shrink-0">
-                              Step {activeInfo.currentStepIndex} of {activeInfo.totalSteps}
-                            </span>
+                            <div className="flex items-center gap-2 shrink-0">
+                              {activeInfo.startedAt && (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-slate-900/90 text-indigo-300 border border-indigo-500/30 flex items-center gap-1">
+                                  <Clock className="w-2.5 h-2.5 text-indigo-400" />
+                                  <span>{formatOngoingDuration(activeInfo.startedAt)}</span>
+                                </span>
+                              )}
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 shrink-0">
+                                Step {activeInfo.currentStepIndex} of {activeInfo.totalSteps}
+                              </span>
+                            </div>
                           </div>
 
                           {activeInfo.currentStepTitle && (
@@ -2107,7 +2227,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       {/* Tab 1: Overview - Test Plans & Active Runs */}
       {activeTab === 'overview' && (
-        <div className="space-y-6 animate-liquid-fade">
+        <div className="space-y-6">
           
           {/* Test Plans Area Header Banner */}
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 liquid-glass-panel rounded-3xl p-6 shadow-2xl relative overflow-hidden">
@@ -2324,40 +2444,42 @@ export const Dashboard: React.FC<DashboardProps> = ({
             )}
           </div>
 
-          {/* Real-time Field Activity (Apple Glass Side Panel) */}
-          <div id="field-qa-progress-section" className="liquid-glass-panel rounded-3xl p-6 space-y-6 h-fit shadow-2xl">
-            <h3 className="text-base font-bold text-white flex items-center gap-2 tracking-tight">
-              <Clock className="w-4 h-4 text-emerald-400" />
-              Live Field QA Progress
-            </h3>
+          {/* Active Testing Runs Live Monitor Card */}
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <Activity className="w-4 h-4 text-emerald-400" />
+                <span>Live Test Runs</span>
+              </h3>
+              <span className="text-xs font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                {activeRuns} Active
+              </span>
+            </div>
 
-            <div className="space-y-4">
+            <div className="space-y-3">
               {(() => {
-                const activeLiveRuns = testRuns.filter(run => {
-                  return getEffectiveRunStatus(run) === 'in_progress';
-                });
-
-                if (activeLiveRuns.length === 0) {
+                const ongoingRuns = testRuns.filter(r => getEffectiveRunStatus(r) === 'in_progress');
+                if (ongoingRuns.length === 0) {
                   return (
-                    <div className="text-xs text-slate-400 text-center py-6 font-medium">
-                      No active field test sessions running.
+                    <div className="liquid-glass-card rounded-2xl p-6 text-center space-y-2">
+                      <Clock className="w-6 h-6 text-slate-500 mx-auto" />
+                      <p className="text-xs font-bold text-slate-400">No active test runs right now.</p>
+                      <p className="text-[11px] text-slate-500">Testers will appear here automatically when they begin execution.</p>
                     </div>
                   );
                 }
 
-                return activeLiveRuns.map(run => {
+                return ongoingRuns.map(run => {
                   const plan = testPlans.find(p => p.id === run.planId);
                   const totalSteps = plan?.steps.length || 1;
                   const stepEntries = Object.entries(run.results || {}).filter(
-                    ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+                    ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in v
                   );
-                  const completedResults = stepEntries.map(([_, v]) => v as any);
+                  const completedResults = stepEntries.map(([_, v]) => v);
                   const completedSteps = completedResults.length;
                   const progressPct = Math.min(100, Math.round((completedSteps / totalSteps) * 100));
 
-                  const greenCount = completedResults.filter(r => r.status === 'green').length;
-                  const yellowCount = completedResults.filter(r => r.status === 'yellow').length;
-                  const redCount = completedResults.filter(r => r.status === 'red').length;
+                  const isAway = Boolean(run.lastActivityTimestamp && (Date.now() - run.lastActivityTimestamp > 3 * 60 * 1000));
 
                   return (
                     <div key={run.id} className="liquid-glass-card rounded-2xl p-4 space-y-3 shadow-md">
@@ -2366,9 +2488,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           <User className="w-3.5 h-3.5 text-indigo-400" />
                           {run.testerName || 'Unassigned Tester'}
                         </span>
-                        <span className="px-2.5 py-0.5 rounded-full font-mono text-[10px] font-extrabold border bg-purple-500/20 text-purple-300 border-purple-400/30 animate-pulse">
-                          In Progress
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          {run.startedAt && (
+                            <span className="px-2 py-0.5 rounded-full font-mono text-[10px] font-bold bg-slate-900/90 text-indigo-300 border border-indigo-500/30 flex items-center gap-1 shadow-sm">
+                              <Timer className="w-3 h-3 text-indigo-400" />
+                              <span>{formatOngoingDuration(run.startedAt)}</span>
+                            </span>
+                          )}
+                          {isAway ? (
+                            <span className="px-2.5 py-0.5 rounded-full font-mono text-[10px] font-extrabold border bg-amber-500/20 text-amber-300 border-amber-400/30 flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+                              Away / In Background
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-0.5 rounded-full font-mono text-[10px] font-extrabold border bg-purple-500/20 text-purple-300 border-purple-400/30 animate-pulse">
+                              In Progress
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       <div className="flex items-center justify-between text-[11px] text-slate-400 border-b border-slate-800/60 pb-2">
@@ -2384,30 +2521,35 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         const currentStepIdx = (run.currentStepIndex !== undefined) ? run.currentStepIndex : completedSteps;
                         const currentStep = plan?.steps[Math.min(currentStepIdx, totalSteps - 1)];
                         const stepTitle = currentStep ? (currentStep.title || currentStep.feature || `Step ${currentStepIdx + 1}`) : undefined;
+                        const greenCount = completedResults.filter((r: any) => r.status === 'green').length;
+                        const yellowCount = completedResults.filter((r: any) => r.status === 'yellow').length;
+                        const redCount = completedResults.filter((r: any) => r.status === 'red').length;
                         return (
-                          <div className="bg-slate-900/60 rounded-xl px-2.5 py-1.5 border border-white/5 flex items-center justify-between text-[11px]">
-                            <span className="text-slate-400 font-mono text-[10px]">
-                              Step {Math.min(currentStepIdx + 1, totalSteps)} of {totalSteps}
-                            </span>
-                            {stepTitle && (
-                              <span className="text-indigo-300 font-semibold truncate max-w-[170px]" title={stepTitle}>
-                                {stepTitle}
+                          <>
+                            <div className="bg-slate-900/60 rounded-xl px-2.5 py-1.5 border border-white/5 flex items-center justify-between text-[11px]">
+                              <span className="text-slate-400 font-mono text-[10px]">
+                                Step {Math.min(currentStepIdx + 1, totalSteps)} of {totalSteps}
                               </span>
-                            )}
-                          </div>
+                              {stepTitle && (
+                                <span className="text-indigo-300 font-semibold truncate max-w-[170px]" title={stepTitle}>
+                                  {stepTitle}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 text-[10px]">
+                              <span className="flex items-center gap-1 text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/40">
+                                <CheckCircle2 className="w-3 h-3" /> {greenCount} Green
+                              </span>
+                              <span className="flex items-center gap-1 text-amber-400 bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-800/40">
+                                <AlertTriangle className="w-3 h-3" /> {yellowCount} Yellow
+                              </span>
+                              <span className="flex items-center gap-1 text-rose-400 bg-rose-950/60 px-1.5 py-0.5 rounded border border-rose-800/40">
+                                <XCircle className="w-3 h-3" /> {redCount} Red
+                              </span>
+                            </div>
+                          </>
                         );
                       })()}
-                      <div className="flex items-center gap-2 text-[10px]">
-                        <span className="flex items-center gap-1 text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/40">
-                          <CheckCircle2 className="w-3 h-3" /> {greenCount} Green
-                        </span>
-                        <span className="flex items-center gap-1 text-amber-400 bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-800/40">
-                          <AlertTriangle className="w-3 h-3" /> {yellowCount} Yellow
-                        </span>
-                        <span className="flex items-center gap-1 text-rose-400 bg-rose-950/60 px-1.5 py-0.5 rounded border border-rose-800/40">
-                          <XCircle className="w-3 h-3" /> {redCount} Red
-                        </span>
-                      </div>
 
                       {/* Progress bar */}
                       <div className="space-y-1">
@@ -2424,20 +2566,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       </div>
 
                       {/* Delete Session / Boot Tester Button */}
-                      {onDeleteTestRun && (
+                      {(onBootTester || onDeleteTestRun) && (
                         <div className="pt-2 border-t border-slate-800/60 flex items-center justify-end">
                           <button
                             type="button"
                             onClick={() => {
-                              if (confirm(`Boot tester "${run.testerName || 'Tester'}" off phone mode and delete this active session?`)) {
-                                onDeleteTestRun(run.id);
+                              if (confirm(`Boot tester "${run.testerName || 'Tester'}" off phone mode and terminate this active session?`)) {
+                                if (onBootTester) {
+                                  onBootTester(run.id, run.deviceId);
+                                } else if (onDeleteTestRun) {
+                                  onDeleteTestRun(run.id);
+                                }
                               }
                             }}
-                            className="px-2.5 py-1 bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 hover:text-white text-[10px] font-bold rounded-xl border border-rose-500/30 flex items-center gap-1 transition-all"
-                            title="Boot tester off phone mode and delete this test session"
+                            className="px-2.5 py-1 bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 hover:text-white text-[10px] font-bold rounded-xl border border-rose-500/30 flex items-center gap-1 transition-all cursor-pointer"
+                            title="Boot tester off phone mode and terminate this test session"
                           >
                             <Trash2 className="w-3 h-3 text-rose-400" />
-                            Boot Tester & Delete Session
+                            Boot Tester
                           </button>
                         </div>
                       )}
@@ -2456,7 +2602,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       {/* Tab 2: Feature Health Metrics */}
       {activeTab === 'features' && (
-        <div className="space-y-6 animate-liquid-fade">
+        <div className="space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 liquid-glass-panel rounded-3xl px-5 py-3.5 shadow-2xl">
             <h3 className="text-base font-extrabold text-white flex items-center gap-2 tracking-tight flex-shrink-0">
               <Tag className="w-4 h-4 text-purple-400" />
@@ -3006,7 +3152,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       {/* Tab 3: Bugs Feed */}
       {activeTab === 'bugs' && (
-        <div className="space-y-6 animate-liquid-fade">
+        <div className="space-y-6">
           
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>

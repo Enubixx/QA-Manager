@@ -33,3 +33,5 @@ dist-ssr
 jdk17/
 android/
 twa-manifest.json
+*.apk
+.env*

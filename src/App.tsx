@@ -35,6 +35,7 @@ import {
   safeDeleteTestRun,
   safeSyncDevices
 } from './services/offlineSyncQueue';
+import { APP_VERSION_CODE, CONFIG_MIN_APP_VERSION, CONFIG_DAILY_RESET_DATE } from './constants';
 
 export function App() {
   const [currentView, setCurrentView] = useState<'dashboard' | 'mobile' | 'plan-builder'>(() => {
@@ -142,11 +143,50 @@ export function App() {
     return list.filter(f => f && f.trim() !== '' && f.toLowerCase() !== 'general');
   });
 
+  const testPlansRef = useRef(testPlans);
+  useEffect(() => { testPlansRef.current = testPlans; }, [testPlans]);
+
+  const testRunsRef = useRef(testRuns);
+  useEffect(() => { testRunsRef.current = testRuns; }, [testRuns]);
+
+  const archivedRunsRef = useRef(archivedRuns);
+  useEffect(() => { archivedRunsRef.current = archivedRuns; }, [archivedRuns]);
+
+  const bugLogsRef = useRef(bugLogs);
+  useEffect(() => { bugLogsRef.current = bugLogs; }, [bugLogs]);
+
+  const populatedFeaturesRef = useRef(populatedFeatures);
+  useEffect(() => { populatedFeaturesRef.current = populatedFeatures; }, [populatedFeatures]);
+
   const devicesRef = useRef(devices);
   useEffect(() => { devicesRef.current = devices; }, [devices]);
 
   const testersRef = useRef(testers);
   useEffect(() => { testersRef.current = testers; }, [testers]);
+
+  // Daily Quota Reset check (auto resets devices to no plan assigned on date rollover)
+  const checkDailyQuotaReset = (devList: DeviceProfile[]) => {
+    const todayStr = getLocalDateStr();
+    const lastReset = localStorage.getItem('qa_last_quota_reset_date');
+    if (lastReset && lastReset !== todayStr) {
+      const resetList = devList.map(d => ({
+        ...d,
+        quotas: [],
+        isReady: true,
+        activeRunId: undefined,
+        activeTesterName: undefined
+      }));
+      localStorage.setItem('qa_last_quota_reset_date', todayStr);
+      localStorage.setItem('qa_devices_list', JSON.stringify(resetList));
+      safeSyncDevices(resetList);
+      syncPopulatedFeatureToSupabase(`${CONFIG_DAILY_RESET_DATE}:${todayStr}`);
+      return resetList;
+    }
+    if (!lastReset) {
+      localStorage.setItem('qa_last_quota_reset_date', todayStr);
+    }
+    return devList;
+  };
 
   // Supabase Initial Fetch & Real-Time Sync Subscription
   const loadCloudData = async () => {
@@ -154,20 +194,54 @@ export function App() {
     await drainOfflineQueue();
     const cloudData = await fetchAllSupabaseData();
     if (cloudData) {
-      if (cloudData.testPlans) setTestPlans(cloudData.testPlans);
-      if (cloudData.testRuns) {
+      if (cloudData.testPlans && JSON.stringify(cloudData.testPlans) !== JSON.stringify(testPlansRef.current)) {
+        setTestPlans(cloudData.testPlans);
+      }
+      if (cloudData.testRuns && JSON.stringify(cloudData.testRuns) !== JSON.stringify(testRunsRef.current)) {
         setTestRuns(cloudData.testRuns);
       }
-      if (cloudData.archivedRuns) setArchivedRuns(cloudData.archivedRuns);
-      if (cloudData.bugLogs) setBugLogs(cloudData.bugLogs);
+      if (cloudData.archivedRuns && JSON.stringify(cloudData.archivedRuns) !== JSON.stringify(archivedRunsRef.current)) {
+        setArchivedRuns(cloudData.archivedRuns);
+      }
+      if (cloudData.bugLogs && JSON.stringify(cloudData.bugLogs) !== JSON.stringify(bugLogsRef.current)) {
+        setBugLogs(cloudData.bugLogs);
+      }
       if (cloudData.populatedFeatures && cloudData.populatedFeatures.length > 0) {
-        setPopulatedFeatures(cloudData.populatedFeatures);
+        if (JSON.stringify(cloudData.populatedFeatures) !== JSON.stringify(populatedFeaturesRef.current)) {
+          setPopulatedFeatures(cloudData.populatedFeatures);
+        }
       }
       if (cloudData.devices) {
+        const currentDevices = checkDailyQuotaReset(cloudData.devices);
+
         const inProgressRuns = (cloudData.testRuns || []).filter(r => r.status === 'in_progress');
+        const allCompletedRuns = [
+          ...(cloudData.archivedRuns || []),
+          ...(cloudData.testRuns || []).filter(r => r.status === 'completed')
+        ];
+        const todayStr = getLocalDateStr();
+
+        // Calculate today's completed runs per device and plan for quota automation
+        const runsTodayPerDevice: Record<string, Record<string, number>> = {};
+        allCompletedRuns.forEach(r => {
+          if (!r.completedAt) return;
+          const rDate = getLocalDateStr(r.completedAt);
+          if (rDate !== todayStr) return;
+          const targetDev = currentDevices.find(d =>
+            (r.deviceId && (d.id === r.deviceId || d.id.toLowerCase() === r.deviceId.toLowerCase())) ||
+            (r.deviceName && d.name && d.name.toLowerCase().trim() === r.deviceName.toLowerCase().trim())
+          );
+          if (targetDev) {
+            if (!runsTodayPerDevice[targetDev.id]) runsTodayPerDevice[targetDev.id] = {};
+            runsTodayPerDevice[targetDev.id][r.planId] = (runsTodayPerDevice[targetDev.id][r.planId] || 0) + 1;
+          }
+        });
+
         let needsSync = false;
-        const syncedDevices = cloudData.devices.map(d => {
-          // Check if there is an active test run on this device
+        const syncedDevices = currentDevices.map(d => {
+          const dev = { ...d };
+
+          // 1. Align active run lock
           const matchingRun = inProgressRuns.find(r =>
             (d.activeRunId && r.id === d.activeRunId) ||
             (r.deviceId === d.id) ||
@@ -177,21 +251,33 @@ export function App() {
           if (matchingRun) {
             if (d.activeRunId !== matchingRun.id || d.activeTesterName !== matchingRun.testerName) {
               needsSync = true;
-              return {
-                ...d,
-                activeRunId: matchingRun.id,
-                activeTesterName: matchingRun.testerName
-              };
+              dev.activeRunId = matchingRun.id;
+              dev.activeTesterName = matchingRun.testerName;
             }
-          } else if (d.activeTesterName || d.activeRunId) {
-            needsSync = true;
-            return {
-              ...d,
-              activeRunId: undefined,
-              activeTesterName: undefined
-            };
+          } else if (d.activeRunId) {
+            // Check if the run has explicitly completed or was booted/terminated
+            const runCompletedOrTerminated = allCompletedRuns.some(r => r.id === d.activeRunId) ||
+              (cloudData.testRuns || []).some(r => r.id === d.activeRunId && ((r as any).status === 'terminated' || r.status === 'completed'));
+            if (runCompletedOrTerminated) {
+              needsSync = true;
+              dev.activeRunId = undefined;
+              dev.activeTesterName = undefined;
+            }
+            // If the tester is simply swiped out/backgrounded, DO NOT WIPE!
           }
-          return d;
+
+          // 2. Quota Met -> Automatic Maintenance Mode
+          const activeQuotas = (dev.quotas || []).filter(q => q.targetRunsPerDay > 0);
+          if (activeQuotas.length > 0) {
+            const devRuns = runsTodayPerDevice[dev.id] || {};
+            const allQuotasMet = activeQuotas.every(q => (devRuns[q.planId] || 0) >= q.targetRunsPerDay);
+            if (allQuotasMet && dev.isReady) {
+              needsSync = true;
+              dev.isReady = false; // Automatically flip to Maintenance
+            }
+          }
+
+          return dev;
         });
 
         if (JSON.stringify(syncedDevices) !== JSON.stringify(devicesRef.current)) {
@@ -210,8 +296,12 @@ export function App() {
 
   useEffect(() => {
     loadCloudData();
+    let debounceTimer: any = null;
     const unsubscribe = subscribeToSupabaseRealtime(() => {
-      loadCloudData();
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        loadCloudData();
+      }, 250);
     });
 
     // Handle Mobile Screen Unlock / App Resume via Capacitor native plugin
@@ -241,6 +331,7 @@ export function App() {
 
     return () => {
       unsubscribe();
+      if (debounceTimer) clearTimeout(debounceTimer);
       if (capSub && typeof capSub.remove === 'function') capSub.remove();
       window.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleWindowFocus);
@@ -595,6 +686,91 @@ export function App() {
     });
   };
 
+  // Minimum required app version configured by admin
+  const minAppVersion = React.useMemo(() => {
+    const configItem = populatedFeatures.find(f => f.startsWith(CONFIG_MIN_APP_VERSION + ':'));
+    if (configItem) {
+      const val = parseInt(configItem.split(':')[1], 10);
+      if (!isNaN(val)) return val;
+    }
+    return APP_VERSION_CODE;
+  }, [populatedFeatures]);
+
+  const handleUpdateMinAppVersion = (versionCode: number) => {
+    const configKey = `${CONFIG_MIN_APP_VERSION}:${versionCode}`;
+    setPopulatedFeatures(prev => {
+      const filtered = prev.filter(f => !f.startsWith(CONFIG_MIN_APP_VERSION + ':'));
+      const next = [...filtered, configKey];
+      localStorage.setItem('qa_populated_features', JSON.stringify(next));
+      return next;
+    });
+    syncPopulatedFeatureToSupabase(configKey);
+  };
+
+  // Daily Quota Reset: Clear all assigned test plans on devices to fresh slate
+  const handleResetDailyQuotas = () => {
+    const todayStr = getLocalDateStr();
+    setDevices(prev => {
+      const next = prev.map(d => ({
+        ...d,
+        quotas: [],
+        isReady: true,
+        activeRunId: undefined,
+        activeTesterName: undefined
+      }));
+      localStorage.setItem('qa_devices_list', JSON.stringify(next));
+      localStorage.setItem('qa_last_quota_reset_date', todayStr);
+      syncDevicesListToCloud(next);
+      return next;
+    });
+    const configKey = `${CONFIG_DAILY_RESET_DATE}:${todayStr}`;
+    syncPopulatedFeatureToSupabase(configKey);
+  };
+
+  // Remote Boot Tester: kicks active user on phone, wipes ONLY active in-progress cache, frees device to Maintenance
+  const handleBootTester = (runId: string, deviceId?: string, testerName?: string) => {
+    // 1. Mark target run as 'terminated' so phone real-time listener terminates immediately
+    setTestRuns(prev => prev.map(r => r.id === runId ? { ...r, status: 'terminated' as any } : r));
+    const targetRun = testRuns.find(r => r.id === runId);
+    if (targetRun) {
+      safeSyncTestRun({ ...targetRun, status: 'terminated' as any });
+      // Remove from database after short buffer so real-time push is received by phone
+      setTimeout(() => {
+        deleteTestRunFromSupabase(runId);
+        setTestRuns(prev => prev.filter(r => r.id !== runId));
+      }, 2000);
+    } else {
+      deleteTestRunFromSupabase(runId);
+    }
+
+    // 2. Free device lock and flip device to Maintenance (isReady: false)
+    setDevices(prev => {
+      let changed = false;
+      const next = prev.map(d => {
+        const matchesDevId = deviceId && (d.id === deviceId || d.name.toLowerCase().trim() === deviceId.toLowerCase().trim());
+        const matchesRunId = d.activeRunId === runId;
+        const matchesTester = testerName && d.activeTesterName && d.activeTesterName.toLowerCase().trim() === testerName.toLowerCase().trim();
+        if (matchesDevId || matchesRunId || matchesTester) {
+          changed = true;
+          const released = {
+            ...d,
+            activeRunId: undefined,
+            activeTesterName: undefined,
+            isReady: false // Auto Maintenance upon boot
+          };
+          syncDeviceToSupabase(released);
+          return released;
+        }
+        return d;
+      });
+      if (changed) {
+        localStorage.setItem('qa_devices_list', JSON.stringify(next));
+        syncDevicesListToCloud(next);
+      }
+      return next;
+    });
+  };
+
   const handleDeleteTester = (testerName: string) => {
     const runsToDelete = [...testRuns, ...archivedRuns].filter(
       r => (r.testerName?.trim() || 'Unassigned Tester').toLowerCase() === testerName.toLowerCase().trim()
@@ -805,7 +981,13 @@ export function App() {
     if (newBug.feature) {
       handleAddPopulatedFeature(newBug.feature);
     }
-    setBugLogs(prev => [newBug, ...prev]);
+    setBugLogs(prev => {
+      const exists = prev.some(b => b.id === newBug.id);
+      if (exists) {
+        return prev.map(b => b.id === newBug.id ? newBug : b);
+      }
+      return [newBug, ...prev];
+    });
     safeSyncBugLog(newBug);
   };
 
@@ -926,7 +1108,7 @@ export function App() {
       {/* Main View Router */}
       <main className="flex-1 relative z-10">
         {currentView === 'dashboard' && (
-          <div key="dashboard-view" className="animate-liquid-fade">
+          <div key="dashboard-view">
             <Dashboard
               testPlans={testPlans}
               testRuns={testRuns}
@@ -947,14 +1129,18 @@ export function App() {
               onAddFeature={handleAddPopulatedFeature}
               onDeleteFeature={handleDeleteFeature}
               onDeleteTestRun={handleDeleteTestRun}
+              onBootTester={handleBootTester}
               onDeleteTester={handleDeleteTester}
               onResetActiveDay={handleResetActiveDay}
+              onResetDailyQuotas={handleResetDailyQuotas}
               onSaveDevice={handleSaveDevice}
               onDeleteDevice={handleDeleteDevice}
               onSaveTester={handleSaveTester}
               onDeleteTesterProfile={handleDeleteTesterProfile}
               archivedRuns={archivedRuns}
               onRunSubagentTest={handleRunSubagentAutomatedTest}
+              minAppVersion={minAppVersion}
+              onUpdateMinAppVersion={handleUpdateMinAppVersion}
             />
           </div>
         )}
@@ -984,6 +1170,7 @@ export function App() {
               bugLogs={bugLogs}
               devices={devices}
               testers={testers}
+              minAppVersion={minAppVersion}
               onSaveDevice={handleSaveDevice}
               selectedPlanId={selectedPlanId}
               populatedDevices={populatedDevices}

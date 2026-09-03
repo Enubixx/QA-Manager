@@ -45,13 +45,14 @@ export interface TestRun {
   testerName: string;
   deviceName?: string;
   deviceId?: string;
-  status: 'not_started' | 'in_progress' | 'completed';
+  status: 'not_started' | 'in_progress' | 'completed' | 'terminated';
   currentStepIndex: number;
   results: Record<string, StepResult>; // stepId -> StepResult
   bugLogs: BugLog[];
   startedAt: string;
   completedAt?: string;
   durationMs?: number;
+  lastActivityTimestamp?: number;
 }
 
 export interface DevicePlanQuota {
