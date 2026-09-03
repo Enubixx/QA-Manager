@@ -2027,7 +2027,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             <button
                               type="button"
                               onClick={() => {
-                                if (confirm(`Remote Boot: Kick "${tester.name}" off "${activeInfo?.deviceName || 'device'}" and release device to Maintenance? (Completed runs today will NOT be deleted)`)) {
+                                if (confirm(`Remote Boot: Kick "${tester.name}" off "${activeInfo?.deviceName || 'device'}" and release device? (Completed runs today will NOT be deleted)`)) {
                                   onBootTester(activeInfo?.runId || '', activeInfo?.deviceId, tester.name, activeInfo?.deviceName);
                                 }
                               }}

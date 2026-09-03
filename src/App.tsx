@@ -803,7 +803,7 @@ export function App() {
       return next;
     });
 
-    // 4. Free device lock and flip device to Maintenance (isReady: false) in state AND sync to cloud!
+    // 4. Free device lock and release device (keep readiness intact, do NOT force maintenance)
     setDevices(prev => {
       let changed = false;
       const next = prev.map(d => {
@@ -817,7 +817,6 @@ export function App() {
             ...d,
             activeRunId: undefined,
             activeTesterName: undefined,
-            isReady: false // Auto Maintenance upon boot
           };
         }
         return d;
