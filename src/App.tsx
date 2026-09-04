@@ -287,17 +287,6 @@ export function App() {
             // If the tester is simply swiped out/backgrounded, DO NOT WIPE!
           }
 
-          // 2. Quota Met -> Automatic Maintenance Mode
-          const activeQuotas = (dev.quotas || []).filter(q => q.targetRunsPerDay > 0);
-          if (activeQuotas.length > 0) {
-            const devRuns = runsTodayPerDevice[dev.id] || {};
-            const allQuotasMet = activeQuotas.every(q => (devRuns[q.planId] || 0) >= q.targetRunsPerDay);
-            if (allQuotasMet && dev.isReady) {
-              needsSync = true;
-              dev.isReady = false; // Automatically flip to Maintenance
-            }
-          }
-
           return dev;
         });
 
@@ -915,12 +904,6 @@ export function App() {
         return run;
       })
     );
-
-    setBugLogs(prevBugs => {
-      const bugsToRemove = prevBugs.filter(b => b.timestamp && b.timestamp.slice(0, 10) === dateStr);
-      bugsToRemove.forEach(b => deleteBugLogFromSupabase(b.id));
-      return prevBugs.filter(b => !b.timestamp || b.timestamp.slice(0, 10) !== dateStr);
-    });
   };
 
   const handleDeleteBug = (bugId: string) => {

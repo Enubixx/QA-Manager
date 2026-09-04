@@ -81,21 +81,35 @@ export const fetchAllSupabaseData = async () => {
       };
     });
 
-    const bugLogs: BugLog[] = (bugsRes.data || []).map((item: any) => ({
-      id: item.id,
-      testRunId: item.test_run_id,
-      planId: item.plan_id,
-      stepId: item.step_id || '',
-      stepTitle: item.step_title || '',
-      feature: item.feature || '',
-      testerName: item.tester_name || '',
-      deviceName: item.device_name || '',
-      severity: item.severity || 'medium',
-      note: item.note || '',
-      imageUrl: item.image_url,
-      timestamp: item.timestamp || new Date().toISOString(),
-      formattedTime: item.formatted_time || new Date().toLocaleTimeString(),
-    }));
+    const bugMap = new Map<string, BugLog>();
+    (bugsRes.data || []).forEach((item: any) => {
+      bugMap.set(item.id, {
+        id: item.id,
+        testRunId: item.test_run_id,
+        planId: item.plan_id,
+        stepId: item.step_id || '',
+        stepTitle: item.step_title || '',
+        feature: item.feature || '',
+        testerName: item.tester_name || '',
+        deviceName: item.device_name || '',
+        severity: item.severity || 'medium',
+        note: item.note || '',
+        imageUrl: item.image_url,
+        timestamp: item.timestamp || new Date().toISOString(),
+        formattedTime: item.formatted_time || new Date().toLocaleTimeString(),
+      });
+    });
+
+    // Ingest embedded bugs from runs so bugs logged during testing are permanently resilient
+    [...testRuns, ...archivedRuns].forEach(run => {
+      (run.bugLogs || []).forEach(b => {
+        if (b && b.id && !bugMap.has(b.id)) {
+          bugMap.set(b.id, b);
+        }
+      });
+    });
+
+    const bugLogs: BugLog[] = Array.from(bugMap.values());
 
     const rawFeaturesData = featuresRes.data || [];
     let populatedFeatures: string[] = [];
