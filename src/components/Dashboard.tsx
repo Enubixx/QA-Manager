@@ -1575,17 +1575,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                     )}
                                   </span>
                                 </span>
-                              ) : !device.isReady ? (
+                              ) : !device.isReady && assignedQuota && doneToday >= targetRuns ? (
                                 <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-extrabold flex items-center gap-1">
                                   <XCircle className="w-3 h-3 text-amber-400" />
-                                  <span>Maintenance {assignedQuota && doneToday >= targetRuns ? '(Quota Met)' : ''}</span>
+                                  <span>Quota Met</span>
                                 </span>
-                              ) : (
-                                <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-bold flex items-center gap-1">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                                  <span>Available</span>
-                                </span>
-                              )}
+                              ) : null}
                             </div>
                             <span className="text-[11px] text-slate-400 font-mono">ID: {device.id}</span>
                           </div>
@@ -1595,7 +1590,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           {/* Readiness Toggle Button */}
                           <button
                             type="button"
-                            onClick={() => {
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
                               const updated: DeviceProfile = { ...device, isReady: !device.isReady };
                               if (onSaveDevice) onSaveDevice(updated);
                             }}

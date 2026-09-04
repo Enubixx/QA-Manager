@@ -344,11 +344,22 @@ export const syncDevicesListToCloud = async (devices: DeviceProfile[]) => {
       } catch (e) {}
     }
 
-    await supabase.from('populated_features').delete().like('feature_name', '__GLOBAL_DEVICES_CONFIG__%');
-    await supabase.from('populated_features').delete().like('feature_name', '__CONFIG_DEVICES__%');
-    await supabase.from('populated_features').upsert({
-      feature_name: '__GLOBAL_DEVICES_CONFIG__:' + JSON.stringify(mergedDevices)
-    });
+    const newFeatureKey = '__GLOBAL_DEVICES_CONFIG__:' + JSON.stringify(mergedDevices);
+    const { data: updatedData } = await supabase
+      .from('populated_features')
+      .update({ feature_name: newFeatureKey })
+      .like('feature_name', '__GLOBAL_DEVICES_CONFIG__%')
+      .select();
+
+    if (!updatedData || updatedData.length === 0) {
+      await supabase.from('populated_features').upsert({
+        feature_name: newFeatureKey
+      });
+    } else if (updatedData.length > 1) {
+      for (let i = 1; i < updatedData.length; i++) {
+        await supabase.from('populated_features').delete().eq('feature_name', updatedData[i].feature_name);
+      }
+    }
   } catch (err) {
     console.error('syncDevicesListToCloud error:', err);
   }
@@ -380,11 +391,22 @@ export const syncTestersListToCloud = async (testers: TesterProfile[]) => {
       } catch (e) {}
     }
 
-    await supabase.from('populated_features').delete().like('feature_name', '__GLOBAL_TESTERS_CONFIG__%');
-    await supabase.from('populated_features').delete().like('feature_name', '__CONFIG_TESTERS__%');
-    await supabase.from('populated_features').upsert({
-      feature_name: '__GLOBAL_TESTERS_CONFIG__:' + JSON.stringify(mergedTesters)
-    });
+    const newFeatureKey = '__GLOBAL_TESTERS_CONFIG__:' + JSON.stringify(mergedTesters);
+    const { data: updatedData } = await supabase
+      .from('populated_features')
+      .update({ feature_name: newFeatureKey })
+      .like('feature_name', '__GLOBAL_TESTERS_CONFIG__%')
+      .select();
+
+    if (!updatedData || updatedData.length === 0) {
+      await supabase.from('populated_features').upsert({
+        feature_name: newFeatureKey
+      });
+    } else if (updatedData.length > 1) {
+      for (let i = 1; i < updatedData.length; i++) {
+        await supabase.from('populated_features').delete().eq('feature_name', updatedData[i].feature_name);
+      }
+    }
   } catch (err) {
     console.error('syncTestersListToCloud error:', err);
   }

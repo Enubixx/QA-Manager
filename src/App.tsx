@@ -166,6 +166,8 @@ export function App() {
   const devicesRef = useRef(devices);
   useEffect(() => { devicesRef.current = devices; }, [devices]);
 
+  const lastDeviceEditTimeRef = useRef<number>(0);
+
   const testersRef = useRef(testers);
   useEffect(() => { testersRef.current = testers; }, [testers]);
 
@@ -216,8 +218,22 @@ export function App() {
           setPopulatedFeatures(cloudData.populatedFeatures);
         }
       }
-      if (cloudData.devices) {
-        const currentDevices = checkDailyQuotaReset(cloudData.devices);
+      if (cloudData.devices && (cloudData.devices.length > 0 || devicesRef.current.length === 0)) {
+        // If user recently made local device edits, merge optimistic local state to avoid in-flight stale cloud responses reverting user clicks
+        const isRecentUserEdit = Date.now() - lastDeviceEditTimeRef.current < 4000;
+        const baseDevices = isRecentUserEdit
+          ? cloudData.devices.map(cd => {
+              const localDev = devicesRef.current.find(ld => ld.id === cd.id);
+              if (!localDev) return cd;
+              return {
+                ...cd,
+                isReady: localDev.isReady,
+                quotas: localDev.quotas,
+              };
+            })
+          : cloudData.devices;
+
+        const currentDevices = checkDailyQuotaReset(baseDevices);
 
         const inProgressRuns = (cloudData.testRuns || []).filter(r => r.status === 'in_progress');
         const allCompletedRuns = [
@@ -338,10 +354,10 @@ export function App() {
       setLastBootSignal(signal);
     });
 
-    // Fast polling fallback for mobile devices (1.5s interval) ensures instant reaction even if WebSockets disconnect
+    // Polling fallback ensures continuous background sync without thrashing UI state
     const pollTimer = setInterval(() => {
       loadCloudData();
-    }, 1500);
+    }, 4000);
 
     return () => {
       unsubscribe();
@@ -1081,24 +1097,20 @@ export function App() {
   };
 
   const handleSaveDevice = (device: DeviceProfile) => {
-    setDevices(prev => {
-      const exists = prev.some(d => d.id === device.id);
-      const next = exists ? prev.map(d => d.id === device.id ? device : d) : [...prev, device];
-      localStorage.setItem('qa_devices_list', JSON.stringify(next));
-      syncDevicesListToCloud(next);
-      return next;
-    });
-    syncDeviceToSupabase(device);
+    lastDeviceEditTimeRef.current = Date.now();
+    const exists = devices.some(d => d.id === device.id);
+    const next = exists ? devices.map(d => d.id === device.id ? device : d) : [...devices, device];
+    setDevices(next);
+    localStorage.setItem('qa_devices_list', JSON.stringify(next));
+    syncDevicesListToCloud(next);
   };
 
   const handleDeleteDevice = (deviceId: string) => {
-    setDevices(prev => {
-      const next = prev.filter(d => d.id !== deviceId);
-      localStorage.setItem('qa_devices_list', JSON.stringify(next));
-      syncDevicesListToCloud(next);
-      return next;
-    });
-    deleteDeviceFromSupabase(deviceId);
+    lastDeviceEditTimeRef.current = Date.now();
+    const next = devices.filter(d => d.id !== deviceId);
+    setDevices(next);
+    localStorage.setItem('qa_devices_list', JSON.stringify(next));
+    syncDevicesListToCloud(next);
   };
 
   const handleSaveTester = (tester: TesterProfile) => {
