@@ -2,7 +2,7 @@ import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota } from '../types';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers } from 'lucide-react';
-import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard } from '../utils/exportUtils';
+import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard, copySingleBugToClipboard } from '../utils/exportUtils';
 import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel, discoverAvailableGeminiModels } from '../services/geminiService';
 import { toBlob } from 'html-to-image';
 
@@ -339,6 +339,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
     if (success) {
       setCopiedBugs(true);
       setTimeout(() => setCopiedBugs(false), 2500);
+    }
+  };
+
+  const [copiedSingleBugId, setCopiedSingleBugId] = useState<string | null>(null);
+
+  const handleCopySingleBug = async (bug: BugLog) => {
+    const success = await copySingleBugToClipboard(bug);
+    if (success) {
+      setCopiedSingleBugId(bug.id);
+      setTimeout(() => setCopiedSingleBugId(null), 2500);
     }
   };
 
@@ -3185,12 +3195,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 )}
               </div>
 
-              {/* Copy Filtered Bugs Button (for Messages / Email / Slack / Teams) */}
+              {/* Copy Filtered Bugs Button (with screenshots for Google Docs / Email) */}
               <button
                 type="button"
                 onClick={handleCopyBugsToClipboard}
                 className="px-3.5 py-1.5 bg-gradient-to-r from-purple-600 via-indigo-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white rounded-2xl text-xs font-bold transition flex items-center gap-1.5 shadow-lg border border-white/20 active:scale-95 cursor-pointer"
-                title="Copy filtered bugs list as well-organized text for message or email"
+                title="Copy filtered bugs list with inline screenshots formatted for Google Docs, Word, Slack, or Email"
               >
                 {copiedBugs ? (
                   <>
@@ -3200,7 +3210,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 ) : (
                   <>
                     <Copy className="w-3.5 h-3.5 text-purple-200" />
-                    <span>Copy Bugs (Message / Email)</span>
+                    <span>Copy Bugs (Google Docs)</span>
                   </>
                 )}
               </button>
@@ -3448,6 +3458,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
+                            handleCopySingleBug(bug);
+                          }}
+                          className={`p-2 rounded-xl border transition flex items-center gap-1 text-xs font-medium cursor-pointer ${
+                            copiedSingleBugId === bug.id
+                              ? 'text-emerald-300 bg-emerald-950/60 border-emerald-500/40'
+                              : 'text-slate-400 hover:text-indigo-300 hover:bg-indigo-950/40 border-transparent hover:border-indigo-800/50'
+                          }`}
+                          title="Copy this bug & screenshot formatted for Google Docs"
+                        >
+                          {copiedSingleBugId === bug.id ? (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          ) : (
+                            <Copy className="w-4 h-4" />
+                          )}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
                             onDeleteBug(bug.id);
                           }}
                           className="p-2 text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 rounded-xl border border-transparent hover:border-rose-800/50 transition"
@@ -3464,15 +3494,39 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         <div className="p-4 pt-0 border-t border-white/10 bg-slate-950/60">
                           <div className="liquid-glass-card rounded-2xl p-5 space-y-4 border-purple-500/30 text-left bg-slate-950/80 shadow-2xl mt-3">
                             
-                            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
                               <span className="text-xs font-bold text-white flex items-center gap-2 font-mono">
                                 <Tag className="w-4 h-4 text-purple-400" />
                                 Feature Category: <span className="text-purple-300">{bug.feature || 'General'}</span>
                               </span>
-                              <span className="text-xs font-mono text-indigo-300 flex items-center gap-1.5 bg-indigo-950/80 px-3 py-1 rounded-xl border border-indigo-800/40">
-                                <Clock className="w-3.5 h-3.5 text-indigo-400" />
-                                Logged at {formatted12HrTime} on {new Date(bug.timestamp).toLocaleDateString()}
-                              </span>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopySingleBug(bug)}
+                                  className={`px-3 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5 transition active:scale-95 border cursor-pointer ${
+                                    copiedSingleBugId === bug.id
+                                      ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/50 shadow-lg'
+                                      : 'bg-indigo-950/80 hover:bg-indigo-900/90 text-indigo-200 border-indigo-700/50 hover:border-indigo-500'
+                                  }`}
+                                  title="Copy this bug & screenshot formatted for Google Docs, Word, or Email"
+                                >
+                                  {copiedSingleBugId === bug.id ? (
+                                    <>
+                                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                                      <span className="text-emerald-300">Copied to Clipboard!</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Copy className="w-3.5 h-3.5 text-indigo-300" />
+                                      <span>Copy for Google Docs</span>
+                                    </>
+                                  )}
+                                </button>
+                                <span className="text-xs font-mono text-indigo-300 flex items-center gap-1.5 bg-indigo-950/80 px-3 py-1 rounded-xl border border-indigo-800/40">
+                                  <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                                  Logged at {formatted12HrTime} on {new Date(bug.timestamp).toLocaleDateString()}
+                                </span>
+                              </div>
                             </div>
 
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-5 text-xs">
@@ -3655,13 +3709,59 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <span className="text-xs text-slate-400 font-mono hidden sm:inline">
               Tap anywhere outside image or press Esc to close
             </span>
-            <button
-              type="button"
-              onClick={() => setSelectedImagePreviewUrl(null)}
-              className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-extrabold rounded-xl border border-white/15 cursor-pointer transition active:scale-95 ml-auto"
-            >
-              ← Back
-            </button>
+            <div className="flex items-center gap-2 ml-auto">
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const img = new Image();
+                    img.crossOrigin = 'anonymous';
+                    img.src = selectedImagePreviewUrl;
+                    await new Promise((resolve, reject) => {
+                      img.onload = resolve;
+                      img.onerror = reject;
+                    });
+                    const canvas = document.createElement('canvas');
+                    canvas.width = img.naturalWidth || img.width;
+                    canvas.height = img.naturalHeight || img.height;
+                    const ctx = canvas.getContext('2d');
+                    ctx?.drawImage(img, 0, 0);
+                    canvas.toBlob(async (blob) => {
+                      if (blob && navigator.clipboard && window.ClipboardItem) {
+                        await navigator.clipboard.write([
+                          new ClipboardItem({ 'image/png': blob })
+                        ]);
+                        setCopiedImage(true);
+                        setTimeout(() => setCopiedImage(false), 2000);
+                      }
+                    }, 'image/png');
+                  } catch (err) {
+                    console.error('Failed to copy image to clipboard:', err);
+                  }
+                }}
+                className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold rounded-xl border border-white/20 cursor-pointer transition active:scale-95 flex items-center gap-1.5 shadow-md"
+                title="Copy raw image to clipboard"
+              >
+                {copiedImage ? (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-emerald-300">Image Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5 text-purple-200" />
+                    <span>Copy Image</span>
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedImagePreviewUrl(null)}
+                className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-extrabold rounded-xl border border-white/15 cursor-pointer transition active:scale-95"
+              >
+                ← Back
+              </button>
+            </div>
           </div>
         </div>,
         document.getElementById('modal-portal') || document.body

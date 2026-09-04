@@ -134,21 +134,113 @@ export interface BugCopyFilterOptions {
 }
 
 /**
- * Format bugs list into plain text & rich HTML suitable for email, Slack, Teams, and messages
+ * Returns a globally accessible, public HTTPS URL for a bug screenshot.
+ * Works seamlessly with Google Docs, Microsoft Word, Slack, Notion, and Email clients.
+ */
+export function getBugPublicImageUrl(bug: BugLog): string | null {
+  if (!bug || !bug.imageUrl) return null;
+
+  // If already an HTTP/HTTPS URL, return as is
+  if (bug.imageUrl.startsWith('http://') || bug.imageUrl.startsWith('https://')) {
+    return bug.imageUrl;
+  }
+
+  // Construct canonical production endpoint for Google Docs server fetches
+  let origin = 'https://qa-manager-brown.vercel.app';
+  if (typeof window !== 'undefined' && window.location && window.location.origin) {
+    if (window.location.origin.includes('vercel.app')) {
+      origin = window.location.origin;
+    }
+  }
+
+  return `${origin}/api/bug-image?id=${encodeURIComponent(bug.id)}`;
+}
+
+const getFormattedTimestamp = (bug: BugLog) => {
+  try {
+    const d = bug.timestamp ? new Date(bug.timestamp) : new Date();
+    if (!isNaN(d.getTime())) {
+      const dateStr = d.toLocaleDateString();
+      const timeStr = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+      return `${dateStr}, ${timeStr}`;
+    }
+  } catch (e) {}
+  return bug.formattedTime || 'N/A';
+};
+
+const getSeverityBadgeStyles = (severity: string) => {
+  switch (severity?.toLowerCase()) {
+    case 'critical':
+      return { bg: '#fee2e2', text: '#991b1b', border: '#f87171' };
+    case 'high':
+      return { bg: '#ffedd5', text: '#9a3412', border: '#fb923c' };
+    case 'medium':
+      return { bg: '#fef9c3', text: '#854d0e', border: '#facc15' };
+    case 'low':
+      return { bg: '#d1fae5', text: '#065f46', border: '#34d399' };
+    default:
+      return { bg: '#f1f5f9', text: '#334155', border: '#cbd5e1' };
+  }
+};
+
+/**
+ * Format a single bug into plain text & rich Google Docs-compatible HTML
+ */
+export function formatSingleBugToText(bug: BugLog): { plainText: string; htmlText: string } {
+  const ts = getFormattedTimestamp(bug);
+  const feature = bug.feature || 'General';
+  const description = bug.note || 'No description attached.';
+  const publicImageUrl = getBugPublicImageUrl(bug);
+  const sevStyle = getSeverityBadgeStyles(bug.severity);
+  const severityUpper = (bug.severity || 'medium').toUpperCase();
+
+  // Plain Text representation
+  let plainText = `🐛 QA Bug: ${feature} [${severityUpper}]\n`;
+  plainText += `Timestamp: ${ts}\n`;
+  plainText += `Device: ${bug.deviceName || 'Mobile Device'} | Reporter: ${bug.testerName || 'Anonymous'}\n`;
+  if (bug.stepTitle) plainText += `Step: ${bug.stepTitle}\n`;
+  plainText += `Description: ${description}\n`;
+  if (publicImageUrl) {
+    plainText += `Screenshot: ${publicImageUrl}\n`;
+  }
+
+  // Rich HTML for Google Docs, Word, Slack & Email
+  let htmlText = `<div style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5; max-width: 680px; padding: 12px; border: 1px solid #e2e8f0; border-radius: 8px;">`;
+  htmlText += `<div style="font-size: 15px; font-weight: bold; margin-bottom: 6px;">`;
+  htmlText += `<span style="background-color: ${sevStyle.bg}; color: ${sevStyle.text}; border: 1px solid ${sevStyle.border}; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-right: 6px;">${severityUpper}</span>`;
+  htmlText += `<span style="color: #4338ca; font-weight: bold;">Feature: ${feature}</span>`;
+  htmlText += `</div>`;
+
+  htmlText += `<div style="font-size: 12px; color: #64748b; margin-bottom: 8px;">`;
+  htmlText += `<b>Time:</b> ${ts} &nbsp;|&nbsp; <b>Device:</b> ${bug.deviceName || 'Mobile Device'} &nbsp;|&nbsp; <b>Reporter:</b> ${bug.testerName || 'Anonymous'}`;
+  if (bug.stepTitle) {
+    htmlText += `<br/><b>Step Target:</b> ${bug.stepTitle}`;
+  }
+  htmlText += `</div>`;
+
+  htmlText += `<div style="background-color: #f8fafc; border-left: 4px solid #6366f1; padding: 10px 14px; border-radius: 4px; font-size: 13px; color: #1e293b; margin: 8px 0; line-height: 1.5;">`;
+  htmlText += `<b>Observation Log:</b><br/>${description.replace(/\n/g, '<br/>')}`;
+  htmlText += `</div>`;
+
+  if (publicImageUrl) {
+    htmlText += `<div style="margin-top: 10px;">`;
+    htmlText += `<p style="margin: 0 0 4px 0; font-size: 11px; font-weight: bold; color: #475569; text-transform: uppercase;">📷 Screenshot Evidence:</p>`;
+    htmlText += `<p style="margin: 0 0 6px 0;">`;
+    htmlText += `<img src="${publicImageUrl}" alt="Bug Screenshot" width="460" style="max-width: 460px; width: 100%; height: auto; border: 1px solid #cbd5e1; border-radius: 8px; display: block;" />`;
+    htmlText += `</p>`;
+    htmlText += `<p style="margin: 0; font-size: 11px;"><a href="${publicImageUrl}" target="_blank" style="color: #4f46e5; text-decoration: underline;">Open Full Resolution Photo ↗</a></p>`;
+    htmlText += `</div>`;
+  }
+
+  htmlText += `</div>`;
+
+  return { plainText, htmlText };
+}
+
+/**
+ * Format bugs list into plain text & rich HTML suitable for Google Docs, Word, email, Slack, and Teams
  */
 export function formatBugsToText(bugs: BugLog[], filterOptions?: BugCopyFilterOptions): { plainText: string; htmlText: string } {
-  const getFormattedTimestamp = (bug: BugLog) => {
-    try {
-      const d = bug.timestamp ? new Date(bug.timestamp) : new Date();
-      if (!isNaN(d.getTime())) {
-        const dateStr = d.toLocaleDateString();
-        const timeStr = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
-        return `${dateStr}, ${timeStr}`;
-      }
-    } catch (e) {}
-    return bug.formattedTime || 'N/A';
-  };
-
   const filterParts: string[] = [];
   if (filterOptions?.featureFilter && filterOptions.featureFilter !== 'all') {
     filterParts.push(`Feature: ${filterOptions.featureFilter}`);
@@ -176,21 +268,29 @@ export function formatBugsToText(bugs: BugLog[], filterOptions?: BugCopyFilterOp
       const ts = getFormattedTimestamp(bug);
       const feature = bug.feature || 'General';
       const description = bug.note || 'No description attached.';
+      const severity = (bug.severity || 'medium').toUpperCase();
+      const publicImageUrl = getBugPublicImageUrl(bug);
 
-      plainText += `${idx + 1}. [${ts}] Feature: ${feature}\n`;
-      plainText += `   Description: ${description}\n\n`;
+      plainText += `${idx + 1}. [${ts}] [${severity}] Feature: ${feature}\n`;
+      plainText += `   Device: ${bug.deviceName || 'Mobile Device'} | Reporter: ${bug.testerName || 'Anonymous'}\n`;
+      if (bug.stepTitle) plainText += `   Step: ${bug.stepTitle}\n`;
+      plainText += `   Description: ${description}\n`;
+      if (publicImageUrl) {
+        plainText += `   Screenshot: ${publicImageUrl}\n`;
+      }
+      plainText += `\n`;
     });
   }
   plainText += `----------------------------------------`;
 
-  // 2. Rich HTML Output for Email, Slack, Teams, Docs & Apple Notes
-  let htmlText = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5; max-width: 680px;">`;
-  htmlText += `<div style="border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 12px;">`;
-  htmlText += `<h3 style="margin: 0 0 4px 0; font-size: 16px; font-weight: 800; color: #0f172a;">`;
-  htmlText += `🐛 QA Bug Report <span style="font-size: 13px; font-weight: 600; color: #64748b;">(${bugs.length} ${bugs.length === 1 ? 'Bug' : 'Bugs'})</span>`;
-  htmlText += `</h3>`;
+  // 2. Rich HTML Output for Google Docs, Word, Slack, Teams & Email
+  let htmlText = `<div style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5; max-width: 720px;">`;
+  htmlText += `<div style="border-bottom: 2px solid #4f46e5; padding-bottom: 8px; margin-bottom: 14px;">`;
+  htmlText += `<h2 style="margin: 0 0 4px 0; font-size: 18px; font-weight: bold; color: #1e1b4b;">`;
+  htmlText += `🐛 QA Bug Report <span style="font-size: 13px; font-weight: normal; color: #64748b;">(${bugs.length} ${bugs.length === 1 ? 'Defect' : 'Defects'})</span>`;
+  htmlText += `</h2>`;
   if (filterParts.length > 0) {
-    htmlText += `<div style="font-size: 11.5px; color: #64748b; font-weight: 500;">`;
+    htmlText += `<div style="font-size: 12px; color: #64748b; margin-top: 4px;">`;
     htmlText += `<b>Filters:</b> ${filterParts.join(' | ')}`;
     htmlText += `</div>`;
   }
@@ -199,23 +299,49 @@ export function formatBugsToText(bugs: BugLog[], filterOptions?: BugCopyFilterOp
   if (bugs.length === 0) {
     htmlText += `<p style="color: #64748b; font-style: italic;">No bugs match the selected filter criteria.</p>`;
   } else {
-    htmlText += `<ol style="margin: 0; padding-left: 20px;">`;
-    bugs.forEach((bug) => {
+    bugs.forEach((bug, idx) => {
       const ts = getFormattedTimestamp(bug);
       const feature = bug.feature || 'General';
       const note = (bug.note || 'No description attached.').replace(/\n/g, '<br/>');
+      const severityUpper = (bug.severity || 'medium').toUpperCase();
+      const sevStyle = getSeverityBadgeStyles(bug.severity);
+      const publicImageUrl = getBugPublicImageUrl(bug);
 
-      htmlText += `<li style="margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #f1f5f9;">`;
-      htmlText += `<div style="font-size: 13px; font-weight: 700; color: #0f172a; margin-bottom: 4px;">`;
-      htmlText += `<span style="color: #475569; font-weight: 600; font-family: monospace;">[${ts}]</span> `;
-      htmlText += `<span style="color: #4f46e5; font-weight: 700;">Feature: ${feature}</span>`;
+      htmlText += `<div style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid #e2e8f0;">`;
+      
+      // Header row
+      htmlText += `<div style="font-size: 14px; font-weight: bold; color: #0f172a; margin-bottom: 4px;">`;
+      htmlText += `<span style="color: #4f46e5; margin-right: 6px;">#${idx + 1}</span>`;
+      htmlText += `<span style="background-color: ${sevStyle.bg}; color: ${sevStyle.text}; border: 1px solid ${sevStyle.border}; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-right: 6px;">${severityUpper}</span>`;
+      htmlText += `<span style="color: #1e293b; font-weight: bold;">Feature: ${feature}</span>`;
       htmlText += `</div>`;
-      htmlText += `<div style="background-color: #f8fafc; border-left: 3px solid #cbd5e1; padding: 8px 12px; margin: 4px 0; border-radius: 4px; font-size: 12.5px; color: #1e293b; font-weight: 500;">`;
-      htmlText += `<b>Description:</b> ${note}`;
+
+      // Metadata line
+      htmlText += `<div style="font-size: 12px; color: #64748b; margin-bottom: 8px;">`;
+      htmlText += `<b>Time:</b> ${ts} &nbsp;|&nbsp; <b>Device:</b> ${bug.deviceName || 'Mobile Device'} &nbsp;|&nbsp; <b>Tester:</b> ${bug.testerName || 'Anonymous'}`;
+      if (bug.stepTitle) {
+        htmlText += `<br/><b>Step Target:</b> ${bug.stepTitle}`;
+      }
       htmlText += `</div>`;
-      htmlText += `</li>`;
+
+      // Description box
+      htmlText += `<div style="background-color: #f8fafc; border-left: 4px solid #6366f1; padding: 10px 14px; border-radius: 4px; font-size: 13px; color: #1e293b; line-height: 1.5; margin-bottom: 10px;">`;
+      htmlText += `<b>Observation Log:</b><br/>${note}`;
+      htmlText += `</div>`;
+
+      // Evidence screenshot for Google Docs inline import
+      if (publicImageUrl) {
+        htmlText += `<div style="margin-top: 8px;">`;
+        htmlText += `<p style="margin: 0 0 4px 0; font-size: 11px; font-weight: bold; color: #475569; text-transform: uppercase;">📷 Screenshot Evidence:</p>`;
+        htmlText += `<p style="margin: 0 0 4px 0;">`;
+        htmlText += `<img src="${publicImageUrl}" alt="Bug Screenshot #${idx + 1}" width="460" style="max-width: 460px; width: 100%; height: auto; border: 1px solid #cbd5e1; border-radius: 8px; display: block;" />`;
+        htmlText += `</p>`;
+        htmlText += `<p style="margin: 0; font-size: 11px;"><a href="${publicImageUrl}" target="_blank" style="color: #4f46e5; text-decoration: underline;">Open Full Resolution Photo ↗</a></p>`;
+        htmlText += `</div>`;
+      }
+
+      htmlText += `</div>`;
     });
-    htmlText += `</ol>`;
   }
 
   htmlText += `</div>`;
@@ -253,4 +379,36 @@ export async function copyBugsToClipboard(bugs: BugLog[], filterOptions?: BugCop
     }
   }
 }
+
+/**
+ * Copy a single formatted bug (text & HTML with screenshot) to system clipboard
+ */
+export async function copySingleBugToClipboard(bug: BugLog): Promise<boolean> {
+  const { plainText, htmlText } = formatSingleBugToText(bug);
+  try {
+    if (navigator.clipboard && window.ClipboardItem) {
+      const textBlob = new Blob([plainText], { type: 'text/plain' });
+      const htmlBlob = new Blob([htmlText], { type: 'text/html' });
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/plain': textBlob,
+          'text/html': htmlBlob,
+        })
+      ]);
+      return true;
+    } else {
+      await navigator.clipboard.writeText(plainText);
+      return true;
+    }
+  } catch (err) {
+    try {
+      await navigator.clipboard.writeText(plainText);
+      return true;
+    } catch (e) {
+      console.error('Failed to copy single bug to clipboard:', e);
+      return false;
+    }
+  }
+}
+
 
