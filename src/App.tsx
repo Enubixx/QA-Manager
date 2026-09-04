@@ -760,10 +760,16 @@ export function App() {
     broadcastBootSignal(bootSignal);
     setLastBootSignal(bootSignal);
 
-    // 2. Redundant persistent boot trigger in Supabase populated_features
+    // 2. Redundant persistent boot trigger in Supabase populated_features (auto-pruned after 10s)
     const bootFeatureKey = `__BOOT__:${trimmedTester.toLowerCase()}:${trimmedDevId.toLowerCase()}:${runId || ''}:${trimmedDevName.toLowerCase()}:${Date.now()}`;
     syncPopulatedFeatureToSupabase(bootFeatureKey);
     setPopulatedFeatures(prev => [...prev.filter(f => !f.startsWith('__BOOT__')), bootFeatureKey]);
+    setTimeout(async () => {
+      try {
+        await deletePopulatedFeatureFromSupabase(bootFeatureKey);
+        setPopulatedFeatures(prev => prev.filter(f => f !== bootFeatureKey));
+      } catch (e) {}
+    }, 10000);
 
     // 3. Mark all matching runs as 'terminated' in state & Supabase (DO NOT DELETE THEM so phone detector stays triggered)
     setTestRuns(prev => {
@@ -1171,7 +1177,7 @@ export function App() {
               testPlans={testPlans}
               testRuns={testRuns}
               bugLogs={bugLogs}
-              populatedFeatures={populatedFeatures}
+              populatedFeatures={populatedFeatures.filter(f => f && !f.startsWith('__'))}
               devices={devices}
               testers={testers}
               onSelectPlanToBuild={handleCreatePlanClick}
@@ -1207,7 +1213,7 @@ export function App() {
           <div key="plan-builder-view" className="animate-liquid-fade">
             <PlanBuilder
               initialPlan={editingPlan}
-              populatedFeatures={populatedFeatures}
+              populatedFeatures={populatedFeatures.filter(f => f && !f.startsWith('__'))}
               onAddPopulatedFeature={handleAddPopulatedFeature}
               onDeleteFeature={handleDeleteFeature}
               onSavePlan={handleSavePlan}

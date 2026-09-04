@@ -435,7 +435,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       populatedFeatures
         .concat(testPlans.flatMap(p => p.steps.map(s => s.feature || '')))
         .concat(bugLogs.map(b => b.feature || ''))
-        .filter(f => f && f.trim() !== '' && f.toLowerCase() !== 'general')
+        .filter(f => f && f.trim() !== '' && f.toLowerCase() !== 'general' && !f.startsWith('__'))
     )
   ) as string[];
 
