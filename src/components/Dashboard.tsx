@@ -3590,64 +3590,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           <ChevronDown className={`w-4 h-4 transition-transform duration-300 ${isBugExpanded ? 'rotate-180 text-purple-400' : 'text-slate-400'}`} />
                         </button>
 
-                        {/* Smart Dropdown Badge 1: Bug Type */}
-                        <div className="relative inline-flex items-center" onClick={e => e.stopPropagation()}>
-                          <select
-                            value={bug.bugType || 'Bug'}
-                            onChange={e => handleUpdateBugCategorization(bug.id, 'bugType', e.target.value)}
-                            className="appearance-none text-[11px] font-bold px-2.5 py-1 pr-5 rounded-full cursor-pointer focus:outline-none transition shadow-sm bg-amber-300 text-amber-950 hover:bg-amber-200 border border-amber-400"
-                            title="Change Bug Type"
-                          >
-                            <option value="Bug" className="bg-slate-900 text-white">Bug</option>
-                            <option value="Setup Issue" className="bg-slate-900 text-white">Setup Issue</option>
-                            <option value="Known Issue" className="bg-slate-900 text-white">Known Issue</option>
-                            <option value="Feature Request" className="bg-slate-900 text-white">Feature Request</option>
-                            <option value="Misc Issue" className="bg-slate-900 text-white">Misc Issue</option>
-                          </select>
-                          <span className="absolute right-1.5 text-[9px] pointer-events-none text-amber-950 font-bold">▾</span>
-                        </div>
 
-                        {/* Smart Dropdown Badge 2: Priority */}
-                        <div className="relative inline-flex items-center" onClick={e => e.stopPropagation()}>
-                          <select
-                            value={bug.priority === '0' ? 'P0' : bug.priority === '1' ? 'P1' : bug.priority === '2' ? 'P2' : (bug.priority || (bug.severity === 'critical' ? 'P0' : bug.severity === 'high' ? 'P1' : 'P2'))}
-                            onChange={e => handleUpdateBugCategorization(bug.id, 'priority', e.target.value)}
-                            className={`appearance-none text-[11px] font-extrabold px-2.5 py-1 pr-5 rounded-full cursor-pointer focus:outline-none transition shadow-sm text-white ${
-                              (bug.priority === 'P0' || bug.priority === '0')
-                                ? 'bg-rose-600 hover:bg-rose-500 border border-rose-400'
-                                : (bug.priority === 'P1' || bug.priority === '1')
-                                ? 'bg-orange-500 hover:bg-orange-400 border border-orange-400'
-                                : 'bg-amber-500 hover:bg-amber-400 border border-amber-400'
-                            }`}
-                            title="Change Priority"
-                          >
-                            <option value="P0" className="bg-slate-900 text-white">P0</option>
-                            <option value="P1" className="bg-slate-900 text-white">P1</option>
-                            <option value="P2" className="bg-slate-900 text-white">P2</option>
-                          </select>
-                          <span className="absolute right-1.5 text-[9px] pointer-events-none text-white font-bold">▾</span>
-                        </div>
-
-                        {/* Smart Dropdown Badge 3: Status */}
-                        <div className="relative inline-flex items-center" onClick={e => e.stopPropagation()}>
-                          <select
-                            value={bug.status || 'Filed'}
-                            onChange={e => handleUpdateBugCategorization(bug.id, 'status', e.target.value)}
-                            className={`appearance-none text-[11px] font-bold px-2.5 py-1 pr-5 rounded-full cursor-pointer focus:outline-none transition shadow-sm ${
-                              bug.status === 'Filed'
-                                ? 'bg-emerald-200 text-emerald-950 hover:bg-emerald-100 border border-emerald-300'
-                                : bug.status === 'New'
-                                ? 'bg-sky-200 text-sky-950 hover:bg-sky-100 border border-sky-300'
-                                : 'bg-purple-200 text-purple-950 hover:bg-purple-100 border border-purple-300'
-                            }`}
-                            title="Change Status"
-                          >
-                            <option value="Filed" className="bg-slate-900 text-white">Filed</option>
-                            <option value="New" className="bg-slate-900 text-white">New</option>
-                            <option value="Repro'd Issue" className="bg-slate-900 text-white">Repro'd Issue</option>
-                          </select>
-                          <span className="absolute right-1.5 text-[9px] pointer-events-none font-bold text-slate-800">▾</span>
-                        </div>
 
                         <div className="flex items-center gap-1.5 font-mono text-xs text-indigo-300 font-bold bg-indigo-950/60 px-3 py-1 rounded-xl border border-indigo-800/40">
                           <Clock className="w-3.5 h-3.5 text-indigo-400" />
