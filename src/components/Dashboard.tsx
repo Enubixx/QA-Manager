@@ -332,7 +332,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [selectedFeatureFilter, setSelectedFeatureFilter] = useState<string>('all');
   const [selectedDateFilter, setSelectedDateFilter] = useState<string>('all');
   const [customDateInput, setCustomDateInput] = useState<string>('');
-  const [sortByDevice, setSortByDevice] = useState<'newest' | 'oldest' | 'device-asc' | 'device-desc' | 'severity'>('newest');
+  const [sortByDevice, setSortByDevice] = useState<'newest' | 'oldest' | 'device-asc' | 'device-desc' | 'priority' | 'severity'>('newest');
   
   // Feature Creation, Report Expand, Copy Report & Bug Filter Menu state on Dashboard
   const visualCardRef = useRef<HTMLDivElement>(null);
@@ -1384,9 +1384,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
     if (sortByDevice === 'oldest') {
       return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
     }
-    if (sortByDevice === 'severity') {
-      const sevMap = { critical: 4, high: 3, medium: 2, low: 1 };
-      return (sevMap[b.severity] || 0) - (sevMap[a.severity] || 0);
+    if (sortByDevice === 'priority' || (sortByDevice as any) === 'severity') {
+      const prioMap: Record<string, number> = { P0: 3, '0': 3, P1: 2, '1': 2, P2: 1, '2': 1 };
+      const aPrio = bugCategorizations[a.id]?.priority || a.priority || (a.severity === 'critical' ? 'P0' : a.severity === 'high' ? 'P1' : 'P2');
+      const bPrio = bugCategorizations[b.id]?.priority || b.priority || (b.severity === 'critical' ? 'P0' : b.severity === 'high' ? 'P1' : 'P2');
+      return (prioMap[bPrio] || 0) - (prioMap[aPrio] || 0);
     }
     return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
   });
@@ -3521,7 +3523,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       >
                         <option value="newest" className="bg-slate-900">Timestamp (Newest First)</option>
                         <option value="oldest" className="bg-slate-900">Timestamp (Oldest First)</option>
-                        <option value="severity" className="bg-slate-900">Severity (Critical First)</option>
+                        <option value="priority" className="bg-slate-900">Priority (P0 First)</option>
                         <option value="device-asc" className="bg-slate-900">Device Name (A → Z)</option>
                         <option value="device-desc" className="bg-slate-900">Device Name (Z → A)</option>
                       </select>
@@ -4317,7 +4319,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </li>
                 <li className="flex items-center gap-2">
                   <span className="w-1.5 h-1.5 rounded-full bg-purple-400"></span>
-                  <span><b>Clean Columns:</b> Screenshot Preview and Bug ID removed for a clean table; screenshots open via clean clickable links.</span>
+                  <span><b>Clean 10-Column Smart Table:</b> Severity, Screenshot Preview, and Bug ID removed for maximum clarity; screenshots open via clean clickable links.</span>
                 </li>
               </ul>
             </div>

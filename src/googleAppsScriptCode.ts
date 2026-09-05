@@ -5,6 +5,7 @@ export const GOOGLE_APPS_SCRIPT_CODE = `/**
  * Automatically creates individual tabs for every QA tester, formats each page
  * as a Smart Table with interactive filter dropdowns, alternating row banding,
  * smart dropdown chips (Bug Type, Priority, Status), and clickable screenshot links.
+ * (Severity, Screenshot Preview, and Bug ID have been removed as requested.)
  */
 
 var SPREADSHEET_ID = "1p5VfZLm5w9w5XGtbmKxroWwUxgWNxcwU8a0DnCoqCBk";
@@ -16,7 +17,7 @@ var BUG_TYPES = ['Bug', 'Setup Issue', 'Known Issue', 'Feature Request', 'Misc I
 var PRIORITIES = ['P0', 'P1', 'P2', '0', '1', '2'];
 var STATUSES = ['Filed', 'New', "Repro'd Issue"];
 
-// 11-column Smart Table schema (Screenshot Preview and Bug ID removed as requested)
+// 10-column Smart Table schema (Severity, Screenshot Preview, and Bug ID removed)
 var HEADERS = [
   'Bug Type',
   'Priority',
@@ -26,7 +27,6 @@ var HEADERS = [
   'Description',
   'Device',
   'Tester',
-  'Severity',
   'Test Plan / Step',
   'Screenshot Link'
 ];
@@ -40,9 +40,8 @@ var COLUMN_WIDTHS = [
   380, // F: Description
   90,  // G: Device
   110, // H: Tester
-  90,  // I: Severity
-  220, // J: Plan / Step
-  200  // K: Screenshot Link
+  220, // I: Plan / Step
+  200  // J: Screenshot Link
 ];
 
 /**
@@ -297,7 +296,7 @@ function getOrCreateTab(ss, tabName) {
  * Setup headers, column widths, freeze rows, banded rows, filters, and smart dropdowns
  */
 function setupTabFormatting(sheet) {
-  // If there are lingering columns from old 13-column version (Col 12, 13), clear them
+  // If there are lingering columns from previous 11/12/13-column versions, clear them
   var maxCols = sheet.getMaxColumns();
   if (maxCols > HEADERS.length) {
     try {
@@ -542,7 +541,6 @@ function appendOrUpdateBugs(sheet, bugs) {
     var description = bug.note || '';
     var device = bug.device_name || bug.deviceName || '';
     var tester = bug.tester_name || bug.testerName || '';
-    var severity = rawSeverity.toUpperCase();
     var stepTitle = bug.step_title || bug.stepTitle || '';
     var planStep = (bug.planName ? bug.planName + ' - ' : '') + stepTitle;
     
@@ -575,7 +573,6 @@ function appendOrUpdateBugs(sheet, bugs) {
         description,
         device,
         tester,
-        severity,
         planStep,
         imgLink
       ];
@@ -592,7 +589,6 @@ function appendOrUpdateBugs(sheet, bugs) {
         description,
         device,
         tester,
-        severity,
         planStep,
         imgLink
       ];
