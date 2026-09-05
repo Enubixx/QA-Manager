@@ -1203,7 +1203,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       let plainText = `📊 CUJ Report (${new Date().toLocaleDateString()})\n`;
       plainText += `• Coverage: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)\n`;
       plainText += `• Status: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)\n`;
-      plainText += `• Golden Runs: 🏆 ${goldenRunsAnalysis.goldenCount} / ${goldenRunsAnalysis.totalCount} (${goldenRunsAnalysis.goldenPct}% clean runs, ≤1 yellow, 0 reds)\n`;
+      plainText += `• Golden Runs: 🏆 ${goldenRunsAnalysis.goldenCount} (${goldenRunsAnalysis.goldenCount === 1 ? '1 clean run' : `${goldenRunsAnalysis.goldenCount} clean runs`}, ≤1 yellow, 0 reds)\n`;
       if (reportDisclaimer && reportDisclaimer.trim()) {
         plainText += `Disclaimer: ${reportDisclaimer.trim()}\n`;
       }
@@ -1258,7 +1258,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       htmlText += `<p style="margin: 0 0 6px 0;">📊 <b>CUJ Report</b> (${new Date().toLocaleDateString()})</p>`;
       htmlText += `<p style="margin: 0 0 4px 0;">• <b>Coverage</b>: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)</p>`;
       htmlText += `<p style="margin: 0 0 4px 0;">• <b>Status</b>: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)</p>`;
-      htmlText += `<p style="margin: 0 0 8px 0;">• <b>Golden Runs</b>: 🏆 <b>${goldenRunsAnalysis.goldenCount} / ${goldenRunsAnalysis.totalCount}</b> (${goldenRunsAnalysis.goldenPct}%) <span style="color: #64748b; font-size: 11px;">(Runs with ≤1 yellow, 0 reds)</span></p>`;
+      htmlText += `<p style="margin: 0 0 8px 0;">• <b>Golden Runs</b>: 🏆 <b>${goldenRunsAnalysis.goldenCount}</b> <span style="color: #64748b; font-size: 11px;">(≤1 yellow, 0 reds)</span></p>`;
       if (reportDisclaimer && reportDisclaimer.trim()) {
         htmlText += `<p style="margin: 0 0 8px 0; color: #475569;"><b>Disclaimer:</b> ${reportDisclaimer.trim()}</p>`;
       }
@@ -1644,7 +1644,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             {goldenRunsAnalysis.totalCount > 0 && (
               <div className="text-[10px] text-amber-300 font-mono font-bold mt-0.5 flex items-center gap-1">
                 <span>🏆</span>
-                <span>{goldenRunsAnalysis.goldenCount}/{goldenRunsAnalysis.totalCount} Golden</span>
+                <span>{goldenRunsAnalysis.goldenCount} Golden</span>
               </div>
             )}
           </div>
@@ -3032,10 +3032,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   <div className="flex items-center gap-2 bg-gradient-to-r from-amber-500/15 to-yellow-500/15 border border-amber-400/30 px-3.5 h-9 rounded-2xl shadow-inner whitespace-nowrap flex-shrink-0" title="Golden Runs: Fully completed runs with 0 reds and at most 1 yellow">
                     <span className="text-xs">🏆</span>
                     <span className="text-[11px] text-amber-300 font-bold whitespace-nowrap">Golden Runs:</span>
-                    <span className="text-xs font-black font-mono text-amber-200">{goldenRunsAnalysis.goldenCount}/{goldenRunsAnalysis.totalCount}</span>
-                    <span className="text-[10px] text-amber-300/90 font-mono font-bold bg-amber-400/20 px-1.5 py-0.5 rounded-md">
-                      {goldenRunsAnalysis.goldenPct}%
-                    </span>
+                    <span className="text-sm font-black font-mono text-amber-200">{goldenRunsAnalysis.goldenCount}</span>
                   </div>
                 </div>
               </div>
@@ -3080,16 +3077,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <span className="flex items-center gap-1.5">
                       <span>🏆</span> Golden Runs
                     </span>
-                    <span className="font-mono text-xs text-amber-400 font-bold">{goldenRunsAnalysis.goldenPct}%</span>
                   </div>
-                  <div className="text-2xl font-extrabold text-amber-200 mt-1 font-mono flex items-baseline gap-1.5">
-                    <span>{goldenRunsAnalysis.goldenCount}</span>
-                    <span className="text-sm font-normal text-slate-400">/ {goldenRunsAnalysis.totalCount}</span>
+                  <div className="text-2xl font-extrabold text-amber-200 mt-1 font-mono">
+                    {goldenRunsAnalysis.goldenCount}
                   </div>
                   <div className="text-[10px] text-amber-400/90 mt-0.5 font-medium">
-                    {goldenRunsAnalysis.totalCount === 0
-                      ? 'No completed runs'
-                      : `${goldenRunsAnalysis.goldenCount} clean run${goldenRunsAnalysis.goldenCount === 1 ? '' : 's'} (≤1 🟡, 0 🔴)`}
+                    {goldenRunsAnalysis.goldenCount === 1 ? '1 clean run' : `${goldenRunsAnalysis.goldenCount} clean runs`} (≤1 🟡, 0 🔴)
                   </div>
                 </div>
               </div>
@@ -3153,7 +3146,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </div>
                   <div className="text-[11px] text-amber-300 font-mono font-bold flex items-center gap-1.5">
                     <span>🏆</span>
-                    <span>Golden Runs: {goldenRunsAnalysis.goldenCount}/{goldenRunsAnalysis.totalCount} ({goldenRunsAnalysis.goldenPct}%)</span>
+                    <span>Golden Runs: {goldenRunsAnalysis.goldenCount}</span>
                   </div>
                 </div>
               </div>
@@ -3232,7 +3225,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                         <h4 className="text-xs font-bold text-amber-300 uppercase tracking-wider flex items-center gap-2">
                           <span>🏆</span>
-                          Golden Runs Tracker ({goldenRunsAnalysis.goldenCount} of {goldenRunsAnalysis.totalCount} Qualified)
+                          Golden Runs Tracker ({goldenRunsAnalysis.goldenCount} Qualified)
                         </h4>
                         <span className="text-[10px] font-mono text-slate-400">
                           Criterion: 100% completed execution • ≤1 Yellow • 0 Reds

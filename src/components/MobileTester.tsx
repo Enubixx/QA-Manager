@@ -1716,6 +1716,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
             const summaryYellow = summaryResultsArray.filter((r: any) => r && r.status === 'yellow').length;
             const summaryRed = summaryResultsArray.filter((r: any) => r && r.status === 'red').length;
 
+            // Golden Run evaluation:
+            // 0 Reds, at most 1 Yellow, fully completed run
+            const isGoldenRun = summaryRed === 0 && summaryYellow <= 1 && (summaryResultsArray.length >= totalSteps || totalSteps === 0);
+
             const startMs = summaryRun?.startedAt ? new Date(summaryRun.startedAt).getTime() : 0;
             const endMs = summaryRun?.completedAt ? new Date(summaryRun.completedAt).getTime() : Date.now();
             const durationSecs = (startMs > 0 && endMs > startMs) ? Math.max(1, Math.round((endMs - startMs) / 1000)) : 0;
@@ -1729,14 +1733,63 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               <div className="p-6 flex-1 flex flex-col justify-between items-center text-center space-y-4 overflow-y-auto max-h-[580px]">
                 
                 <div className="space-y-2">
-                  <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/40 shadow-xl mx-auto backdrop-blur-md">
-                    <Check className="w-6 h-6" />
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center border shadow-xl mx-auto backdrop-blur-md ${
+                    isGoldenRun
+                      ? 'bg-amber-500/25 text-amber-300 border-amber-400/80 shadow-amber-500/30'
+                      : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 shadow-emerald-500/20'
+                  }`}>
+                    {isGoldenRun ? <span className="text-2xl">🏆</span> : <Check className="w-6 h-6" />}
                   </div>
                   <h3 className="text-lg font-extrabold text-white tracking-tight">Test Plan Completed!</h3>
                   <p className="text-xs text-zinc-300 max-w-xs font-medium">
                     All steps in "{currentPlan?.name}" have been executed.
                   </p>
                 </div>
+
+                {/* Golden Run Indicator Banner */}
+                {isGoldenRun ? (
+                  <div className="w-full bg-gradient-to-r from-amber-500/20 via-yellow-500/25 to-amber-500/20 border-2 border-amber-400/80 rounded-2xl p-3.5 shadow-lg shadow-amber-500/20 flex items-center gap-3 text-left">
+                    <div className="w-11 h-11 rounded-xl bg-gradient-to-tr from-amber-500 to-yellow-400 text-slate-950 flex items-center justify-center text-2xl flex-shrink-0 shadow-md">
+                      🏆
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black uppercase tracking-wider text-amber-300">
+                          Golden Run Achieved!
+                        </span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-400/30 text-amber-200 border border-amber-300/40 font-bold">
+                          {summaryYellow === 0 ? '100% Green' : '1 Yellow Allowed'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-amber-100/90 mt-0.5 leading-snug">
+                        {summaryYellow === 0
+                          ? 'Flawless execution! Every single feature passed with green.'
+                          : 'Clean run! Passed with 0 reds and only 1 yellow warning.'}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="w-full bg-zinc-900/70 border border-zinc-800 rounded-2xl p-3 flex items-center gap-3 text-left">
+                    <div className="w-10 h-10 rounded-xl bg-zinc-800/90 text-zinc-400 flex items-center justify-center text-lg flex-shrink-0 border border-zinc-700/50">
+                      {summaryRed > 0 ? '🔴' : '🟡'}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-zinc-300">
+                          Non-Golden Run
+                        </span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 border border-zinc-700 font-medium">
+                          {summaryRed > 0 ? `${summaryRed} Red Fail` : `${summaryYellow} Yellows`}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-zinc-400 mt-0.5 leading-snug">
+                        {summaryRed > 0
+                          ? `Contains ${summaryRed} red failure${summaryRed > 1 ? 's' : ''} (Golden requires 0 reds).`
+                          : `Contains ${summaryYellow} yellow warnings (Golden allows at most 1 yellow).`}
+                      </p>
+                    </div>
+                  </div>
+                )}
 
                 {/* Results breakdown */}
                 <div className="w-full liquid-glass-panel rounded-2xl p-4 space-y-2 text-xs border border-zinc-800">
@@ -1769,6 +1822,18 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   <div className="flex justify-between text-rose-400 font-semibold">
                     <span className="flex items-center gap-1"><XCircle className="w-3.5 h-3.5 text-rose-400" /> Red (Fail):</span>
                     <span className="font-mono font-bold">{summaryRed}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-zinc-300 pt-1.5 border-t border-zinc-800 font-medium">
+                    <span>Golden Run Status:</span>
+                    {isGoldenRun ? (
+                      <span className="font-extrabold text-amber-300 flex items-center gap-1 font-mono text-xs bg-amber-500/20 px-2 py-0.5 rounded-md border border-amber-400/40">
+                        <span>🏆</span> Golden Run
+                      </span>
+                    ) : (
+                      <span className="font-semibold text-zinc-400 font-mono text-xs bg-zinc-800/80 px-2 py-0.5 rounded-md border border-zinc-700/60">
+                        {summaryRed > 0 ? `Non-Golden (${summaryRed} Red)` : `Non-Golden (${summaryYellow} Yellows)`}
+                      </span>
+                    )}
                   </div>
                 </div>
 
