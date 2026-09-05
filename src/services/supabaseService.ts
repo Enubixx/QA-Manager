@@ -252,21 +252,30 @@ export const deleteArchivedRunFromSupabase = async (runId: string) => {
 
 export const syncBugLogToSupabase = async (bug: BugLog) => {
   if (!supabase || !isSupabaseConfigured) return;
-  await supabase.from('bug_logs').upsert({
-    id: bug.id,
-    test_run_id: bug.testRunId,
-    plan_id: bug.planId,
-    step_id: bug.stepId,
-    step_title: bug.stepTitle,
-    feature: bug.feature,
-    tester_name: bug.testerName,
-    device_name: bug.deviceName,
-    severity: bug.severity,
-    note: bug.note,
-    image_url: bug.imageUrl,
-    timestamp: bug.timestamp,
-    formatted_time: bug.formattedTime,
-  });
+  try {
+    const { error } = await supabase.from('bug_logs').upsert({
+      id: bug.id,
+      test_run_id: bug.testRunId,
+      plan_id: bug.planId,
+      step_id: bug.stepId,
+      step_title: bug.stepTitle,
+      feature: bug.feature,
+      tester_name: bug.testerName,
+      device_name: bug.deviceName,
+      severity: bug.severity,
+      note: bug.note,
+      image_url: bug.imageUrl,
+      timestamp: bug.timestamp,
+      formatted_time: bug.formattedTime,
+    });
+    if (error) {
+      console.error('syncBugLogToSupabase error:', error);
+      throw error;
+    }
+  } catch (err) {
+    console.error('syncBugLogToSupabase exception:', err);
+    throw err;
+  }
 };
 
 export const deleteBugLogFromSupabase = async (bugId: string) => {

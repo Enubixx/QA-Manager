@@ -758,14 +758,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       if (bugDate && bugDate !== selectedDailySessionDate) return;
     }
 
-    // If bug belongs to a test run, ONLY include it if the test run is 100% finished and in completedRuns
-    if (bug.testRunId) {
-      const isFrom100PctCompleted = completedRuns.some(r => r.id === bug.testRunId);
-      if (!isFrom100PctCompleted) {
-        return;
-      }
-    }
-
+    // Defect belongs to the selected session date (or all dates)
     const featureName = bug.feature;
     if (!featureName || featureName.toLowerCase() === 'general') return;
     if (!featureMetricsMap[featureName]) {

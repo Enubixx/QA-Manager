@@ -787,7 +787,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       currentStepIndex: nextIndex,
       status: isDone ? 'completed' : 'in_progress',
       completedAt: isDone ? isoTimestamp : undefined,
-      durationMs: isDone ? computedDurationMs : activeRun.durationMs
+      durationMs: isDone ? computedDurationMs : activeRun.durationMs,
+      bugLogs: activeRun.bugLogs || []
     };
 
     if (isDone) {
@@ -1149,6 +1150,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         ...activeRun,
         bugLogs: [...(activeRun.bugLogs || []), newBug]
       };
+      onUpdateRun(updatedRun);
       if (currentPlan) {
         localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updatedRun));
       }

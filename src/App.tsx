@@ -237,8 +237,33 @@ export function App() {
       if (cloudData.archivedRuns && JSON.stringify(validArchivedRuns) !== JSON.stringify(archivedRunsRef.current)) {
         setArchivedRuns(validArchivedRuns);
       }
-      if (cloudData.bugLogs && JSON.stringify(cloudData.bugLogs) !== JSON.stringify(bugLogsRef.current)) {
-        setBugLogs(cloudData.bugLogs);
+      if (cloudData.bugLogs) {
+        // Resilient merge: Combine cloud bugs with local bugs so locally recorded defects are never wiped out
+        const localBugs = bugLogsRef.current || [];
+        let storedBugs: BugLog[] = [];
+        try {
+          const raw = localStorage.getItem('qa_bug_logs');
+          if (raw) storedBugs = JSON.parse(raw);
+        } catch (e) {}
+
+        const bugMap = new Map<string, BugLog>();
+        // Add cloud bugs first
+        cloudData.bugLogs.forEach(b => {
+          if (b && b.id) bugMap.set(b.id, b);
+        });
+        // Merge local bugs so anything not yet in the cloud is retained and synced
+        [...storedBugs, ...localBugs].forEach(b => {
+          if (b && b.id) {
+            if (!bugMap.has(b.id)) {
+              bugMap.set(b.id, b);
+              safeSyncBugLog(b);
+            }
+          }
+        });
+        const mergedBugs = Array.from(bugMap.values());
+        if (JSON.stringify(mergedBugs) !== JSON.stringify(bugLogsRef.current)) {
+          setBugLogs(mergedBugs);
+        }
       }
       if (cloudData.populatedFeatures && cloudData.populatedFeatures.length > 0) {
         if (JSON.stringify(cloudData.populatedFeatures) !== JSON.stringify(populatedFeaturesRef.current)) {
@@ -1058,6 +1083,32 @@ export function App() {
     // Run is only done when explicitly marked 'completed' at the final step and has actual step data recorded
     const isDone = updatedRun.status === 'completed' && stepResultsEntries.length > 0;
 
+    // Collect all bugs known for this run ID from bugLogs state and localStorage
+    const existingRunBugs = (bugLogsRef.current || []).filter(b => b.testRunId === updatedRun.id);
+    let storedBugs: BugLog[] = [];
+    try {
+      const raw = localStorage.getItem('qa_bug_logs');
+      if (raw) storedBugs = JSON.parse(raw);
+    } catch (e) {}
+    const storedRunBugs = storedBugs.filter(b => b.testRunId === updatedRun.id);
+
+    const bugMap = new Map<string, BugLog>();
+    (updatedRun.bugLogs || []).forEach(b => { if (b && b.id) bugMap.set(b.id, b); });
+    existingRunBugs.forEach(b => { if (b && b.id) bugMap.set(b.id, b); });
+    storedRunBugs.forEach(b => { if (b && b.id) bugMap.set(b.id, b); });
+    const fullBugLogs = Array.from(bugMap.values());
+
+    if (fullBugLogs.length > 0) {
+      setBugLogs(prev => {
+        const m = new Map(prev.map(b => [b.id, b]));
+        fullBugLogs.forEach(b => m.set(b.id, b));
+        const combined = Array.from(m.values());
+        try { localStorage.setItem('qa_bug_logs', JSON.stringify(combined)); } catch (e) {}
+        return combined;
+      });
+      fullBugLogs.forEach(b => safeSyncBugLog(b));
+    }
+
     if (isDone) {
       const finishTimeIso = updatedRun.completedAt || new Date().toISOString();
       const startMs = updatedRun.startedAt ? new Date(updatedRun.startedAt).getTime() : 0;
@@ -1072,6 +1123,7 @@ export function App() {
 
       const completedRun: TestRun = {
         ...updatedRun,
+        bugLogs: fullBugLogs,
         results: cleanedResults as any,
         status: 'completed',
         completedAt: finishTimeIso,
@@ -1112,15 +1164,20 @@ export function App() {
         return next;
       });
     } else {
+      const runWithBugs: TestRun = {
+        ...updatedRun,
+        bugLogs: fullBugLogs
+      };
+
       setTestRuns(prev => {
-        const exists = prev.some(r => r.id === updatedRun.id);
+        const exists = prev.some(r => r.id === runWithBugs.id);
         if (exists) {
-          return prev.map(r => r.id === updatedRun.id ? updatedRun : r);
+          return prev.map(r => r.id === runWithBugs.id ? runWithBugs : r);
         }
-        return [updatedRun, ...prev];
+        return [runWithBugs, ...prev];
       });
 
-      safeSyncTestRun(updatedRun);
+      safeSyncTestRun(runWithBugs);
     }
   };
 
@@ -1133,11 +1190,42 @@ export function App() {
     }
     setBugLogs(prev => {
       const exists = prev.some(b => b.id === newBug.id);
-      if (exists) {
-        return prev.map(b => b.id === newBug.id ? newBug : b);
-      }
-      return [newBug, ...prev];
+      const updated = exists ? prev.map(b => b.id === newBug.id ? newBug : b) : [newBug, ...prev];
+      try {
+        localStorage.setItem('qa_bug_logs', JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
     });
+
+    // Also attach the bug to the corresponding active testRun or archivedRun so it is embedded
+    if (newBug.testRunId) {
+      setTestRuns(prev => prev.map(r => {
+        if (r.id === newBug.testRunId) {
+          const exists = (r.bugLogs || []).some(b => b.id === newBug.id);
+          const updatedRun = {
+            ...r,
+            bugLogs: exists ? r.bugLogs.map(b => b.id === newBug.id ? newBug : b) : [...(r.bugLogs || []), newBug]
+          };
+          syncTestRunToSupabase(updatedRun);
+          return updatedRun;
+        }
+        return r;
+      }));
+
+      setArchivedRuns(prev => prev.map(r => {
+        if (r.id === newBug.testRunId) {
+          const exists = (r.bugLogs || []).some(b => b.id === newBug.id);
+          const updatedRun = {
+            ...r,
+            bugLogs: exists ? r.bugLogs.map(b => b.id === newBug.id ? newBug : b) : [...(r.bugLogs || []), newBug]
+          };
+          syncArchivedRunToSupabase(updatedRun);
+          return updatedRun;
+        }
+        return r;
+      }));
+    }
+
     safeSyncBugLog(newBug);
   };
 
@@ -1147,6 +1235,28 @@ export function App() {
     const planName = plan ? plan.name : 'Test Plan';
 
     setTestRuns(prev => {
+      const oldRun = prev.find(r => r.planId === planId || r.id === runIdOrPlanId);
+      if (oldRun) {
+        const stepEntries = Object.entries(oldRun.results || {}).filter(
+          ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+        );
+        const hasBugs = oldRun.bugLogs && oldRun.bugLogs.length > 0;
+        // If the session being ended had steps executed or bugs, ARCHIVE IT so results & bugs are never lost!
+        if (stepEntries.length > 0 || hasBugs) {
+          const archivedRun: TestRun = {
+            ...oldRun,
+            status: 'completed',
+            completedAt: oldRun.completedAt || new Date().toISOString()
+          };
+          setArchivedRuns(aPrev => {
+            if (aPrev.some(r => r.id === archivedRun.id)) return aPrev;
+            return [archivedRun, ...aPrev];
+          });
+          safeSyncArchivedRun(archivedRun);
+        }
+        safeDeleteTestRun(oldRun.id);
+      }
+
       // Remove any existing in-progress run for this plan
       const filtered = prev.filter(r => r.planId !== planId && r.id !== runIdOrPlanId);
       const newRun: TestRun = {
