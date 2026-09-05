@@ -1,11 +1,10 @@
 /**
  * ==============================================================================
- * QA MANAGER - AUTOMATED GOOGLE SHEETS BUG SYNC
+ * QA MANAGER - AUTOMATED GOOGLE SHEETS BUG SYNC (SMART TABLE EDITION)
  * ==============================================================================
- * This script automatically creates individual tabs for every QA tester,
- * formats columns with smart dropdowns (Bug Type, Priority, Status),
- * renders screenshots via =IMAGE(), and handles real-time bug population
- * directly from Supabase and via webhook.
+ * Automatically creates individual tabs for every QA tester, formats each page
+ * as a Smart Table with interactive filter dropdowns, alternating row banding,
+ * smart dropdown chips (Bug Type, Priority, Status), and clickable screenshot links.
  */
 
 var SPREADSHEET_ID = "1p5VfZLm5w9w5XGtbmKxroWwUxgWNxcwU8a0DnCoqCBk";
@@ -17,6 +16,7 @@ var BUG_TYPES = ['Bug', 'Setup Issue', 'Known Issue', 'Feature Request', 'Misc I
 var PRIORITIES = ['P0', 'P1', 'P2', '0', '1', '2'];
 var STATUSES = ['Filed', 'New', "Repro'd Issue"];
 
+// 11-column Smart Table schema (Screenshot Preview and Bug ID removed as requested)
 var HEADERS = [
   'Bug Type',
   'Priority',
@@ -28,29 +28,25 @@ var HEADERS = [
   'Tester',
   'Severity',
   'Test Plan / Step',
-  'Screenshot Preview',
-  'Screenshot Link',
-  'Bug ID'
+  'Screenshot Link'
 ];
 
 var COLUMN_WIDTHS = [
-  120, // A: Bug Type
+  130, // A: Bug Type
   90,  // B: Priority
-  120, // C: Status
-  160, // D: Timestamp
+  130, // C: Status
+  165, // D: Timestamp
   180, // E: Feature
   380, // F: Description
   90,  // G: Device
   110, // H: Tester
   90,  // I: Severity
   220, // J: Plan / Step
-  130, // K: Screenshot Preview
-  180, // L: Screenshot Link
-  160  // M: Bug ID
+  200  // K: Screenshot Link
 ];
 
 /**
- * Robust spreadsheet getter (works inside Sheet UI or standalone Web App / Triggers)
+ * Robust spreadsheet getter (works inside Sheet UI, standalone Web App, or Triggers)
  */
 function getSpreadsheet() {
   try {
@@ -102,8 +98,8 @@ function menuSyncNow() {
     SpreadsheetApp.getUi().alert(
       'QA Manager Sync Complete!\n\n' +
       '• Processed: ' + res.totalBugs + ' bug(s)\n' +
-      '• Tester Tabs: ' + res.testers.join(', ') + '\n' +
-      '• Master Tab: All Bugs'
+      '• Tester Smart Tables: ' + res.testers.join(', ') + '\n' +
+      '• Master Smart Table: All Bugs'
     );
   } catch (e) {
     Logger.log("Sync complete: " + JSON.stringify(res));
@@ -123,7 +119,7 @@ function installAutoSyncTrigger() {
   try {
     SpreadsheetApp.getUi().alert(
       'Auto-Sync Enabled!\n\n' +
-      'Your spreadsheet will now automatically pull and sync bugs from the database every 5 minutes.'
+      'Your spreadsheet will now automatically pull and sync bugs from the database every 5 minutes into smart tables.'
     );
   } catch (e) {}
 }
@@ -169,7 +165,7 @@ function populateAllBugs(bugs) {
     }
   }
 
-  // Populate each tester's individual tab
+  // Populate each tester's individual Smart Table tab
   var testerList = [];
   for (var tester in bugsByTester) {
     testerList.push(tester);
@@ -177,7 +173,7 @@ function populateAllBugs(bugs) {
     appendOrUpdateBugs(sheet, bugsByTester[tester]);
   }
 
-  // Also populate master "All Bugs" tab
+  // Also populate master "All Bugs" Smart Table tab
   var allSheet = getOrCreateTab(ss, 'All Bugs');
   appendOrUpdateBugs(allSheet, bugs);
 
@@ -210,8 +206,8 @@ function doGet(e) {
       '<div class="card">' +
       '<div class="badge">SYNC SUCCESSFUL</div>' +
       '<h2>Google Sheet Updated!</h2>' +
-      '<p>Successfully populated <strong>' + res.totalBugs + ' bug(s)</strong> across individual tester tabs.</p>' +
-      '<div class="testers"><strong>Updated Tabs:</strong><br>' + res.testers.join(', ') + ', All Bugs</div>' +
+      '<p>Successfully populated <strong>' + res.totalBugs + ' bug(s)</strong> across individual tester Smart Tables.</p>' +
+      '<div class="testers"><strong>Updated Smart Tables:</strong><br>' + res.testers.join(', ') + ', All Bugs</div>' +
       '<div class="close-note">This window will close automatically in 3 seconds...</div>' +
       '</div>' +
       '<script>setTimeout(function(){ window.close(); }, 3000);</script>' +
@@ -243,7 +239,7 @@ function doPost(e) {
     var res = populateAllBugs(bugs);
     return respondJson({
       status: 'success',
-      message: 'Successfully processed ' + res.totalBugs + ' bug(s) across ' + res.testers.length + ' tester tab(s).',
+      message: 'Successfully processed ' + res.totalBugs + ' bug(s) across ' + res.testers.length + ' tester smart table(s).',
       testers: res.testers,
       processedCount: res.totalBugs
     });
@@ -267,7 +263,7 @@ function onOpen() {
     .addItem('⏱️ Enable Auto-Sync (Every 5 Mins)', 'installAutoSyncTrigger')
     .addItem('🛑 Disable Auto-Sync', 'removeAutoSyncTrigger')
     .addSeparator()
-    .addItem('🎨 Reformat All Tabs & Smart Dropdowns', 'formatAllExistingTabs')
+    .addItem('🎨 Reformat All Tabs as Smart Tables', 'formatAllExistingTabs')
     .addToUi();
 }
 
@@ -281,7 +277,7 @@ function formatAllExistingTabs() {
     setupTabFormatting(sheets[i]);
   }
   try {
-    SpreadsheetApp.getUi().alert('All tabs formatted with smart dropdowns and styling!');
+    SpreadsheetApp.getUi().alert('All tabs formatted as Smart Tables with filter dropdowns and styling!');
   } catch (e) {}
 }
 
@@ -298,18 +294,28 @@ function getOrCreateTab(ss, tabName) {
 }
 
 /**
- * Setup headers, column widths, freeze rows, and smart dropdown data validations
+ * Setup headers, column widths, freeze rows, banded rows, filters, and smart dropdowns
  */
 function setupTabFormatting(sheet) {
+  // If there are lingering columns from old 13-column version (Col 12, 13), clear them
+  var maxCols = sheet.getMaxColumns();
+  if (maxCols > HEADERS.length) {
+    try {
+      sheet.getRange(1, HEADERS.length + 1, sheet.getMaxRows(), maxCols - HEADERS.length).clear();
+    } catch (e) {}
+  }
+
   // 1. Set headers
   var headerRange = sheet.getRange(1, 1, 1, HEADERS.length);
   headerRange.setValues([HEADERS]);
   headerRange.setFontWeight('bold');
   headerRange.setFontColor('#FFFFFF');
-  headerRange.setBackground('#1E293B'); // Sleek slate dark header
+  headerRange.setBackground('#1E293B'); // Sleek slate dark table header
   headerRange.setFontFamily('Arial');
   headerRange.setFontSize(10);
   headerRange.setHorizontalAlignment('left');
+  headerRange.setVerticalAlignment('middle');
+  sheet.setRowHeight(1, 38);
 
   // Freeze top row
   sheet.setFrozenRows(1);
@@ -343,11 +349,42 @@ function setupTabFormatting(sheet) {
     .build();
   sheet.getRange(2, 3, maxRows - 1, 1).setDataValidation(statusRule);
 
-  // 4. Wrap text on Description (Col F)
+  // 4. Wrap text on Description (Col F) & vertical middle alignment
   sheet.getRange(2, 6, maxRows - 1, 1).setWrap(true);
+  sheet.getRange(2, 1, maxRows - 1, HEADERS.length).setVerticalAlignment('middle');
 
-  // 5. Apply conditional formatting rules for colored chips
+  // 5. Smart Table Banding (Alternating row colors)
+  try {
+    var bandings = sheet.getBandings();
+    for (var b = 0; b < bandings.length; b++) {
+      bandings[b].remove();
+    }
+    var dataRowCount = Math.max(sheet.getLastRow(), 2);
+    var tableRange = sheet.getRange(1, 1, dataRowCount, HEADERS.length);
+    tableRange.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, true, false);
+  } catch (bandErr) {
+    Logger.log("Table banding notice: " + bandErr);
+  }
+
+  // 6. Smart Table Filter (Dropdown filtering & sorting on every header)
+  try {
+    var existingFilter = sheet.getFilter();
+    if (existingFilter) {
+      existingFilter.remove();
+    }
+    var filterRows = Math.max(sheet.getLastRow(), 2);
+    sheet.getRange(1, 1, filterRows, HEADERS.length).createFilter();
+  } catch (filterErr) {
+    Logger.log("Filter notice: " + filterErr);
+  }
+
+  // 7. Apply smart chip conditional formatting
   applyConditionalFormatting(sheet);
+
+  // 8. Set comfortable table row heights
+  if (sheet.getLastRow() > 1) {
+    sheet.setRowHeights(2, sheet.getLastRow() - 1, 34);
+  }
 }
 
 /**
@@ -459,15 +496,19 @@ function applyConditionalFormatting(sheet) {
  */
 function appendOrUpdateBugs(sheet, bugs) {
   var lastRow = sheet.getLastRow();
-  var existingIds = {};
+  var existingMap = {};
 
-  // Build map of existing bug IDs to row index
+  // Build map of existing bugs by (Timestamp + Feature)
+  // Timestamp is Col D (col 4), Feature is Col E (col 5)
   if (lastRow > 1) {
-    var idColVals = sheet.getRange(2, 13, lastRow - 1, 1).getValues();
-    for (var r = 0; r < idColVals.length; r++) {
-      var id = idColVals[r][0];
-      if (id) {
-        existingIds[id] = r + 2; // Row number in sheet
+    var numRows = lastRow - 1;
+    var keysRange = sheet.getRange(2, 4, numRows, 2).getValues();
+    for (var r = 0; r < keysRange.length; r++) {
+      var ts = String(keysRange[r][0] || '').trim();
+      var feat = String(keysRange[r][1] || '').trim();
+      var key = ts + '___' + feat;
+      if (key !== '___') {
+        existingMap[key] = r + 2; // Row number in sheet
       }
     }
   }
@@ -505,48 +546,77 @@ function appendOrUpdateBugs(sheet, bugs) {
     var stepTitle = bug.step_title || bug.stepTitle || '';
     var planStep = (bug.planName ? bug.planName + ' - ' : '') + stepTitle;
     
-    // Screenshot public proxy URL
+    // Screenshot link (hyperlink formula)
     var publicImgUrl = bug.image_url || bug.imageUrl || '';
     if (publicImgUrl && publicImgUrl.indexOf('data:image') === 0) {
       publicImgUrl = 'https://qa-manager-brown.vercel.app/api/bug-image?id=' + encodeURIComponent(bugId);
     }
 
-    var imgFormula = publicImgUrl ? '=IFERROR(IMAGE("' + publicImgUrl + '", 1), "Photo")' : 'None';
-    var imgLink = publicImgUrl ? publicImgUrl : 'None';
+    var imgLink = (publicImgUrl && publicImgUrl !== 'None')
+      ? '=HYPERLINK("' + publicImgUrl + '", "View Screenshot")'
+      : 'None';
 
-    var rowValues = [
-      bugType,
-      priority,
-      status,
-      formattedTimestamp,
-      feature,
-      description,
-      device,
-      tester,
-      severity,
-      planStep,
-      imgFormula,
-      imgLink,
-      bugId
-    ];
+    var bugKey = formattedTimestamp.trim() + '___' + feature.trim();
 
-    if (existingIds[bugId]) {
-      // Update existing row
-      var targetRow = existingIds[bugId];
+    // Preserve manual sheet dropdown changes if row already exists
+    if (existingMap[bugKey]) {
+      var targetRow = existingMap[bugKey];
+      var existingRowVals = sheet.getRange(targetRow, 1, 1, 3).getValues()[0];
+      if (existingRowVals[0]) bugType = existingRowVals[0];
+      if (existingRowVals[1]) priority = existingRowVals[1];
+      if (existingRowVals[2]) status = existingRowVals[2];
+
+      var rowValues = [
+        bugType,
+        priority,
+        status,
+        formattedTimestamp,
+        feature,
+        description,
+        device,
+        tester,
+        severity,
+        planStep,
+        imgLink
+      ];
+
       sheet.getRange(targetRow, 1, 1, rowValues.length).setValues([rowValues]);
-      if (publicImgUrl && publicImgUrl !== 'None') {
-        sheet.setRowHeight(targetRow, 70);
-      }
+      sheet.setRowHeight(targetRow, 34);
     } else {
-      // Append new row
+      var rowValues = [
+        bugType,
+        priority,
+        status,
+        formattedTimestamp,
+        feature,
+        description,
+        device,
+        tester,
+        severity,
+        planStep,
+        imgLink
+      ];
+
       sheet.appendRow(rowValues);
       var newRow = sheet.getLastRow();
-      if (publicImgUrl && publicImgUrl !== 'None') {
-        sheet.setRowHeight(newRow, 70);
-      }
-      existingIds[bugId] = newRow;
+      sheet.setRowHeight(newRow, 34);
+      existingMap[bugKey] = newRow;
     }
   }
+
+  // Update table banding and filter to cover all populated rows
+  try {
+    var finalRows = Math.max(sheet.getLastRow(), 2);
+    var filter = sheet.getFilter();
+    if (filter) filter.remove();
+    sheet.getRange(1, 1, finalRows, HEADERS.length).createFilter();
+
+    var bandings = sheet.getBandings();
+    for (var b = 0; b < bandings.length; b++) {
+      bandings[b].remove();
+    }
+    sheet.getRange(1, 1, finalRows, HEADERS.length).applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, true, false);
+  } catch (e) {}
 }
 
 /**

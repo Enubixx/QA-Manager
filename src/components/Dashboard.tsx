@@ -4305,15 +4305,19 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <ul className="space-y-1.5 text-[11px] text-slate-400">
                 <li className="flex items-center gap-2">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                  <span><b>Individual Tester Tabs:</b> Creates a separate tab for each person (e.g. John, Justin, Ed, Eric) + an All Bugs master tab.</span>
+                  <span><b>Individual Tester Smart Tables:</b> Creates a separate page for each tester (e.g. Eric, Gianna D, Ed, John) + All Bugs master table.</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+                  <span><b>Smart Table Features:</b> Interactive filter/sort dropdowns on every column, alternating banded rows, and frozen headers.</span>
                 </li>
                 <li className="flex items-center gap-2">
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-                  <span><b>Smart Dropdowns:</b> Pre-configured with Priority (P0, P1, P2), Bug Type, and Status validation chips.</span>
+                  <span><b>Smart Dropdowns:</b> Pre-configured with Bug Type, Priority (P0, P1, P2 / 0, 1, 2), and Status chips with color pills.</span>
                 </li>
                 <li className="flex items-center gap-2">
                   <span className="w-1.5 h-1.5 rounded-full bg-purple-400"></span>
-                  <span><b>Visual Screenshots:</b> Screenshots display via <code className="text-purple-300 font-mono">=IMAGE()</code> formulas directly in row cells.</span>
+                  <span><b>Clean Columns:</b> Screenshot Preview and Bug ID removed for a clean table; screenshots open via clean clickable links.</span>
                 </li>
               </ul>
             </div>
