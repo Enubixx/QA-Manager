@@ -1,10 +1,10 @@
 /**
  * ==============================================================================
- * QA MANAGER - AUTOMATED GOOGLE SHEETS BUG SYNC (NATIVE TABLE EDITION)
+ * QA MANAGER - AUTOMATED GOOGLE SHEETS BUG SYNC (DYNAMIC TEMPLATE EDITION)
  * ==============================================================================
- * Automatically creates individual tabs for every QA tester, formats each page
- * with the exact Green Table Theme matching Google Sheets native Tables,
- * interactive filter dropdowns, alternating green row banding, and smart dropdown chips.
+ * Automatically creates individual tabs for every QA tester, reads the custom
+ * column widths, text wrapping, and alignment settings from the user-formatted
+ * "All Bugs" tab, and applies them to every tester tab and any new tab created.
  * (Severity, Screenshot Preview, and Bug ID removed; Priority strictly P0, P1, P2)
  */
 
@@ -35,6 +35,7 @@ var HEADERS = [
   'Screenshot Link'   // Col 10 (J)
 ];
 
+// Default column widths (used only if All Bugs tab is not yet formatted)
 var COLUMN_WIDTHS = [
   130, // Col 1 (A): Bug Type
   90,  // Col 2 (B): Priority
@@ -83,8 +84,40 @@ function fetchBugsFromSupabase() {
 }
 
 /**
+ * Dynamically extract column widths, wrapping settings, and alignments from "All Bugs" tab
+ */
+function getTemplateSettingsFromAllBugs(ss) {
+  var allBugsSheet = ss.getSheetByName('All Bugs') || ss.getSheetByName('all bugs');
+  if (!allBugsSheet) return null;
+
+  var settings = [];
+  var lastCol = Math.min(allBugsSheet.getMaxColumns(), HEADERS.length);
+  for (var c = 1; c <= lastCol; c++) {
+    try {
+      var width = allBugsSheet.getColumnWidth(c);
+      var sampleCell = allBugsSheet.getRange(2, c);
+      var wrap = sampleCell.getWrap();
+      var wrapStrategy = sampleCell.getWrapStrategy();
+      var hAlign = sampleCell.getHorizontalAlignment();
+      var vAlign = sampleCell.getVerticalAlignment();
+      settings.push({
+        col: c,
+        width: width,
+        wrap: wrap,
+        wrapStrategy: wrapStrategy,
+        hAlign: hAlign,
+        vAlign: vAlign
+      });
+    } catch (err) {
+      Logger.log("Error reading settings for col " + c + ": " + err);
+    }
+  }
+  return settings.length > 0 ? settings : null;
+}
+
+/**
  * Master Sync Function: Pulls all bugs from Supabase, updates headers,
- * removes any legacy columns, and populates all tabs accurately.
+ * copies custom formatting from "All Bugs" to every other tab, and populates data.
  */
 function syncBugsFromDatabase() {
   var bugs = fetchBugsFromSupabase();
@@ -102,12 +135,51 @@ function menuSyncNow() {
     SpreadsheetApp.getUi().alert(
       'QA Manager Sync Complete!\n\n' +
       '• Processed: ' + res.totalBugs + ' bug(s)\n' +
-      '• Re-aligned 10-column Smart Tables: ' + res.testers.join(', ') + ', All Bugs\n' +
-      '• Columns: Bug Type, Priority, Status, Timestamp, Feature, Description, Device, Tester, Plan/Step, Screenshot Link'
+      '• Tester Tabs Formatted from "All Bugs": ' + res.testers.join(', ') + '\n' +
+      '• Master Table: All Bugs (preserved user formatting)'
     );
   } catch (e) {
     Logger.log("Sync complete: " + JSON.stringify(res));
   }
+}
+
+/**
+ * Dedicated UI Action: Copy formatting from "All Bugs" to all other tabs immediately
+ */
+function copySettingsFromAllBugs() {
+  var ss = getSpreadsheet();
+  var allBugsSheet = ss.getSheetByName('All Bugs') || ss.getSheetByName('all bugs');
+  if (!allBugsSheet) {
+    try {
+      SpreadsheetApp.getUi().alert('Could not find "All Bugs" tab to copy formatting from.');
+    } catch (e) {}
+    return;
+  }
+
+  var templateSettings = getTemplateSettingsFromAllBugs(ss);
+  if (!templateSettings) {
+    try {
+      SpreadsheetApp.getUi().alert('Could not read formatting from "All Bugs".');
+    } catch (e) {}
+    return;
+  }
+
+  var sheets = ss.getSheets();
+  var count = 0;
+  for (var i = 0; i < sheets.length; i++) {
+    var sheet = sheets[i];
+    if (sheet.getName().toLowerCase() !== 'all bugs') {
+      setupTabFormatting(sheet, templateSettings, false);
+      count++;
+    }
+  }
+
+  try {
+    SpreadsheetApp.getUi().alert(
+      'Formatting Copied Successfully!\n\n' +
+      'Copied column widths and text wrapping from "All Bugs" to ' + count + ' tab(s).'
+    );
+  } catch (e) {}
 }
 
 /**
@@ -146,7 +218,7 @@ function removeAutoSyncTrigger(silent) {
 }
 
 /**
- * Master bug population function - formats headers & re-aligns columns on EVERY sync
+ * Master bug population function - formats headers & copies "All Bugs" template to every tab
  */
 function populateAllBugs(bugs) {
   var ss = getSpreadsheet();
@@ -154,7 +226,10 @@ function populateAllBugs(bugs) {
     return { status: 'no_data', totalBugs: 0, testers: [] };
   }
 
-  // Group bugs by tester name (supporting "John/Justin" or single names)
+  // 1. Extract the user-customized column widths and wrapping from "All Bugs"
+  var templateSettings = getTemplateSettingsFromAllBugs(ss);
+
+  // 2. Group bugs by tester name (supporting "John/Justin" or single names)
   var bugsByTester = {};
   for (var i = 0; i < bugs.length; i++) {
     var bug = bugs[i];
@@ -169,18 +244,18 @@ function populateAllBugs(bugs) {
     }
   }
 
-  // Populate each tester's individual Smart Table tab
+  // 3. Populate each tester's individual tab using settings from "All Bugs"
   var testerList = [];
   for (var tester in bugsByTester) {
     testerList.push(tester);
     var sheet = getOrCreateTab(ss, tester);
-    setupTabFormatting(sheet); // ALWAYS re-align headers and delete extra columns!
+    setupTabFormatting(sheet, templateSettings, false); // Applies All Bugs formatting
     appendOrUpdateBugs(sheet, bugsByTester[tester]);
   }
 
-  // Also populate master "All Bugs" Smart Table tab
+  // 4. Populate master "All Bugs" tab (preserving user's customized column sizes and wrapping!)
   var allSheet = getOrCreateTab(ss, 'All Bugs');
-  setupTabFormatting(allSheet); // ALWAYS re-align headers and delete extra columns!
+  setupTabFormatting(allSheet, null, true); // isAllBugs = true, preserves widths & wrapping!
   appendOrUpdateBugs(allSheet, bugs);
 
   return {
@@ -212,8 +287,8 @@ function doGet(e) {
       '<div class="card">' +
       '<div class="badge">SYNC SUCCESSFUL</div>' +
       '<h2>Google Sheet Updated!</h2>' +
-      '<p>Successfully populated <strong>' + res.totalBugs + ' bug(s)</strong> across individual tester Smart Tables.</p>' +
-      '<div class="testers"><strong>Re-aligned 10-Column Tables:</strong><br>' + res.testers.join(', ') + ', All Bugs</div>' +
+      '<p>Successfully populated <strong>' + res.totalBugs + ' bug(s)</strong> with formatting copied from <strong>All Bugs</strong>.</p>' +
+      '<div class="testers"><strong>Updated Tables:</strong><br>' + res.testers.join(', ') + ', All Bugs</div>' +
       '<div class="close-note">This window will close automatically in 3 seconds...</div>' +
       '</div>' +
       '<script>setTimeout(function(){ window.close(); }, 3000);</script>' +
@@ -245,7 +320,7 @@ function doPost(e) {
     var res = populateAllBugs(bugs);
     return respondJson({
       status: 'success',
-      message: 'Successfully processed ' + res.totalBugs + ' bug(s) across ' + res.testers.length + ' tester table(s).',
+      message: 'Successfully processed ' + res.totalBugs + ' bug(s) with formatting from All Bugs.',
       testers: res.testers,
       processedCount: res.totalBugs
     });
@@ -265,7 +340,8 @@ function doPost(e) {
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('QA Manager')
-    .addItem('⚡ Sync Bugs & Fix Columns Now', 'menuSyncNow')
+    .addItem('⚡ Sync Bugs & Copy "All Bugs" Format', 'menuSyncNow')
+    .addItem('📋 Copy Formatting from "All Bugs" to All Tabs', 'copySettingsFromAllBugs')
     .addItem('⏱️ Enable Auto-Sync (Every 5 Mins)', 'installAutoSyncTrigger')
     .addItem('🛑 Disable Auto-Sync', 'removeAutoSyncTrigger')
     .addSeparator()
@@ -278,12 +354,15 @@ function onOpen() {
  */
 function formatAllExistingTabs() {
   var ss = getSpreadsheet();
+  var templateSettings = getTemplateSettingsFromAllBugs(ss);
   var sheets = ss.getSheets();
   for (var i = 0; i < sheets.length; i++) {
-    setupTabFormatting(sheets[i]);
+    var sheet = sheets[i];
+    var isAllBugs = sheet.getName().toLowerCase() === 'all bugs';
+    setupTabFormatting(sheet, templateSettings, isAllBugs);
   }
   try {
-    SpreadsheetApp.getUi().alert('All tabs re-aligned as 10-Column Green Smart Tables with P0-P2 dropdowns!');
+    SpreadsheetApp.getUi().alert('All tabs updated with column sizes and text wrapping copied from "All Bugs"!');
   } catch (e) {}
 }
 
@@ -300,8 +379,10 @@ function getOrCreateTab(ss, tabName) {
 
 /**
  * Setup headers, column widths, delete legacy extra columns, freeze rows, and set dropdowns
+ * If templateSettings is provided, copies column sizes, wrapping, and alignments from "All Bugs".
+ * If isAllBugs is true, preserves user's column sizes and wrapping intact!
  */
-function setupTabFormatting(sheet) {
+function setupTabFormatting(sheet, templateSettings, isAllBugs) {
   // 1. Delete or clear any lingering legacy columns (Col 11, 12, 13) from previous versions
   var maxCols = sheet.getMaxColumns();
   if (maxCols > HEADERS.length) {
@@ -328,9 +409,29 @@ function setupTabFormatting(sheet) {
   // Freeze top row
   sheet.setFrozenRows(1);
 
-  // 3. Set column widths
-  for (var c = 0; c < COLUMN_WIDTHS.length; c++) {
-    sheet.setColumnWidth(c + 1, COLUMN_WIDTHS[c]);
+  // 3. Set column widths & wrapping (copied from All Bugs if available)
+  if (!isAllBugs && templateSettings && templateSettings.length > 0) {
+    var maxRows = Math.max(sheet.getMaxRows(), 500);
+    for (var i = 0; i < templateSettings.length; i++) {
+      var s = templateSettings[i];
+      if (s.width && s.width > 0) {
+        sheet.setColumnWidth(s.col, s.width);
+      }
+      var colRange = sheet.getRange(2, s.col, maxRows - 1, 1);
+      if (s.wrapStrategy) {
+        try { colRange.setWrapStrategy(s.wrapStrategy); } catch (wErr) { colRange.setWrap(s.wrap); }
+      } else if (typeof s.wrap === 'boolean') {
+        colRange.setWrap(s.wrap);
+      }
+      if (s.hAlign && s.hAlign !== 'general') colRange.setHorizontalAlignment(s.hAlign);
+      if (s.vAlign) colRange.setVerticalAlignment(s.vAlign);
+    }
+  } else if (!isAllBugs) {
+    // Fallback default column widths if templateSettings not yet available
+    for (var c = 0; c < COLUMN_WIDTHS.length; c++) {
+      sheet.setColumnWidth(c + 1, COLUMN_WIDTHS[c]);
+    }
+    sheet.getRange(2, 6, Math.max(sheet.getMaxRows(), 500) - 1, 1).setWrap(true);
   }
 
   // 4. Setup Smart Dropdowns (for rows 2 to 1000)
@@ -343,7 +444,7 @@ function setupTabFormatting(sheet) {
     .build();
   sheet.getRange(2, 1, maxRows - 1, 1).setDataValidation(bugTypeRule);
 
-  // Col B: Priority Dropdown (P0, P1, P2 only - no numbers!)
+  // Col B: Priority Dropdown (P0, P1, P2 only - strictly no numbers!)
   var priorityRule = SpreadsheetApp.newDataValidation()
     .requireValueInList(PRIORITIES, true)
     .setAllowInvalid(true)
@@ -357,11 +458,7 @@ function setupTabFormatting(sheet) {
     .build();
   sheet.getRange(2, 3, maxRows - 1, 1).setDataValidation(statusRule);
 
-  // 5. Wrap text on Description (Col F) & vertical middle alignment
-  sheet.getRange(2, 6, maxRows - 1, 1).setWrap(true);
-  sheet.getRange(2, 1, maxRows - 1, HEADERS.length).setVerticalAlignment('middle');
-
-  // 6. Smart Table Filter (Dropdown filtering & sorting on every header)
+  // 5. Smart Table Filter (Dropdown filtering & sorting on every header)
   try {
     var existingFilter = sheet.getFilter();
     if (!existingFilter) {
@@ -372,7 +469,7 @@ function setupTabFormatting(sheet) {
     Logger.log("Filter notice: " + filterErr);
   }
 
-  // 7. Smart Table Banding (Green theme matching Google Tables)
+  // 6. Smart Table Banding (Green theme matching Google Tables)
   try {
     var bandings = sheet.getBandings();
     if (!bandings || bandings.length === 0) {
@@ -384,11 +481,11 @@ function setupTabFormatting(sheet) {
     Logger.log("Table banding notice: " + bandErr);
   }
 
-  // 8. Apply smart chip conditional formatting (exact colors matching user screenshot)
+  // 7. Apply smart chip conditional formatting (exact colors matching user screenshot)
   applyConditionalFormatting(sheet);
 
-  // 9. Set comfortable table row heights
-  if (sheet.getLastRow() > 1) {
+  // 8. Set comfortable table row heights (preserve All Bugs if already formatted)
+  if (!isAllBugs && sheet.getLastRow() > 1) {
     sheet.setRowHeights(2, sheet.getLastRow() - 1, 34);
   }
 }
