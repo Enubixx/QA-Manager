@@ -431,7 +431,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           body: JSON.stringify({ scriptUrl: googleSheetUrl, bugs: enriched })
         });
         const data = await res.json();
-        if (res.ok && data.status === 'success') {
+        if (res.ok && data.status === 'success' && !data.result?.raw?.includes('Sign in')) {
           success = true;
           respMsg = data.result?.message || `Successfully synced ${enriched.length} bug(s) to Google Sheets!`;
         }
@@ -439,19 +439,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
         console.warn('Proxy sync failed, attempting direct browser request:', err);
       }
 
-      // 2. Direct browser request with no-cors fallback (uses user Google session cookies)
+      // 2. Direct browser sync fallback (uses user's active Google Workspace session)
       if (!success && googleSheetUrl) {
         try {
-          await fetch(googleSheetUrl, {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ bugs: enriched })
-          });
-          success = true;
-          respMsg = `Submitted ${enriched.length} bug(s) to your Google Sheet! Check your individual tester tabs.`;
+          const syncWin = window.open(googleSheetUrl, 'qa_sync_window', 'width=520,height=520,resizable=yes,scrollbars=yes');
+          if (syncWin) {
+            success = true;
+            respMsg = `Google Sheets sync triggered in popup! Check your spreadsheet tabs.`;
+          } else {
+            window.open(googleSheetUrl, '_blank');
+            success = true;
+            respMsg = `Google Sheets sync opened in a new tab.`;
+          }
         } catch (err: any) {
-          respMsg = err.message || 'Error connecting to Google Apps Script';
+          respMsg = err.message || 'Error opening Google Apps Script sync window';
         }
       }
 
@@ -4260,10 +4261,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </button>
               </div>
 
-              <div className="pt-2 border-t border-white/5 flex items-center justify-between">
-                <span className="text-xs text-slate-300 font-medium">
-                  {processedBugs.length} bug(s) ready to sync
-                </span>
+              <div className="pt-2 border-t border-white/5 flex items-center justify-between gap-2 flex-wrap">
+                <a
+                  href="https://docs.google.com/spreadsheets/d/1p5VfZLm5w9w5XGtbmKxroWwUxgWNxcwU8a0DnCoqCBk/edit"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3 py-2 bg-slate-800/90 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 border border-slate-700 active:scale-95"
+                >
+                  <ExternalLink className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Open Spreadsheet</span>
+                </a>
                 <button
                   type="button"
                   disabled={isSyncingSheet || !googleSheetUrl.trim()}
@@ -4278,10 +4285,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   ) : (
                     <>
                       <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-200" />
-                      <span>Sync All {processedBugs.length} Bugs to Sheet</span>
+                      <span>Sync All {processedBugs.length} Bugs</span>
                     </>
                   )}
                 </button>
+              </div>
+
+              {/* In-Sheet Direct Control Tip */}
+              <div className="p-2.5 rounded-xl bg-blue-950/40 border border-blue-500/20 text-[11px] text-blue-200 leading-relaxed">
+                💡 <b>Direct in-sheet control:</b> Open your Google Sheet and click the top menu <b>QA Manager</b> &gt; <b>⚡ Sync Bugs From Database Now</b> or <b>⏱️ Enable Auto-Sync</b> to automatically pull bugs every 5 minutes.
               </div>
             </div>
 

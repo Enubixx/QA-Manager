@@ -30,6 +30,14 @@ export default async function handler(req, res) {
     });
 
     const responseText = await response.text();
+    if (responseText.includes('Sign in - Google Accounts') || responseText.includes('AccountChooser')) {
+      return res.status(401).json({
+        status: 'auth_required',
+        error: 'Google Workspace domain login required',
+        message: 'Google requires domain authentication. Syncing directly via your browser session.'
+      });
+    }
+
     let jsonResponse;
     try {
       jsonResponse = JSON.parse(responseText);

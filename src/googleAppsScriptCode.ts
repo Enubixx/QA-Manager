@@ -4,12 +4,17 @@ export const GOOGLE_APPS_SCRIPT_CODE = `/**
  * ==============================================================================
  * This script automatically creates individual tabs for every QA tester,
  * formats columns with smart dropdowns (Bug Type, Priority, Status),
- * renders screenshots via =IMAGE(), and handles real-time bug population.
+ * renders screenshots via =IMAGE(), and handles real-time bug population
+ * directly from Supabase and via webhook.
  */
+
+var SPREADSHEET_ID = "1p5VfZLm5w9w5XGtbmKxroWwUxgWNxcwU8a0DnCoqCBk";
+var SUPABASE_URL = "https://hbuvzcxhrkneywabmaod.supabase.co";
+var SUPABASE_ANON_KEY = "sb_publishable_M2JvKUmCmgShodNziXNRDw_NwYoN_Rc";
 
 // Dropdown options
 var BUG_TYPES = ['Bug', 'Setup Issue', 'Known Issue', 'Feature Request', 'Misc Issue'];
-var PRIORITIES = ['P0', 'P1', 'P2'];
+var PRIORITIES = ['P0', 'P1', 'P2', '0', '1', '2'];
 var STATUSES = ['Filed', 'New', "Repro'd Issue"];
 
 var HEADERS = [
@@ -45,51 +50,202 @@ var COLUMN_WIDTHS = [
 ];
 
 /**
+ * Robust spreadsheet getter (works inside Sheet UI or standalone Web App / Triggers)
+ */
+function getSpreadsheet() {
+  try {
+    var active = SpreadsheetApp.getActiveSpreadsheet();
+    if (active) return active;
+  } catch (e) {}
+  return SpreadsheetApp.openById(SPREADSHEET_ID);
+}
+
+/**
+ * Fetch all bug logs directly from Supabase
+ */
+function fetchBugsFromSupabase() {
+  var url = SUPABASE_URL + "/rest/v1/bug_logs?select=*&order=timestamp.asc";
+  var options = {
+    method: "get",
+    headers: {
+      "apikey": SUPABASE_ANON_KEY,
+      "Authorization": "Bearer " + SUPABASE_ANON_KEY
+    },
+    muteHttpExceptions: true
+  };
+  var response = UrlFetchApp.fetch(url, options);
+  var text = response.getContentText();
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    Logger.log("Error parsing Supabase response: " + text);
+    return [];
+  }
+}
+
+/**
+ * Master Sync Function: Pulls all bugs from Supabase and populates all tabs
+ */
+function syncBugsFromDatabase() {
+  var bugs = fetchBugsFromSupabase();
+  Logger.log("Fetched " + bugs.length + " bugs from Supabase.");
+  var result = populateAllBugs(bugs);
+  return result;
+}
+
+/**
+ * UI Menu Action: Sync Bugs Now
+ */
+function menuSyncNow() {
+  var res = syncBugsFromDatabase();
+  try {
+    SpreadsheetApp.getUi().alert(
+      'QA Manager Sync Complete!\\n\\n' +
+      '• Processed: ' + res.totalBugs + ' bug(s)\\n' +
+      '• Tester Tabs: ' + res.testers.join(', ') + '\\n' +
+      '• Master Tab: All Bugs'
+    );
+  } catch (e) {
+    Logger.log("Sync complete: " + JSON.stringify(res));
+  }
+}
+
+/**
+ * Install a 5-minute recurring background sync trigger
+ */
+function installAutoSyncTrigger() {
+  removeAutoSyncTrigger(true);
+  ScriptApp.newTrigger('syncBugsFromDatabase')
+    .timeBased()
+    .everyMinutes(5)
+    .create();
+
+  try {
+    SpreadsheetApp.getUi().alert(
+      'Auto-Sync Enabled!\\n\\n' +
+      'Your spreadsheet will now automatically pull and sync bugs from the database every 5 minutes.'
+    );
+  } catch (e) {}
+}
+
+/**
+ * Remove auto-sync background trigger
+ */
+function removeAutoSyncTrigger(silent) {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'syncBugsFromDatabase') {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+  if (!silent) {
+    try {
+      SpreadsheetApp.getUi().alert('Auto-Sync has been disabled.');
+    } catch (e) {}
+  }
+}
+
+/**
+ * Master bug population function
+ */
+function populateAllBugs(bugs) {
+  var ss = getSpreadsheet();
+  if (!Array.isArray(bugs) || bugs.length === 0) {
+    return { status: 'no_data', totalBugs: 0, testers: [] };
+  }
+
+  // Group bugs by tester name (supporting "John/Justin" or single names)
+  var bugsByTester = {};
+  for (var i = 0; i < bugs.length; i++) {
+    var bug = bugs[i];
+    var testerStr = (bug.tester_name || bug.testerName || 'Unassigned').trim();
+    var testerNames = testerStr.split(/[\\/,]/).map(function(t) { return t.trim(); }).filter(Boolean);
+    if (testerNames.length === 0) testerNames = ['Unassigned'];
+
+    for (var t = 0; t < testerNames.length; t++) {
+      var name = testerNames[t];
+      if (!bugsByTester[name]) bugsByTester[name] = [];
+      bugsByTester[name].push(bug);
+    }
+  }
+
+  // Populate each tester's individual tab
+  var testerList = [];
+  for (var tester in bugsByTester) {
+    testerList.push(tester);
+    var sheet = getOrCreateTab(ss, tester);
+    appendOrUpdateBugs(sheet, bugsByTester[tester]);
+  }
+
+  // Also populate master "All Bugs" tab
+  var allSheet = getOrCreateTab(ss, 'All Bugs');
+  appendOrUpdateBugs(allSheet, bugs);
+
+  return {
+    status: 'success',
+    totalBugs: bugs.length,
+    testers: testerList
+  };
+}
+
+/**
+ * Handle HTTP GET - triggers sync and returns rich HTML confirmation
+ */
+function doGet(e) {
+  try {
+    var res = syncBugsFromDatabase();
+    var html = '<!DOCTYPE html><html><head><meta charset="utf-8">' +
+      '<title>QA Manager Sheet Sync</title>' +
+      '<style>' +
+      'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }' +
+      '.card { background: #1e293b; border: 1px solid #334155; border-radius: 16px; padding: 32px; max-width: 440px; text-align: center; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); }' +
+      '.badge { display: inline-block; background: #166534; color: #86efac; font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 9999px; margin-bottom: 16px; }' +
+      'h2 { margin: 0 0 8px; font-size: 20px; color: #ffffff; }' +
+      'p { margin: 0 0 20px; color: #94a3b8; font-size: 14px; line-height: 1.5; }' +
+      '.testers { background: #0f172a; border-radius: 8px; padding: 12px; font-size: 13px; color: #38bdf8; margin-bottom: 20px; text-align: left; }' +
+      '.testers strong { color: #f8fafc; }' +
+      '.close-note { font-size: 12px; color: #64748b; }' +
+      '</style>' +
+      '</head><body>' +
+      '<div class="card">' +
+      '<div class="badge">SYNC SUCCESSFUL</div>' +
+      '<h2>Google Sheet Updated!</h2>' +
+      '<p>Successfully populated <strong>' + res.totalBugs + ' bug(s)</strong> across individual tester tabs.</p>' +
+      '<div class="testers"><strong>Updated Tabs:</strong><br>' + res.testers.join(', ') + ', All Bugs</div>' +
+      '<div class="close-note">This window will close automatically in 3 seconds...</div>' +
+      '</div>' +
+      '<script>setTimeout(function(){ window.close(); }, 3000);</script>' +
+      '</body></html>';
+
+    return HtmlService.createHtmlOutput(html)
+      .setTitle('QA Manager Sync')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+
+  } catch (err) {
+    return HtmlService.createHtmlOutput('<h3>Sync Error: ' + err.toString() + '</h3>');
+  }
+}
+
+/**
  * Handle HTTP POST webhooks from QA Manager
  */
 function doPost(e) {
   try {
     var raw = e && e.postData ? e.postData.contents : null;
-    if (!raw) {
-      return respondJson({ status: 'error', message: 'No postData payload received' });
+    var bugs = [];
+    if (raw) {
+      var payload = JSON.parse(raw);
+      bugs = Array.isArray(payload) ? payload : (payload.bugs || [payload]);
+    } else {
+      bugs = fetchBugsFromSupabase();
     }
 
-    var payload = JSON.parse(raw);
-    var bugs = Array.isArray(payload) ? payload : (payload.bugs || [payload]);
-
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var processedCount = 0;
-
-    // Group bugs by tester name (supporting "John/Justin" or single names)
-    var bugsByTester = {};
-    for (var i = 0; i < bugs.length; i++) {
-      var bug = bugs[i];
-      var testerStr = (bug.testerName || 'Unassigned').trim();
-      var testerNames = testerStr.split(/[\\/,]/).map(function(t) { return t.trim(); }).filter(Boolean);
-      if (testerNames.length === 0) testerNames = ['Unassigned'];
-
-      for (var t = 0; t < testerNames.length; t++) {
-        var name = testerNames[t];
-        if (!bugsByTester[name]) bugsByTester[name] = [];
-        bugsByTester[name].push(bug);
-      }
-    }
-
-    // Populate each tester's individual tab
-    for (var tester in bugsByTester) {
-      var sheet = getOrCreateTab(ss, tester);
-      appendOrUpdateBugs(sheet, bugsByTester[tester]);
-      processedCount += bugsByTester[tester].length;
-    }
-
-    // Also populate master "All Bugs" tab
-    var allSheet = getOrCreateTab(ss, 'All Bugs');
-    appendOrUpdateBugs(allSheet, bugs);
-
+    var res = populateAllBugs(bugs);
     return respondJson({
       status: 'success',
-      message: 'Successfully processed ' + bugs.length + ' bug(s) across ' + Object.keys(bugsByTester).length + ' tester tab(s).',
-      processedCount: bugs.length
+      message: 'Successfully processed ' + res.totalBugs + ' bug(s) across ' + res.testers.length + ' tester tab(s).',
+      testers: res.testers,
+      processedCount: res.totalBugs
     });
 
   } catch (err) {
@@ -102,23 +258,16 @@ function doPost(e) {
 }
 
 /**
- * Handle HTTP GET for easy testing in browser
- */
-function doGet(e) {
-  return respondJson({
-    status: 'ok',
-    message: 'QA Manager Google Apps Script Webhook is active and ready to receive bugs!'
-  });
-}
-
-/**
  * Adds custom menu in Google Sheets UI
  */
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('QA Manager')
-    .addItem('Reformat All Tabs & Dropdowns', 'formatAllExistingTabs')
-    .addItem('Setup Master Tabs', 'setupAllTabs')
+    .addItem('⚡ Sync Bugs From Database Now', 'menuSyncNow')
+    .addItem('⏱️ Enable Auto-Sync (Every 5 Mins)', 'installAutoSyncTrigger')
+    .addItem('🛑 Disable Auto-Sync', 'removeAutoSyncTrigger')
+    .addSeparator()
+    .addItem('🎨 Reformat All Tabs & Smart Dropdowns', 'formatAllExistingTabs')
     .addToUi();
 }
 
@@ -126,12 +275,14 @@ function onOpen() {
  * Format all existing tabs with smart dropdowns & styling
  */
 function formatAllExistingTabs() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ss = getSpreadsheet();
   var sheets = ss.getSheets();
   for (var i = 0; i < sheets.length; i++) {
     setupTabFormatting(sheets[i]);
   }
-  SpreadsheetApp.getUi().alert('All tabs formatted with smart dropdowns and styling!');
+  try {
+    SpreadsheetApp.getUi().alert('All tabs formatted with smart dropdowns and styling!');
+  } catch (e) {}
 }
 
 /**
@@ -218,7 +369,7 @@ function applyConditionalFormatting(sheet) {
     .setRanges([bugTypeRange])
     .build());
 
-  // Setup Issue -> Gray
+  // Setup Issue -> Gray (#E2E8F0 / #334155)
   rules.push(SpreadsheetApp.newConditionalFormatRule()
     .whenTextEqualTo('Setup Issue')
     .setBackground('#E2E8F0')
@@ -226,27 +377,51 @@ function applyConditionalFormatting(sheet) {
     .setRanges([bugTypeRange])
     .build());
 
-  // Priority P0 -> Soft Red
+  // Known Issue -> Amber (#FEF3C7 / #92400E)
   rules.push(SpreadsheetApp.newConditionalFormatRule()
-    .whenTextEqualTo('P0')
+    .whenTextEqualTo('Known Issue')
+    .setBackground('#FEF3C7')
+    .setFontColor('#92400E')
+    .setRanges([bugTypeRange])
+    .build());
+
+  // Feature Request -> Soft Purple (#EDE9FE / #5B21B6)
+  rules.push(SpreadsheetApp.newConditionalFormatRule()
+    .whenTextEqualTo('Feature Request')
+    .setBackground('#EDE9FE')
+    .setFontColor('#5B21B6')
+    .setRanges([bugTypeRange])
+    .build());
+
+  // Misc Issue -> Blue Gray (#F1F5F9 / #475569)
+  rules.push(SpreadsheetApp.newConditionalFormatRule()
+    .whenTextEqualTo('Misc Issue')
+    .setBackground('#F1F5F9')
+    .setFontColor('#475569')
+    .setRanges([bugTypeRange])
+    .build());
+
+  // Priority P0 or 0 -> Soft Red
+  rules.push(SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=OR(B2="P0", B2="0", B2=0)')
     .setBackground('#FEE2E2')
     .setFontColor('#991B1B')
     .setBold(true)
     .setRanges([priorityRange])
     .build());
 
-  // Priority P1 -> Soft Orange
+  // Priority P1 or 1 -> Soft Orange
   rules.push(SpreadsheetApp.newConditionalFormatRule()
-    .whenTextEqualTo('P1')
+    .whenFormulaSatisfied('=OR(B2="P1", B2="1", B2=1)')
     .setBackground('#FFEDD5')
     .setFontColor('#C2410C')
     .setBold(true)
     .setRanges([priorityRange])
     .build());
 
-  // Priority P2 -> Soft Amber
+  // Priority P2 or 2 -> Soft Amber
   rules.push(SpreadsheetApp.newConditionalFormatRule()
-    .whenTextEqualTo('P2')
+    .whenFormulaSatisfied('=OR(B2="P2", B2="2", B2=2)')
     .setBackground('#FEF9C3')
     .setFontColor('#854D0E')
     .setRanges([priorityRange])
@@ -301,34 +476,38 @@ function appendOrUpdateBugs(sheet, bugs) {
     var bug = bugs[i];
     var bugId = bug.id || ('bug-' + Date.now() + '-' + i);
 
-    // Format fields
-    var bugType = bug.bugType || 'Bug';
-    var priority = bug.priority || (bug.severity === 'critical' ? 'P0' : bug.severity === 'high' ? 'P1' : 'P2');
+    // Format fields (supporting both camelCase and snake_case)
+    var bugType = bug.bugType || bug.bug_type || 'Bug';
+    var rawSeverity = (bug.severity || 'medium').toLowerCase();
+    var defaultPrio = rawSeverity === 'critical' ? 'P0' : rawSeverity === 'high' ? 'P1' : 'P2';
+    var priority = bug.priority || defaultPrio;
     var status = bug.status || 'Filed';
 
+    var rawTs = bug.timestamp || bug.created_at;
     var formattedTimestamp = '';
-    if (bug.timestamp) {
+    if (rawTs) {
       try {
-        var d = new Date(bug.timestamp);
+        var d = new Date(rawTs);
         formattedTimestamp = '[' + (d.getMonth() + 1) + '/' + d.getDate() + '/' + d.getFullYear() + ', ' +
           d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true }) + ']';
       } catch (e) {
-        formattedTimestamp = '[' + (bug.formattedTime || bug.timestamp) + ']';
+        formattedTimestamp = '[' + (bug.formatted_time || bug.formattedTime || rawTs) + ']';
       }
     } else {
-      formattedTimestamp = '[' + (bug.formattedTime || 'N/A') + ']';
+      formattedTimestamp = '[' + (bug.formatted_time || bug.formattedTime || 'N/A') + ']';
     }
 
     var feature = bug.feature || 'General';
     var description = bug.note || '';
-    var device = bug.deviceName || '';
-    var tester = bug.testerName || '';
-    var severity = (bug.severity || 'medium').toUpperCase();
-    var planStep = (bug.planName ? bug.planName + ' - ' : '') + (bug.stepTitle || '');
+    var device = bug.device_name || bug.deviceName || '';
+    var tester = bug.tester_name || bug.testerName || '';
+    var severity = rawSeverity.toUpperCase();
+    var stepTitle = bug.step_title || bug.stepTitle || '';
+    var planStep = (bug.planName ? bug.planName + ' - ' : '') + stepTitle;
     
     // Screenshot public proxy URL
-    var publicImgUrl = bug.imageUrl || '';
-    if (publicImgUrl.startsWith('data:image')) {
+    var publicImgUrl = bug.image_url || bug.imageUrl || '';
+    if (publicImgUrl && publicImgUrl.indexOf('data:image') === 0) {
       publicImgUrl = 'https://qa-manager-brown.vercel.app/api/bug-image?id=' + encodeURIComponent(bugId);
     }
 
@@ -355,14 +534,14 @@ function appendOrUpdateBugs(sheet, bugs) {
       // Update existing row
       var targetRow = existingIds[bugId];
       sheet.getRange(targetRow, 1, 1, rowValues.length).setValues([rowValues]);
-      if (publicImgUrl) {
+      if (publicImgUrl && publicImgUrl !== 'None') {
         sheet.setRowHeight(targetRow, 70);
       }
     } else {
       // Append new row
       sheet.appendRow(rowValues);
       var newRow = sheet.getLastRow();
-      if (publicImgUrl) {
+      if (publicImgUrl && publicImgUrl !== 'None') {
         sheet.setRowHeight(newRow, 70);
       }
       existingIds[bugId] = newRow;
