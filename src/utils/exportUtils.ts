@@ -185,50 +185,36 @@ const getSeverityBadgeStyles = (severity: string) => {
 
 /**
  * Format a single bug into plain text & rich Google Docs-compatible HTML
+ * using the clean original format requested by the user:
+ * [Timestamp] Feature: <Feature>
+ * Description: <Description>
+ * <Screenshot Image>
  */
 export function formatSingleBugToText(bug: BugLog): { plainText: string; htmlText: string } {
   const ts = getFormattedTimestamp(bug);
   const feature = bug.feature || 'General';
   const description = bug.note || 'No description attached.';
   const publicImageUrl = getBugPublicImageUrl(bug);
-  const sevStyle = getSeverityBadgeStyles(bug.severity);
-  const severityUpper = (bug.severity || 'medium').toUpperCase();
 
-  // Plain Text representation
-  let plainText = `🐛 QA Bug: ${feature} [${severityUpper}]\n`;
-  plainText += `Timestamp: ${ts}\n`;
-  plainText += `Device: ${bug.deviceName || 'Mobile Device'} | Reporter: ${bug.testerName || 'Anonymous'}\n`;
-  if (bug.stepTitle) plainText += `Step: ${bug.stepTitle}\n`;
-  plainText += `Description: ${description}\n`;
+  // Plain Text representation (clean old style)
+  let plainText = `[${ts}] Feature: ${feature}\nDescription: ${description}\n`;
   if (publicImageUrl) {
     plainText += `Screenshot: ${publicImageUrl}\n`;
   }
 
-  // Rich HTML for Google Docs, Word, Slack & Email
-  let htmlText = `<div style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5; max-width: 680px; padding: 12px; border: 1px solid #e2e8f0; border-radius: 8px;">`;
-  htmlText += `<div style="font-size: 15px; font-weight: bold; margin-bottom: 6px;">`;
-  htmlText += `<span style="background-color: ${sevStyle.bg}; color: ${sevStyle.text}; border: 1px solid ${sevStyle.border}; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-right: 6px;">${severityUpper}</span>`;
-  htmlText += `<span style="color: #4338ca; font-weight: bold;">Feature: ${feature}</span>`;
+  // Rich HTML for Google Docs (clean old style + inline screenshot)
+  let htmlText = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5; max-width: 680px; margin-bottom: 14px;">`;
+  htmlText += `<div style="font-size: 13px; font-weight: 700; color: #0f172a; margin-bottom: 4px;">`;
+  htmlText += `<span style="color: #475569; font-weight: 600;">[${ts}]</span> `;
+  htmlText += `<span style="color: #4f46e5; font-weight: 700;">Feature: ${feature}</span>`;
   htmlText += `</div>`;
-
-  htmlText += `<div style="font-size: 12px; color: #64748b; margin-bottom: 8px;">`;
-  htmlText += `<b>Time:</b> ${ts} &nbsp;|&nbsp; <b>Device:</b> ${bug.deviceName || 'Mobile Device'} &nbsp;|&nbsp; <b>Reporter:</b> ${bug.testerName || 'Anonymous'}`;
-  if (bug.stepTitle) {
-    htmlText += `<br/><b>Step Target:</b> ${bug.stepTitle}`;
-  }
-  htmlText += `</div>`;
-
-  htmlText += `<div style="background-color: #f8fafc; border-left: 4px solid #6366f1; padding: 10px 14px; border-radius: 4px; font-size: 13px; color: #1e293b; margin: 8px 0; line-height: 1.5;">`;
-  htmlText += `<b>Observation Log:</b><br/>${description.replace(/\n/g, '<br/>')}`;
+  htmlText += `<div style="margin: 4px 0; font-size: 13px; color: #1e293b;">`;
+  htmlText += `<b>Description:</b> ${description.replace(/\n/g, '<br/>')}`;
   htmlText += `</div>`;
 
   if (publicImageUrl) {
-    htmlText += `<div style="margin-top: 10px;">`;
-    htmlText += `<p style="margin: 0 0 4px 0; font-size: 11px; font-weight: bold; color: #475569; text-transform: uppercase;">📷 Screenshot Evidence:</p>`;
-    htmlText += `<p style="margin: 0 0 6px 0;">`;
-    htmlText += `<img src="${publicImageUrl}" alt="Bug Screenshot" width="460" style="max-width: 460px; width: 100%; height: auto; border: 1px solid #cbd5e1; border-radius: 8px; display: block;" />`;
-    htmlText += `</p>`;
-    htmlText += `<p style="margin: 0; font-size: 11px;"><a href="${publicImageUrl}" target="_blank" style="color: #4f46e5; text-decoration: underline;">Open Full Resolution Photo ↗</a></p>`;
+    htmlText += `<div style="margin-top: 8px;">`;
+    htmlText += `<img src="${publicImageUrl}" alt="Bug Screenshot" width="450" style="max-width: 450px; width: 100%; height: auto; border-radius: 6px; display: block; border: 1px solid #cbd5e1;" />`;
     htmlText += `</div>`;
   }
 
@@ -239,111 +225,60 @@ export function formatSingleBugToText(bug: BugLog): { plainText: string; htmlTex
 
 /**
  * Format bugs list into plain text & rich HTML suitable for Google Docs, Word, email, Slack, and Teams
+ * using the clean original format requested by the user:
+ * [Timestamp] Feature: <Feature>
+ * Description: <Description>
+ * <Screenshot Image>
  */
 export function formatBugsToText(bugs: BugLog[], filterOptions?: BugCopyFilterOptions): { plainText: string; htmlText: string } {
-  const filterParts: string[] = [];
-  if (filterOptions?.featureFilter && filterOptions.featureFilter !== 'all') {
-    filterParts.push(`Feature: ${filterOptions.featureFilter}`);
-  }
-  if (filterOptions?.deviceFilter && filterOptions.deviceFilter !== 'all') {
-    filterParts.push(`Device: ${filterOptions.deviceFilter}`);
-  }
-  if (filterOptions?.dateFilter && filterOptions.dateFilter !== 'all') {
-    filterParts.push(`Date: ${filterOptions.dateFilter}`);
-  }
-  if (filterOptions?.searchQuery) {
-    filterParts.push(`Search: "${filterOptions.searchQuery}"`);
-  }
-  const filterSummaryStr = filterParts.length > 0 ? `Filters: ${filterParts.join(' | ')}\n` : '';
-
-  // 1. Plain Text Output
-  let plainText = `🐛 QA Bug Report (${bugs.length} ${bugs.length === 1 ? 'Bug' : 'Bugs'})\n`;
-  if (filterSummaryStr) plainText += filterSummaryStr;
-  plainText += `----------------------------------------\n\n`;
-
   if (bugs.length === 0) {
-    plainText += `No bugs match the selected filter criteria.\n`;
-  } else {
-    bugs.forEach((bug, idx) => {
-      const ts = getFormattedTimestamp(bug);
-      const feature = bug.feature || 'General';
-      const description = bug.note || 'No description attached.';
-      const severity = (bug.severity || 'medium').toUpperCase();
-      const publicImageUrl = getBugPublicImageUrl(bug);
+    return {
+      plainText: 'No bugs match the selected filter criteria.',
+      htmlText: '<p style="color: #64748b; font-style: italic;">No bugs match the selected filter criteria.</p>'
+    };
+  }
 
-      plainText += `${idx + 1}. [${ts}] [${severity}] Feature: ${feature}\n`;
-      plainText += `   Device: ${bug.deviceName || 'Mobile Device'} | Reporter: ${bug.testerName || 'Anonymous'}\n`;
-      if (bug.stepTitle) plainText += `   Step: ${bug.stepTitle}\n`;
-      plainText += `   Description: ${description}\n`;
-      if (publicImageUrl) {
-        plainText += `   Screenshot: ${publicImageUrl}\n`;
-      }
+  // 1. Plain Text Output (clean old style)
+  let plainText = '';
+  bugs.forEach((bug, idx) => {
+    const ts = getFormattedTimestamp(bug);
+    const feature = bug.feature || 'General';
+    const description = bug.note || 'No description attached.';
+    const publicImageUrl = getBugPublicImageUrl(bug);
+
+    plainText += `[${ts}] Feature: ${feature}\n`;
+    plainText += `Description: ${description}\n`;
+    if (publicImageUrl) {
+      plainText += `Screenshot: ${publicImageUrl}\n`;
+    }
+    if (idx < bugs.length - 1) {
       plainText += `\n`;
-    });
-  }
-  plainText += `----------------------------------------`;
+    }
+  });
 
-  // 2. Rich HTML Output for Google Docs, Word, Slack, Teams & Email
-  let htmlText = `<div style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5; max-width: 720px;">`;
-  htmlText += `<div style="border-bottom: 2px solid #4f46e5; padding-bottom: 8px; margin-bottom: 14px;">`;
-  htmlText += `<h2 style="margin: 0 0 4px 0; font-size: 18px; font-weight: bold; color: #1e1b4b;">`;
-  htmlText += `🐛 QA Bug Report <span style="font-size: 13px; font-weight: normal; color: #64748b;">(${bugs.length} ${bugs.length === 1 ? 'Defect' : 'Defects'})</span>`;
-  htmlText += `</h2>`;
-  if (filterParts.length > 0) {
-    htmlText += `<div style="font-size: 12px; color: #64748b; margin-top: 4px;">`;
-    htmlText += `<b>Filters:</b> ${filterParts.join(' | ')}`;
+  // 2. Rich HTML Output for Google Docs (clean old style + inline screenshots)
+  let htmlText = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5; max-width: 680px;">`;
+  bugs.forEach((bug, idx) => {
+    const ts = getFormattedTimestamp(bug);
+    const feature = bug.feature || 'General';
+    const description = (bug.note || 'No description attached.').replace(/\n/g, '<br/>');
+    const publicImageUrl = getBugPublicImageUrl(bug);
+
+    htmlText += `<div style="margin-bottom: 16px; padding-bottom: 12px; ${idx < bugs.length - 1 ? 'border-bottom: 1px solid #f1f5f9;' : ''}">`;
+    htmlText += `<div style="font-size: 13px; font-weight: 700; color: #0f172a; margin-bottom: 4px;">`;
+    htmlText += `<span style="color: #475569; font-weight: 600;">[${ts}]</span> `;
+    htmlText += `<span style="color: #4f46e5; font-weight: 700;">Feature: ${feature}</span>`;
     htmlText += `</div>`;
-  }
-  htmlText += `</div>`;
-
-  if (bugs.length === 0) {
-    htmlText += `<p style="color: #64748b; font-style: italic;">No bugs match the selected filter criteria.</p>`;
-  } else {
-    bugs.forEach((bug, idx) => {
-      const ts = getFormattedTimestamp(bug);
-      const feature = bug.feature || 'General';
-      const note = (bug.note || 'No description attached.').replace(/\n/g, '<br/>');
-      const severityUpper = (bug.severity || 'medium').toUpperCase();
-      const sevStyle = getSeverityBadgeStyles(bug.severity);
-      const publicImageUrl = getBugPublicImageUrl(bug);
-
-      htmlText += `<div style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid #e2e8f0;">`;
-      
-      // Header row
-      htmlText += `<div style="font-size: 14px; font-weight: bold; color: #0f172a; margin-bottom: 4px;">`;
-      htmlText += `<span style="color: #4f46e5; margin-right: 6px;">#${idx + 1}</span>`;
-      htmlText += `<span style="background-color: ${sevStyle.bg}; color: ${sevStyle.text}; border: 1px solid ${sevStyle.border}; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-right: 6px;">${severityUpper}</span>`;
-      htmlText += `<span style="color: #1e293b; font-weight: bold;">Feature: ${feature}</span>`;
+    htmlText += `<div style="margin: 4px 0; font-size: 13px; color: #1e293b;">`;
+    htmlText += `<b>Description:</b> ${description}`;
+    htmlText += `</div>`;
+    if (publicImageUrl) {
+      htmlText += `<div style="margin-top: 8px;">`;
+      htmlText += `<img src="${publicImageUrl}" alt="Bug Screenshot" width="450" style="max-width: 450px; width: 100%; height: auto; border-radius: 6px; display: block; border: 1px solid #cbd5e1;" />`;
       htmlText += `</div>`;
-
-      // Metadata line
-      htmlText += `<div style="font-size: 12px; color: #64748b; margin-bottom: 8px;">`;
-      htmlText += `<b>Time:</b> ${ts} &nbsp;|&nbsp; <b>Device:</b> ${bug.deviceName || 'Mobile Device'} &nbsp;|&nbsp; <b>Tester:</b> ${bug.testerName || 'Anonymous'}`;
-      if (bug.stepTitle) {
-        htmlText += `<br/><b>Step Target:</b> ${bug.stepTitle}`;
-      }
-      htmlText += `</div>`;
-
-      // Description box
-      htmlText += `<div style="background-color: #f8fafc; border-left: 4px solid #6366f1; padding: 10px 14px; border-radius: 4px; font-size: 13px; color: #1e293b; line-height: 1.5; margin-bottom: 10px;">`;
-      htmlText += `<b>Observation Log:</b><br/>${note}`;
-      htmlText += `</div>`;
-
-      // Evidence screenshot for Google Docs inline import
-      if (publicImageUrl) {
-        htmlText += `<div style="margin-top: 8px;">`;
-        htmlText += `<p style="margin: 0 0 4px 0; font-size: 11px; font-weight: bold; color: #475569; text-transform: uppercase;">📷 Screenshot Evidence:</p>`;
-        htmlText += `<p style="margin: 0 0 4px 0;">`;
-        htmlText += `<img src="${publicImageUrl}" alt="Bug Screenshot #${idx + 1}" width="460" style="max-width: 460px; width: 100%; height: auto; border: 1px solid #cbd5e1; border-radius: 8px; display: block;" />`;
-        htmlText += `</p>`;
-        htmlText += `<p style="margin: 0; font-size: 11px;"><a href="${publicImageUrl}" target="_blank" style="color: #4f46e5; text-decoration: underline;">Open Full Resolution Photo ↗</a></p>`;
-        htmlText += `</div>`;
-      }
-
-      htmlText += `</div>`;
-    });
-  }
-
+    }
+    htmlText += `</div>`;
+  });
   htmlText += `</div>`;
 
   return { plainText, htmlText };
