@@ -402,13 +402,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [sheetSyncStatus, setSheetSyncStatus] = useState<{ success?: boolean; message?: string } | null>(null);
   const [copiedCodeGs, setCopiedCodeGs] = useState<boolean>(false);
 
-  const handleSyncToGoogleSheet = async (bugsToSync: BugLog[] = processedBugs) => {
+  const handleSyncToGoogleSheet = async (bugsToSync: BugLog[] = bugLogs, silent = false) => {
     if (bugsToSync.length === 0) {
-      setSheetSyncStatus({ success: false, message: 'No bugs found to sync.' });
+      if (!silent) setSheetSyncStatus({ success: false, message: 'No bugs found to sync.' });
       return;
     }
-    setIsSyncingSheet(true);
-    setSheetSyncStatus(null);
+    if (!silent) {
+      setIsSyncingSheet(true);
+      setSheetSyncStatus(null);
+    }
     try {
       const enriched = bugsToSync.map(b => {
         const cat = bugCategorizations[b.id];
@@ -436,11 +438,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
           respMsg = data.result?.message || `Successfully synced ${enriched.length} bug(s) to Google Sheets!`;
         }
       } catch (err) {
-        console.warn('Proxy sync failed, attempting direct browser request:', err);
+        if (!silent) console.warn('Proxy sync failed, attempting direct browser request:', err);
       }
 
-      // 2. Direct browser sync fallback (uses user's active Google Workspace session)
-      if (!success && googleSheetUrl) {
+      // 2. Direct browser sync fallback (only if user manually clicked, never in silent background sync)
+      if (!success && googleSheetUrl && !silent) {
         try {
           const syncWin = window.open(googleSheetUrl, 'qa_sync_window', 'width=520,height=520,resizable=yes,scrollbars=yes');
           if (syncWin) {
@@ -456,28 +458,44 @@ export const Dashboard: React.FC<DashboardProps> = ({
         }
       }
 
-      if (success) {
-        setSheetSyncStatus({ success: true, message: respMsg || `Successfully synced ${enriched.length} bug(s)!` });
-      } else {
-        setSheetSyncStatus({ success: false, message: respMsg || 'Failed to sync to Google Sheet.' });
+      if (!silent) {
+        if (success) {
+          setSheetSyncStatus({ success: true, message: respMsg || `Successfully synced ${enriched.length} bug(s)!` });
+        } else {
+          setSheetSyncStatus({ success: false, message: respMsg || 'Failed to sync to Google Sheet.' });
+        }
       }
     } catch (e: any) {
-      setSheetSyncStatus({ success: false, message: e.message || 'Sync failed.' });
+      if (!silent) {
+        setSheetSyncStatus({ success: false, message: e.message || 'Sync failed.' });
+      }
     } finally {
-      setIsSyncingSheet(false);
+      if (!silent) {
+        setIsSyncingSheet(false);
+      }
     }
   };
 
   const lastSyncedBugCountRef = useRef<number>(bugLogs.length);
   useEffect(() => {
     if (autoSyncSheet && googleSheetUrl && bugLogs.length > lastSyncedBugCountRef.current) {
-      const newBugs = bugLogs.slice(0, bugLogs.length - lastSyncedBugCountRef.current);
       lastSyncedBugCountRef.current = bugLogs.length;
-      handleSyncToGoogleSheet(newBugs);
+      handleSyncToGoogleSheet(bugLogs, true);
     } else {
       lastSyncedBugCountRef.current = bugLogs.length;
     }
-  }, [bugLogs.length, autoSyncSheet, googleSheetUrl]);
+  }, [bugLogs.length, autoSyncSheet, googleSheetUrl, bugLogs]);
+
+  // 1-minute recurring auto-sync interval while dashboard is active
+  useEffect(() => {
+    if (!autoSyncSheet || !googleSheetUrl) return;
+
+    const intervalId = setInterval(() => {
+      handleSyncToGoogleSheet(bugLogs, true);
+    }, 60000);
+
+    return () => clearInterval(intervalId);
+  }, [autoSyncSheet, googleSheetUrl, bugLogs]);
 
   const handleCopyBugsToClipboard = async () => {
     const filterLabelDate = selectedDateFilter === 'all' 
@@ -4184,8 +4202,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <div className="p-3.5 rounded-2xl bg-slate-950/70 border border-white/10 space-y-3">
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-xs font-bold text-white">Auto-Sync New Bugs</div>
-                  <div className="text-[11px] text-slate-400">Automatically push bugs into the sheet when testers log them</div>
+                  <div className="text-xs font-bold text-white">Auto-Sync Every 1 Minute</div>
+                  <div className="text-[11px] text-slate-400">Automatically sync fresh bugs to Google Sheets every 60 seconds while viewing the dashboard</div>
                 </div>
                 <button
                   type="button"
@@ -4238,7 +4256,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
               {/* In-Sheet Direct Control Tip */}
               <div className="p-2.5 rounded-xl bg-blue-950/40 border border-blue-500/20 text-[11px] text-blue-200 leading-relaxed">
-                💡 <b>Direct in-sheet control:</b> Open your Google Sheet and click the top menu <b>QA Manager</b> &gt; <b>⚡ Sync Bugs From Database Now</b> or <b>⏱️ Enable Auto-Sync</b> to automatically pull bugs every 5 minutes.
+                💡 <b>24/7 Cloud Background Sync:</b> Inside your Google Sheet, click the top menu <b>QA Manager</b> &gt; <b>⏱️ Enable Auto-Sync (Every 1 Min)</b>. Google's cloud will automatically pull fresh bugs from the database every 60 seconds even when this app is closed!
               </div>
             </div>
 

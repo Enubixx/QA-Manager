@@ -61,26 +61,108 @@ function getSpreadsheet() {
 }
 
 /**
- * Fetch all bug logs directly from Supabase
+ * Fetch all bug logs directly from Supabase (combining bug_logs table, test_runs, and archived_runs)
  */
 function fetchBugsFromSupabase() {
-  var url = SUPABASE_URL + "/rest/v1/bug_logs?select=*&order=timestamp.asc";
+  var headers = {
+    "apikey": SUPABASE_ANON_KEY,
+    "Authorization": "Bearer " + SUPABASE_ANON_KEY
+  };
   var options = {
     method: "get",
-    headers: {
-      "apikey": SUPABASE_ANON_KEY,
-      "Authorization": "Bearer " + SUPABASE_ANON_KEY
-    },
+    headers: headers,
     muteHttpExceptions: true
   };
-  var response = UrlFetchApp.fetch(url, options);
-  var text = response.getContentText();
+
+  var bugMap = {};
+
+  // 1. Fetch direct bug_logs table
   try {
-    return JSON.parse(text);
-  } catch (err) {
-    Logger.log("Error parsing Supabase response: " + text);
-    return [];
+    var bugsUrl = SUPABASE_URL + "/rest/v1/bug_logs?select=*&order=timestamp.asc";
+    var resBugs = UrlFetchApp.fetch(bugsUrl, options);
+    var bugsList = JSON.parse(resBugs.getContentText() || '[]');
+    if (Array.isArray(bugsList)) {
+      for (var i = 0; i < bugsList.length; i++) {
+        var b = bugsList[i];
+        if (b && b.id) {
+          bugMap[b.id] = b;
+        }
+      }
+    }
+  } catch (e) {
+    Logger.log("Error fetching bug_logs: " + e);
   }
+
+  // 2. Fetch test_runs to catch any embedded bugs logged during testing
+  try {
+    var runsUrl = SUPABASE_URL + "/rest/v1/test_runs?select=id,bug_logs";
+    var resRuns = UrlFetchApp.fetch(runsUrl, options);
+    var runsList = JSON.parse(resRuns.getContentText() || '[]');
+    if (Array.isArray(runsList)) {
+      for (var r = 0; r < runsList.length; r++) {
+        var runBugs = runsList[r].bug_logs;
+        if (Array.isArray(runBugs)) {
+          for (var rb = 0; rb < runBugs.length; rb++) {
+            var item = runBugs[rb];
+            if (item && item.id && !bugMap[item.id]) {
+              bugMap[item.id] = item;
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    Logger.log("Error fetching test_runs: " + e);
+  }
+
+  // 3. Fetch archived_runs for completed test runs
+  try {
+    var archUrl = SUPABASE_URL + "/rest/v1/archived_runs?select=id,bug_logs";
+    var resArch = UrlFetchApp.fetch(archUrl, options);
+    var archList = JSON.parse(resArch.getContentText() || '[]');
+    if (Array.isArray(archList)) {
+      for (var a = 0; a < archList.length; a++) {
+        var archBugs = archList[a].bug_logs;
+        if (Array.isArray(archBugs)) {
+          for (var ab = 0; ab < archBugs.length; ab++) {
+            var aItem = archBugs[ab];
+            if (aItem && aItem.id && !bugMap[aItem.id]) {
+              bugMap[aItem.id] = aItem;
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    Logger.log("Error fetching archived_runs: " + e);
+  }
+
+  var combined = [];
+  for (var k in bugMap) {
+    combined.push(bugMap[k]);
+  }
+
+  // Sort chronologically by timestamp ascending
+  combined.sort(function(a, b) {
+    var tA = new Date(a.timestamp || a.created_at || 0).getTime();
+    var tB = new Date(b.timestamp || b.created_at || 0).getTime();
+    return tA - tB;
+  });
+
+  return combined;
+}
+
+/**
+ * Compute lightweight MD5 signature of bugs to prevent unnecessary sheet rewrites
+ */
+function getBugsSignature(bugs) {
+  if (!bugs || bugs.length === 0) return 'empty';
+  var str = '';
+  for (var i = 0; i < bugs.length; i++) {
+    var b = bugs[i];
+    str += (b.id || '') + ':' + (b.timestamp || '') + ':' + (b.status || '') + ':' + (b.priority || '') + ';';
+  }
+  return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, str));
 }
 
 /**
@@ -118,24 +200,39 @@ function getTemplateSettingsFromAllBugs(ss) {
 /**
  * Master Sync Function: Pulls all bugs from Supabase, updates headers,
  * copies custom formatting from "All Bugs" to every other tab, and populates data.
+ * @param {boolean} [force=false] Set true to bypass signature check and force rewrite
  */
-function syncBugsFromDatabase() {
+function syncBugsFromDatabase(force) {
   var bugs = fetchBugsFromSupabase();
   Logger.log("Fetched " + bugs.length + " bugs from Supabase.");
+  if (!bugs || bugs.length === 0) {
+    return { status: 'no_data', totalBugs: 0, testers: [] };
+  }
+
+  var props = PropertiesService.getScriptProperties();
+  var currentSig = getBugsSignature(bugs);
+  var lastSig = props.getProperty('LAST_BUGS_SYNC_SIGNATURE');
+
+  if (force !== true && currentSig === lastSig) {
+    Logger.log("No new or modified bugs detected. Skipping sheet rewrite.");
+    return { status: 'skipped_no_changes', totalBugs: bugs.length, testers: [] };
+  }
+
   var result = populateAllBugs(bugs);
+  props.setProperty('LAST_BUGS_SYNC_SIGNATURE', currentSig);
   return result;
 }
 
 /**
- * UI Menu Action: Sync Bugs Now
+ * UI Menu Action: Sync Bugs Now (Force Refresh)
  */
 function menuSyncNow() {
-  var res = syncBugsFromDatabase();
+  var res = syncBugsFromDatabase(true);
   try {
     SpreadsheetApp.getUi().alert(
-      'QA Manager Sync Complete!\\n\\n' +
-      '• Processed: ' + res.totalBugs + ' bug(s)\\n' +
-      '• Tester Tabs Formatted from "All Bugs": ' + res.testers.join(', ') + '\\n' +
+      'QA Manager Sync Complete!\n\n' +
+      '• Processed: ' + res.totalBugs + ' bug(s)\n' +
+      '• Tester Tabs Formatted from "All Bugs": ' + res.testers.join(', ') + '\n' +
       '• Master Table: All Bugs (preserved user formatting)'
     );
   } catch (e) {
@@ -176,28 +273,44 @@ function copySettingsFromAllBugs() {
 
   try {
     SpreadsheetApp.getUi().alert(
-      'Formatting Copied Successfully!\\n\\n' +
+      'Formatting Copied Successfully!\n\n' +
       'Copied column widths and text wrapping from "All Bugs" to ' + count + ' tab(s).'
     );
   } catch (e) {}
 }
 
 /**
- * Install a 5-minute recurring background sync trigger
+ * Install a 1-minute recurring background sync trigger
+ * Automatically pulls and syncs fresh bugs every 60 seconds 24/7 on Google Cloud
  */
 function installAutoSyncTrigger() {
   removeAutoSyncTrigger(true);
-  ScriptApp.newTrigger('syncBugsFromDatabase')
+  ScriptApp.newTrigger('autoPullAndSyncFromSupabase')
     .timeBased()
-    .everyMinutes(5)
+    .everyMinutes(1)
     .create();
 
   try {
     SpreadsheetApp.getUi().alert(
-      'Auto-Sync Enabled!\\n\\n' +
-      'Your spreadsheet will now automatically pull and sync bugs from the database every 5 minutes into smart tables.'
+      '⏱️ 1-Minute Auto-Sync Enabled!\n\n' +
+      'Your spreadsheet will now automatically pull and sync fresh bugs from the database every 1 minute into smart tables.\n\n' +
+      'This runs in the background 24/7 on Google Cloud even when your spreadsheet or computer is closed.'
     );
-  } catch (e) {}
+  } catch (e) {
+    Logger.log("1-minute auto-sync trigger installed.");
+  }
+}
+
+/**
+ * Background trigger handler executed every 1 minute
+ */
+function autoPullAndSyncFromSupabase() {
+  try {
+    var result = syncBugsFromDatabase(false);
+    Logger.log("Auto-sync 1-minute result: " + JSON.stringify(result));
+  } catch (err) {
+    Logger.log("Auto-sync 1-minute error: " + err.toString());
+  }
 }
 
 /**
@@ -205,16 +318,45 @@ function installAutoSyncTrigger() {
  */
 function removeAutoSyncTrigger(silent) {
   var triggers = ScriptApp.getProjectTriggers();
+  var count = 0;
   for (var i = 0; i < triggers.length; i++) {
-    if (triggers[i].getHandlerFunction() === 'syncBugsFromDatabase') {
+    var func = triggers[i].getHandlerFunction();
+    if (func === 'syncBugsFromDatabase' || func === 'autoPullAndSyncFromSupabase') {
       ScriptApp.deleteTrigger(triggers[i]);
+      count++;
     }
   }
   if (!silent) {
     try {
-      SpreadsheetApp.getUi().alert('Auto-Sync has been disabled.');
+      SpreadsheetApp.getUi().alert(
+        '🛑 Auto-Sync Disabled\n\n' +
+        'Removed background trigger(s). Automatic 1-minute syncing stopped.'
+      );
     } catch (e) {}
   }
+}
+
+/**
+ * Check whether the 1-minute auto-sync trigger is currently active
+ */
+function checkAutoSyncStatus() {
+  var triggers = ScriptApp.getProjectTriggers();
+  var isEnabled = false;
+  for (var i = 0; i < triggers.length; i++) {
+    var func = triggers[i].getHandlerFunction();
+    if (func === 'syncBugsFromDatabase' || func === 'autoPullAndSyncFromSupabase') {
+      isEnabled = true;
+      break;
+    }
+  }
+  try {
+    SpreadsheetApp.getUi().alert(
+      'Auto-Sync Status:\n\n' +
+      (isEnabled 
+        ? '✅ ACTIVE: Automatically pulling fresh bugs every 1 minute.' 
+        : '❌ INACTIVE: Auto-sync is currently turned off.')
+    );
+  } catch (e) {}
 }
 
 /**
@@ -234,7 +376,7 @@ function populateAllBugs(bugs) {
   for (var i = 0; i < bugs.length; i++) {
     var bug = bugs[i];
     var testerStr = (bug.tester_name || bug.testerName || 'Unassigned').trim();
-    var testerNames = testerStr.split(/[\\/,]/).map(function(t) { return t.trim(); }).filter(Boolean);
+    var testerNames = testerStr.split(/[\/,]/).map(function(t) { return t.trim(); }).filter(Boolean);
     if (testerNames.length === 0) testerNames = ['Unassigned'];
 
     for (var t = 0; t < testerNames.length; t++) {
@@ -266,11 +408,21 @@ function populateAllBugs(bugs) {
 }
 
 /**
- * Handle HTTP GET - triggers sync and returns rich HTML confirmation
+ * Handle HTTP GET - triggers sync or manages 1-minute auto-sync trigger
  */
 function doGet(e) {
   try {
-    var res = syncBugsFromDatabase();
+    var action = e && e.parameter ? e.parameter.action : null;
+    if (action === 'enable_auto_sync') {
+      installAutoSyncTrigger();
+      return respondJson({ status: 'success', message: 'Auto-sync trigger (every 1 minute) installed successfully.' });
+    }
+    if (action === 'disable_auto_sync') {
+      removeAutoSyncTrigger(true);
+      return respondJson({ status: 'success', message: 'Auto-sync trigger removed successfully.' });
+    }
+
+    var res = syncBugsFromDatabase(true);
     var html = '<!DOCTYPE html><html><head><meta charset="utf-8">' +
       '<title>QA Manager Sheet Sync</title>' +
       '<style>' +
@@ -342,8 +494,10 @@ function onOpen() {
     .createMenu('QA Manager')
     .addItem('⚡ Sync Bugs & Copy "All Bugs" Format', 'menuSyncNow')
     .addItem('📋 Copy Formatting from "All Bugs" to All Tabs', 'copySettingsFromAllBugs')
-    .addItem('⏱️ Enable Auto-Sync (Every 5 Mins)', 'installAutoSyncTrigger')
+    .addSeparator()
+    .addItem('⏱️ Enable Auto-Sync (Every 1 Min)', 'installAutoSyncTrigger')
     .addItem('🛑 Disable Auto-Sync', 'removeAutoSyncTrigger')
+    .addItem('ℹ️ Check Auto-Sync Status', 'checkAutoSyncStatus')
     .addSeparator()
     .addItem('🎨 Reformat All Tabs as Green Smart Tables', 'formatAllExistingTabs')
     .addToUi();
