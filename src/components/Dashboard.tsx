@@ -3610,7 +3610,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         {/* Smart Dropdown Badge 2: Priority */}
                         <div className="relative inline-flex items-center" onClick={e => e.stopPropagation()}>
                           <select
-                            value={bug.priority || (bug.severity === 'critical' ? 'P0' : bug.severity === 'high' ? 'P1' : 'P2')}
+                            value={bug.priority === '0' ? 'P0' : bug.priority === '1' ? 'P1' : bug.priority === '2' ? 'P2' : (bug.priority || (bug.severity === 'critical' ? 'P0' : bug.severity === 'high' ? 'P1' : 'P2'))}
                             onChange={e => handleUpdateBugCategorization(bug.id, 'priority', e.target.value)}
                             className={`appearance-none text-[11px] font-extrabold px-2.5 py-1 pr-5 rounded-full cursor-pointer focus:outline-none transition shadow-sm text-white ${
                               (bug.priority === 'P0' || bug.priority === '0')
@@ -3621,9 +3621,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             }`}
                             title="Change Priority"
                           >
-                            <option value="P0" className="bg-slate-900 text-white">P0 (Critical)</option>
-                            <option value="P1" className="bg-slate-900 text-white">P1 (High)</option>
-                            <option value="P2" className="bg-slate-900 text-white">P2 (Normal)</option>
+                            <option value="P0" className="bg-slate-900 text-white">P0</option>
+                            <option value="P1" className="bg-slate-900 text-white">P1</option>
+                            <option value="P2" className="bg-slate-900 text-white">P2</option>
                           </select>
                           <span className="absolute right-1.5 text-[9px] pointer-events-none text-white font-bold">▾</span>
                         </div>

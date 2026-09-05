@@ -186,7 +186,10 @@ const getSeverityBadgeStyles = (severity: string) => {
 export const getBugCategorization = (bug: BugLog) => {
   const bugType = bug.bugType || 'Bug';
   let priority = bug.priority;
-  if (!priority) {
+  if (priority === '0') priority = 'P0';
+  else if (priority === '1') priority = 'P1';
+  else if (priority === '2') priority = 'P2';
+  else if (!priority) {
     if (bug.severity === 'critical') priority = 'P0';
     else if (bug.severity === 'high') priority = 'P1';
     else priority = 'P2';
@@ -201,7 +204,7 @@ export const getSmartBadgeHtml = (bugType: string, priority: string, status: str
   const bugTypeText = '#713f12';
 
   // Priority: P0 Red, P1 Orange, P2 Yellow matching user screenshot
-  const prioBg = (priority === 'P0' || priority === '0') ? '#ef4444' : (priority === 'P1' || priority === '1') ? '#f97316' : '#eab308';
+  const prioBg = priority === 'P0' ? '#ef4444' : priority === 'P1' ? '#f97316' : '#eab308';
   const prioText = '#ffffff';
 
   // Status: Filed (green), New (blue), Repro'd Issue (purple) matching user screenshot

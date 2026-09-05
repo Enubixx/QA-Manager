@@ -1,23 +1,27 @@
 export const GOOGLE_APPS_SCRIPT_CODE = `/**
  * ==============================================================================
- * QA MANAGER - AUTOMATED GOOGLE SHEETS BUG SYNC (SMART TABLE EDITION)
+ * QA MANAGER - AUTOMATED GOOGLE SHEETS BUG SYNC (NATIVE TABLE EDITION)
  * ==============================================================================
  * Automatically creates individual tabs for every QA tester, formats each page
- * as a Smart Table with interactive filter dropdowns, alternating row banding,
- * smart dropdown chips (Bug Type, Priority, Status), and clickable screenshot links.
- * (Severity, Screenshot Preview, and Bug ID have been removed as requested.)
+ * with the exact Green Table Theme matching Google Sheets native Tables,
+ * interactive filter dropdowns, alternating green row banding, and smart dropdown chips.
+ * (Severity, Screenshot Preview, and Bug ID removed; Priority strictly P0, P1, P2)
  */
 
 var SPREADSHEET_ID = "1p5VfZLm5w9w5XGtbmKxroWwUxgWNxcwU8a0DnCoqCBk";
 var SUPABASE_URL = "https://hbuvzcxhrkneywabmaod.supabase.co";
 var SUPABASE_ANON_KEY = "sb_publishable_M2JvKUmCmgShodNziXNRDw_NwYoN_Rc";
 
-// Dropdown options
+// Exact Table Styling matching user screenshot
+var TABLE_HEADER_BG = "#16532B"; // Google Forest Green Header
+var TABLE_HEADER_TEXT = "#FFFFFF";
+
+// Dropdown options (P0, P1, P2 only - no numbers)
 var BUG_TYPES = ['Bug', 'Setup Issue', 'Known Issue', 'Feature Request', 'Misc Issue'];
-var PRIORITIES = ['P0', 'P1', 'P2', '0', '1', '2'];
+var PRIORITIES = ['P0', 'P1', 'P2'];
 var STATUSES = ['Filed', 'New', "Repro'd Issue"];
 
-// 10-column Smart Table schema (Severity, Screenshot Preview, and Bug ID removed)
+// 10-column Smart Table schema
 var HEADERS = [
   'Bug Type',
   'Priority',
@@ -97,8 +101,8 @@ function menuSyncNow() {
     SpreadsheetApp.getUi().alert(
       'QA Manager Sync Complete!\\n\\n' +
       '• Processed: ' + res.totalBugs + ' bug(s)\\n' +
-      '• Tester Smart Tables: ' + res.testers.join(', ') + '\\n' +
-      '• Master Smart Table: All Bugs'
+      '• Tester Tables: ' + res.testers.join(', ') + '\\n' +
+      '• Master Table: All Bugs'
     );
   } catch (e) {
     Logger.log("Sync complete: " + JSON.stringify(res));
@@ -206,7 +210,7 @@ function doGet(e) {
       '<div class="badge">SYNC SUCCESSFUL</div>' +
       '<h2>Google Sheet Updated!</h2>' +
       '<p>Successfully populated <strong>' + res.totalBugs + ' bug(s)</strong> across individual tester Smart Tables.</p>' +
-      '<div class="testers"><strong>Updated Smart Tables:</strong><br>' + res.testers.join(', ') + ', All Bugs</div>' +
+      '<div class="testers"><strong>Updated Tables:</strong><br>' + res.testers.join(', ') + ', All Bugs</div>' +
       '<div class="close-note">This window will close automatically in 3 seconds...</div>' +
       '</div>' +
       '<script>setTimeout(function(){ window.close(); }, 3000);</script>' +
@@ -238,7 +242,7 @@ function doPost(e) {
     var res = populateAllBugs(bugs);
     return respondJson({
       status: 'success',
-      message: 'Successfully processed ' + res.totalBugs + ' bug(s) across ' + res.testers.length + ' tester smart table(s).',
+      message: 'Successfully processed ' + res.totalBugs + ' bug(s) across ' + res.testers.length + ' tester table(s).',
       testers: res.testers,
       processedCount: res.totalBugs
     });
@@ -262,7 +266,7 @@ function onOpen() {
     .addItem('⏱️ Enable Auto-Sync (Every 5 Mins)', 'installAutoSyncTrigger')
     .addItem('🛑 Disable Auto-Sync', 'removeAutoSyncTrigger')
     .addSeparator()
-    .addItem('🎨 Reformat All Tabs as Smart Tables', 'formatAllExistingTabs')
+    .addItem('🎨 Reformat All Tabs as Green Smart Tables', 'formatAllExistingTabs')
     .addToUi();
 }
 
@@ -276,7 +280,7 @@ function formatAllExistingTabs() {
     setupTabFormatting(sheets[i]);
   }
   try {
-    SpreadsheetApp.getUi().alert('All tabs formatted as Smart Tables with filter dropdowns and styling!');
+    SpreadsheetApp.getUi().alert('All tabs formatted as Green Smart Tables with P0-P2 dropdowns and styling!');
   } catch (e) {}
 }
 
@@ -304,12 +308,12 @@ function setupTabFormatting(sheet) {
     } catch (e) {}
   }
 
-  // 1. Set headers
+  // 1. Set headers with Google Forest Green background matching user screenshot
   var headerRange = sheet.getRange(1, 1, 1, HEADERS.length);
   headerRange.setValues([HEADERS]);
   headerRange.setFontWeight('bold');
-  headerRange.setFontColor('#FFFFFF');
-  headerRange.setBackground('#1E293B'); // Sleek slate dark table header
+  headerRange.setFontColor(TABLE_HEADER_TEXT);
+  headerRange.setBackground(TABLE_HEADER_BG);
   headerRange.setFontFamily('Arial');
   headerRange.setFontSize(10);
   headerRange.setHorizontalAlignment('left');
@@ -334,7 +338,7 @@ function setupTabFormatting(sheet) {
     .build();
   sheet.getRange(2, 1, maxRows - 1, 1).setDataValidation(bugTypeRule);
 
-  // Col B: Priority Dropdown
+  // Col B: Priority Dropdown (P0, P1, P2 only - no numbers!)
   var priorityRule = SpreadsheetApp.newDataValidation()
     .requireValueInList(PRIORITIES, true)
     .setAllowInvalid(true)
@@ -352,32 +356,31 @@ function setupTabFormatting(sheet) {
   sheet.getRange(2, 6, maxRows - 1, 1).setWrap(true);
   sheet.getRange(2, 1, maxRows - 1, HEADERS.length).setVerticalAlignment('middle');
 
-  // 5. Smart Table Banding (Alternating row colors)
-  try {
-    var bandings = sheet.getBandings();
-    for (var b = 0; b < bandings.length; b++) {
-      bandings[b].remove();
-    }
-    var dataRowCount = Math.max(sheet.getLastRow(), 2);
-    var tableRange = sheet.getRange(1, 1, dataRowCount, HEADERS.length);
-    tableRange.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, true, false);
-  } catch (bandErr) {
-    Logger.log("Table banding notice: " + bandErr);
-  }
-
-  // 6. Smart Table Filter (Dropdown filtering & sorting on every header)
+  // 5. Smart Table Filter (Dropdown filtering & sorting on every header)
+  // Preserve existing native table filter if already active
   try {
     var existingFilter = sheet.getFilter();
-    if (existingFilter) {
-      existingFilter.remove();
+    if (!existingFilter) {
+      var filterRows = Math.max(sheet.getLastRow(), 2);
+      sheet.getRange(1, 1, filterRows, HEADERS.length).createFilter();
     }
-    var filterRows = Math.max(sheet.getLastRow(), 2);
-    sheet.getRange(1, 1, filterRows, HEADERS.length).createFilter();
   } catch (filterErr) {
     Logger.log("Filter notice: " + filterErr);
   }
 
-  // 7. Apply smart chip conditional formatting
+  // 6. Smart Table Banding (Green theme matching Google Tables)
+  try {
+    var bandings = sheet.getBandings();
+    if (!bandings || bandings.length === 0) {
+      var dataRowCount = Math.max(sheet.getLastRow(), 2);
+      var tableRange = sheet.getRange(1, 1, dataRowCount, HEADERS.length);
+      tableRange.applyRowBanding(SpreadsheetApp.BandingTheme.GREEN, true, false);
+    }
+  } catch (bandErr) {
+    Logger.log("Table banding notice: " + bandErr);
+  }
+
+  // 7. Apply smart chip conditional formatting (exact colors matching user screenshot)
   applyConditionalFormatting(sheet);
 
   // 8. Set comfortable table row heights
@@ -387,7 +390,7 @@ function setupTabFormatting(sheet) {
 }
 
 /**
- * Adds smart color rules for dropdowns
+ * Adds smart color rules for dropdowns matching user screenshot
  */
 function applyConditionalFormatting(sheet) {
   var rules = sheet.getConditionalFormatRules() || [];
@@ -397,7 +400,7 @@ function applyConditionalFormatting(sheet) {
   var priorityRange = sheet.getRange(2, 2, maxRows - 1, 1);
   var statusRange = sheet.getRange(2, 3, maxRows - 1, 1);
 
-  // Bug -> Light Yellow (#FEF08A / #713F12)
+  // Bug -> Light Yellow (#FEF08A / #713F12) - exact match to user screenshot
   rules.push(SpreadsheetApp.newConditionalFormatRule()
     .whenTextEqualTo('Bug')
     .setBackground('#FEF08A')
@@ -437,33 +440,33 @@ function applyConditionalFormatting(sheet) {
     .setRanges([bugTypeRange])
     .build());
 
-  // Priority P0 or 0 -> Soft Red
+  // Priority P0 -> Soft Red
   rules.push(SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=OR(B2="P0", B2="0", B2=0)')
+    .whenTextEqualTo('P0')
     .setBackground('#FEE2E2')
     .setFontColor('#991B1B')
     .setBold(true)
     .setRanges([priorityRange])
     .build());
 
-  // Priority P1 or 1 -> Soft Orange
+  // Priority P1 -> Soft Orange
   rules.push(SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=OR(B2="P1", B2="1", B2=1)')
+    .whenTextEqualTo('P1')
     .setBackground('#FFEDD5')
     .setFontColor('#C2410C')
     .setBold(true)
     .setRanges([priorityRange])
     .build());
 
-  // Priority P2 or 2 -> Soft Amber
+  // Priority P2 -> Soft Yellow/Amber (#FEF9C3 / #854D0E) - exact match to user screenshot
   rules.push(SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=OR(B2="P2", B2="2", B2=2)')
+    .whenTextEqualTo('P2')
     .setBackground('#FEF9C3')
     .setFontColor('#854D0E')
     .setRanges([priorityRange])
     .build());
 
-  // Status Filed -> Soft Green
+  // Status Filed -> Soft Green (#DCFCE7 / #166534) - exact match to user screenshot
   rules.push(SpreadsheetApp.newConditionalFormatRule()
     .whenTextEqualTo('Filed')
     .setBackground('#DCFCE7')
@@ -520,7 +523,14 @@ function appendOrUpdateBugs(sheet, bugs) {
     var bugType = bug.bugType || bug.bug_type || 'Bug';
     var rawSeverity = (bug.severity || 'medium').toLowerCase();
     var defaultPrio = rawSeverity === 'critical' ? 'P0' : rawSeverity === 'high' ? 'P1' : 'P2';
-    var priority = bug.priority || defaultPrio;
+    
+    // Normalize Priority: P0, P1, P2 only (no numbers)
+    var rawPrio = String(bug.priority || defaultPrio).trim();
+    var priority = 'P2';
+    if (rawPrio === 'P0' || rawPrio === '0') priority = 'P0';
+    else if (rawPrio === 'P1' || rawPrio === '1') priority = 'P1';
+    else if (rawPrio === 'P2' || rawPrio === '2') priority = 'P2';
+
     var status = bug.status || 'Filed';
 
     var rawTs = bug.timestamp || bug.created_at;
@@ -600,18 +610,18 @@ function appendOrUpdateBugs(sheet, bugs) {
     }
   }
 
-  // Update table banding and filter to cover all populated rows
+  // Update table banding and filter safely without disturbing native tables
   try {
     var finalRows = Math.max(sheet.getLastRow(), 2);
     var filter = sheet.getFilter();
-    if (filter) filter.remove();
-    sheet.getRange(1, 1, finalRows, HEADERS.length).createFilter();
+    if (!filter) {
+      sheet.getRange(1, 1, finalRows, HEADERS.length).createFilter();
+    }
 
     var bandings = sheet.getBandings();
-    for (var b = 0; b < bandings.length; b++) {
-      bandings[b].remove();
+    if (!bandings || bandings.length === 0) {
+      sheet.getRange(1, 1, finalRows, HEADERS.length).applyRowBanding(SpreadsheetApp.BandingTheme.GREEN, true, false);
     }
-    sheet.getRange(1, 1, finalRows, HEADERS.length).applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, true, false);
   } catch (e) {}
 }
 
