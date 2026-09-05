@@ -150,6 +150,11 @@ export const fetchAllSupabaseData = async () => {
       }
     });
 
+    const deletedDeviceIds = getDeletedDeviceIds();
+    const deletedTesterIds = getDeletedTesterIds();
+    devices = devices.filter(d => !deletedDeviceIds.has(d.id));
+    testers = testers.filter(t => !deletedTesterIds.has(t.id));
+
     return {
       testPlans,
       testRuns,
@@ -286,7 +291,56 @@ export const deletePopulatedFeatureFromSupabase = async (featureName: string) =>
   await supabase.from('populated_features').delete().eq('feature_name', featureName);
 };
 
+export const getDeletedDeviceIds = (): Set<string> => {
+  try {
+    const raw = localStorage.getItem('qa_deleted_device_ids');
+    if (raw) return new Set(JSON.parse(raw));
+  } catch (e) {}
+  return new Set();
+};
+
+export const markDeviceAsDeleted = (deviceId: string) => {
+  try {
+    const current = getDeletedDeviceIds();
+    current.add(deviceId);
+    localStorage.setItem('qa_deleted_device_ids', JSON.stringify(Array.from(current)));
+  } catch (e) {}
+};
+
+export const unmarkDeviceAsDeleted = (deviceId: string) => {
+  try {
+    const current = getDeletedDeviceIds();
+    current.delete(deviceId);
+    localStorage.setItem('qa_deleted_device_ids', JSON.stringify(Array.from(current)));
+  } catch (e) {}
+};
+
+export const getDeletedTesterIds = (): Set<string> => {
+  try {
+    const raw = localStorage.getItem('qa_deleted_tester_ids');
+    if (raw) return new Set(JSON.parse(raw));
+  } catch (e) {}
+  return new Set();
+};
+
+export const markTesterAsDeleted = (testerId: string) => {
+  try {
+    const current = getDeletedTesterIds();
+    current.add(testerId);
+    localStorage.setItem('qa_deleted_tester_ids', JSON.stringify(Array.from(current)));
+  } catch (e) {}
+};
+
+export const unmarkTesterAsDeleted = (testerId: string) => {
+  try {
+    const current = getDeletedTesterIds();
+    current.delete(testerId);
+    localStorage.setItem('qa_deleted_tester_ids', JSON.stringify(Array.from(current)));
+  } catch (e) {}
+};
+
 export const syncDeviceToSupabase = async (device: DeviceProfile) => {
+  unmarkDeviceAsDeleted(device.id);
   if (!supabase || !isSupabaseConfigured) return;
   try {
     await supabase.from('devices').upsert({
@@ -303,6 +357,7 @@ export const syncDeviceToSupabase = async (device: DeviceProfile) => {
 };
 
 export const deleteDeviceFromSupabase = async (deviceId: string) => {
+  markDeviceAsDeleted(deviceId);
   if (!supabase || !isSupabaseConfigured) return;
   try {
     await supabase.from('devices').delete().eq('id', deviceId);
@@ -312,6 +367,7 @@ export const deleteDeviceFromSupabase = async (deviceId: string) => {
 };
 
 export const syncTesterToSupabase = async (tester: TesterProfile) => {
+  unmarkTesterAsDeleted(tester.id);
   if (!supabase || !isSupabaseConfigured) return;
   try {
     await supabase.from('testers').upsert({
@@ -325,6 +381,7 @@ export const syncTesterToSupabase = async (tester: TesterProfile) => {
 };
 
 export const deleteTesterFromSupabase = async (testerId: string) => {
+  markTesterAsDeleted(testerId);
   if (!supabase || !isSupabaseConfigured) return;
   try {
     await supabase.from('testers').delete().eq('id', testerId);
@@ -336,6 +393,7 @@ export const deleteTesterFromSupabase = async (testerId: string) => {
 export const syncDevicesListToCloud = async (devices: DeviceProfile[]) => {
   if (!supabase || !isSupabaseConfigured) return;
   try {
+    const deletedDeviceIds = getDeletedDeviceIds();
     // 1. Fetch current cloud devices to safely merge concurrent updates from other testers
     const { data } = await supabase
       .from('populated_features')
@@ -343,15 +401,15 @@ export const syncDevicesListToCloud = async (devices: DeviceProfile[]) => {
       .like('feature_name', '__GLOBAL_DEVICES_CONFIG__:%')
       .limit(1);
 
-    let mergedDevices = [...devices];
+    let mergedDevices = devices.filter(d => !deletedDeviceIds.has(d.id));
     if (data && data[0]?.feature_name) {
       try {
         const cloudDevices: DeviceProfile[] = JSON.parse(
           data[0].feature_name.replace('__GLOBAL_DEVICES_CONFIG__:', '')
         );
-        const localMap = new Map(devices.map(d => [d.id, d]));
+        const localMap = new Map(mergedDevices.map(d => [d.id, d]));
         cloudDevices.forEach(cloudDev => {
-          if (!localMap.has(cloudDev.id)) {
+          if (!deletedDeviceIds.has(cloudDev.id) && !localMap.has(cloudDev.id)) {
             mergedDevices.push(cloudDev);
           }
         });
@@ -382,6 +440,7 @@ export const syncDevicesListToCloud = async (devices: DeviceProfile[]) => {
 export const syncTestersListToCloud = async (testers: TesterProfile[]) => {
   if (!supabase || !isSupabaseConfigured) return;
   try {
+    const deletedTesterIds = getDeletedTesterIds();
     // 1. Fetch current cloud testers to safely merge concurrent additions
     const { data } = await supabase
       .from('populated_features')
@@ -389,15 +448,15 @@ export const syncTestersListToCloud = async (testers: TesterProfile[]) => {
       .like('feature_name', '__GLOBAL_TESTERS_CONFIG__:%')
       .limit(1);
 
-    let mergedTesters = [...testers];
+    let mergedTesters = testers.filter(t => !deletedTesterIds.has(t.id));
     if (data && data[0]?.feature_name) {
       try {
         const cloudTesters: TesterProfile[] = JSON.parse(
           data[0].feature_name.replace('__GLOBAL_TESTERS_CONFIG__:', '')
         );
-        const localNames = new Set(testers.map(t => t.name.toLowerCase().trim()));
+        const localNames = new Set(mergedTesters.map(t => t.name.toLowerCase().trim()));
         cloudTesters.forEach(cloudT => {
-          if (!localNames.has(cloudT.name.toLowerCase().trim())) {
+          if (!deletedTesterIds.has(cloudT.id) && !localNames.has(cloudT.name.toLowerCase().trim())) {
             mergedTesters.push(cloudT);
             localNames.add(cloudT.name.toLowerCase().trim());
           }

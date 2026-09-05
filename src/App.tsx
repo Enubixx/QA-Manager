@@ -19,8 +19,10 @@ import {
   deletePopulatedFeatureFromSupabase,
   syncDeviceToSupabase,
   deleteDeviceFromSupabase,
+  getDeletedDeviceIds,
   syncTesterToSupabase,
   deleteTesterFromSupabase,
+  getDeletedTesterIds,
   syncDevicesListToCloud,
   syncTestersListToCloud,
   subscribeToSupabaseRealtime,
@@ -244,19 +246,13 @@ export function App() {
         }
       }
       if (cloudData.devices && (cloudData.devices.length > 0 || devicesRef.current.length === 0)) {
-        // If user recently made local device edits, merge optimistic local state to avoid in-flight stale cloud responses reverting user clicks
+        const deletedDevIds = getDeletedDeviceIds();
+        const filteredCloudDevices = cloudData.devices.filter(cd => !deletedDevIds.has(cd.id));
+        // If user recently made local device edits, use optimistic local state to avoid in-flight stale cloud responses reverting user clicks
         const isRecentUserEdit = Date.now() - lastDeviceEditTimeRef.current < 4000;
         const baseDevices = isRecentUserEdit
-          ? cloudData.devices.map(cd => {
-              const localDev = devicesRef.current.find(ld => ld.id === cd.id);
-              if (!localDev) return cd;
-              return {
-                ...cd,
-                isReady: localDev.isReady,
-                quotas: localDev.quotas,
-              };
-            })
-          : cloudData.devices;
+          ? devicesRef.current
+          : filteredCloudDevices;
 
         const currentDevices = checkDailyQuotaReset(baseDevices);
 
@@ -1176,11 +1172,13 @@ export function App() {
     const next = exists ? devices.map(d => d.id === device.id ? device : d) : [...devices, device];
     setDevices(next);
     localStorage.setItem('qa_devices_list', JSON.stringify(next));
+    syncDeviceToSupabase(device);
     syncDevicesListToCloud(next);
   };
 
   const handleDeleteDevice = (deviceId: string) => {
     lastDeviceEditTimeRef.current = Date.now();
+    deleteDeviceFromSupabase(deviceId);
     const next = devices.filter(d => d.id !== deviceId);
     setDevices(next);
     localStorage.setItem('qa_devices_list', JSON.stringify(next));
@@ -1188,6 +1186,7 @@ export function App() {
   };
 
   const handleSaveTester = (tester: TesterProfile) => {
+    syncTesterToSupabase(tester);
     setTesters(prev => {
       const exists = prev.some(t => t.id === tester.id);
       const next = exists ? prev.map(t => t.id === tester.id ? tester : t) : [...prev, tester];
@@ -1195,17 +1194,16 @@ export function App() {
       syncTestersListToCloud(next);
       return next;
     });
-    syncTesterToSupabase(tester);
   };
 
   const handleDeleteTesterProfile = (testerId: string) => {
+    deleteTesterFromSupabase(testerId);
     setTesters(prev => {
       const next = prev.filter(t => t.id !== testerId);
       localStorage.setItem('qa_testers_list', JSON.stringify(next));
       syncTestersListToCloud(next);
       return next;
     });
-    deleteTesterFromSupabase(testerId);
   };
 
   const handleOpenMobileView = (planId?: string) => {
