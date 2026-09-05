@@ -892,23 +892,40 @@ export function App() {
   };
 
   const handleResetActiveDay = (dateStr: string) => {
+    // 1. Reset matching testRuns
     setTestRuns(prevRuns =>
       prevRuns.map(run => {
+        const runDate = run.completedAt
+          ? getLocalDateStr(run.completedAt)
+          : (run.startedAt ? getLocalDateStr(run.startedAt) : '');
+
         const updatedResults = { ...run.results };
         let modified = false;
         (Object.entries(updatedResults) as [string, any][]).forEach(([stepId, res]) => {
-          if (res && res.timestamp && res.timestamp.slice(0, 10) === dateStr) {
+          const stepDate = res && res.timestamp ? getLocalDateStr(res.timestamp) : '';
+          if (stepDate === dateStr || runDate === dateStr) {
             delete updatedResults[stepId];
             modified = true;
           }
         });
-        if (modified) {
+
+        const updatedBugs = (run.bugLogs || []).filter(b => {
+          const bugDate = b.timestamp ? getLocalDateStr(b.timestamp) : '';
+          return bugDate !== dateStr;
+        });
+        if ((run.bugLogs || []).length !== updatedBugs.length) {
+          modified = true;
+        }
+
+        if (modified || runDate === dateStr) {
           const remainingKeys = Object.keys(updatedResults).length;
-          const updated = {
+          const updated: TestRun = {
             ...run,
             results: updatedResults,
+            bugLogs: updatedBugs,
             currentStepIndex: 0,
-            status: (remainingKeys === 0 ? 'not_started' : 'in_progress') as TestRun['status']
+            status: (remainingKeys === 0 ? 'not_started' : 'in_progress') as TestRun['status'],
+            completedAt: remainingKeys === 0 ? undefined : run.completedAt
           };
           syncTestRunToSupabase(updated);
           return updated;
@@ -917,28 +934,67 @@ export function App() {
       })
     );
 
-    setArchivedRuns(prevRuns =>
-      prevRuns.map(run => {
+    // 2. Reset or delete matching archivedRuns from state and Supabase
+    setArchivedRuns(prevRuns => {
+      const remainingRuns: TestRun[] = [];
+      prevRuns.forEach(run => {
+        const runDate = run.completedAt
+          ? getLocalDateStr(run.completedAt)
+          : (run.startedAt ? getLocalDateStr(run.startedAt) : '');
+
         const updatedResults = { ...run.results };
         let modified = false;
         (Object.entries(updatedResults) as [string, any][]).forEach(([stepId, res]) => {
-          if (res && res.timestamp && res.timestamp.slice(0, 10) === dateStr) {
+          const stepDate = res && res.timestamp ? getLocalDateStr(res.timestamp) : '';
+          if (stepDate === dateStr || runDate === dateStr) {
             delete updatedResults[stepId];
             modified = true;
           }
         });
-        if (modified) {
-          const updated = {
+
+        const updatedBugs = (run.bugLogs || []).filter(b => {
+          const bugDate = b.timestamp ? getLocalDateStr(b.timestamp) : '';
+          return bugDate !== dateStr;
+        });
+        if ((run.bugLogs || []).length !== updatedBugs.length) {
+          modified = true;
+        }
+
+        const remainingKeys = Object.keys(updatedResults).length;
+        // If the entire archived run was from this day or has zero steps and zero bugs left, delete it completely
+        if (runDate === dateStr || (remainingKeys === 0 && updatedBugs.length === 0)) {
+          deleteArchivedRunFromSupabase(run.id);
+        } else if (modified) {
+          const updated: TestRun = {
             ...run,
             results: updatedResults,
-            status: (Object.keys(updatedResults).length === 0 ? 'not_started' : run.status) as TestRun['status']
+            bugLogs: updatedBugs,
+            status: (remainingKeys === 0 ? 'not_started' : run.status) as TestRun['status']
           };
           syncArchivedRunToSupabase(updated);
-          return updated;
+          remainingRuns.push(updated);
+        } else {
+          remainingRuns.push(run);
         }
-        return run;
-      })
-    );
+      });
+      return remainingRuns;
+    });
+
+    // 3. Delete matching bugLogs for this day from state and Supabase
+    setBugLogs(prevBugs => {
+      const toKeep: BugLog[] = [];
+      const toDelete: BugLog[] = [];
+      prevBugs.forEach(b => {
+        const bugDate = b.timestamp ? getLocalDateStr(b.timestamp) : '';
+        if (bugDate === dateStr) {
+          toDelete.push(b);
+        } else {
+          toKeep.push(b);
+        }
+      });
+      toDelete.forEach(b => deleteBugLogFromSupabase(b.id));
+      return toKeep;
+    });
   };
 
   const handleDeleteBug = (bugId: string) => {
