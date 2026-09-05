@@ -1062,6 +1062,72 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const totalStepsAcrossFeatures = featureMetricsList.reduce((acc, f) => acc + f.totalStepsExecuted, 0);
   const totalBugsAcrossFeatures = featureMetricsList.reduce((acc, f) => acc + f.bugCount, 0);
 
+  // Filter completed runs corresponding to the selected Daily QA Session Date (or all historical)
+  const sessionCompletedRuns = useMemo(() => {
+    return completedRuns.filter(run => {
+      if (selectedDailySessionDate === 'all') return true;
+      const plan = testPlans.find(p => p.id === run.planId);
+      if (!plan) return false;
+
+      // 1. Check run completedAt / startedAt date
+      const runCompletedDate = run.completedAt ? getLocalDateStr(run.completedAt) : '';
+      const runStartedDate = run.startedAt ? getLocalDateStr(run.startedAt) : '';
+      if (runCompletedDate === selectedDailySessionDate || runStartedDate === selectedDailySessionDate) {
+        return true;
+      }
+
+      // 2. Check any executed step timestamp in this run
+      return plan.steps.some(step => {
+        const res = run.results?.[step.id];
+        if (!res || !res.timestamp) return false;
+        return getLocalDateStr(res.timestamp) === selectedDailySessionDate;
+      });
+    });
+  }, [completedRuns, selectedDailySessionDate, testPlans]);
+
+  // Evaluate Golden Runs:
+  // "runs where every feature passed with a green, it is allowed 1 yellow but no more, and definitly no reds"
+  const goldenRunsAnalysis = useMemo(() => {
+    const evaluatedRuns = sessionCompletedRuns.map(run => {
+      const plan = testPlans.find(p => p.id === run.planId);
+      const steps = plan ? plan.steps : [];
+      const results = steps.map(s => run.results?.[s.id]).filter(Boolean);
+
+      const redCount = results.filter(r => r.status === 'red').length;
+      const yellowCount = results.filter(r => r.status === 'yellow').length;
+      const greenCount = results.filter(r => r.status === 'green').length;
+      const totalSteps = steps.length || results.length;
+
+      // Golden Run rule:
+      // - 100% completed execution (totalSteps > 0)
+      // - Zero reds: redCount === 0
+      // - At most 1 yellow: yellowCount <= 1
+      const isGolden = redCount === 0 && yellowCount <= 1 && totalSteps > 0 && results.length >= totalSteps;
+
+      return {
+        run,
+        plan,
+        isGolden,
+        redCount,
+        yellowCount,
+        greenCount,
+        totalSteps,
+        cleanPct: totalSteps > 0 ? Math.round((greenCount / totalSteps) * 100) : 0
+      };
+    });
+
+    const goldenCount = evaluatedRuns.filter(r => r.isGolden).length;
+    const totalCount = evaluatedRuns.length;
+    const goldenPct = totalCount > 0 ? Math.round((goldenCount / totalCount) * 100) : 0;
+
+    return {
+      runs: evaluatedRuns,
+      goldenCount,
+      totalCount,
+      goldenPct
+    };
+  }, [sessionCompletedRuns, testPlans]);
+
   const handleExecuteCopyReport = async (skipKeyCheck: boolean = false) => {
     if (!skipKeyCheck && !getStoredGeminiApiKey()) {
       setTempApiKey(getStoredGeminiApiKey());
@@ -1137,6 +1203,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       let plainText = `📊 CUJ Report (${new Date().toLocaleDateString()})\n`;
       plainText += `• Coverage: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)\n`;
       plainText += `• Status: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)\n`;
+      plainText += `• Golden Runs: 🏆 ${goldenRunsAnalysis.goldenCount} / ${goldenRunsAnalysis.totalCount} (${goldenRunsAnalysis.goldenPct}% clean runs, ≤1 yellow, 0 reds)\n`;
       if (reportDisclaimer && reportDisclaimer.trim()) {
         plainText += `Disclaimer: ${reportDisclaimer.trim()}\n`;
       }
@@ -1190,7 +1257,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
       let htmlText = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5;">`;
       htmlText += `<p style="margin: 0 0 6px 0;">📊 <b>CUJ Report</b> (${new Date().toLocaleDateString()})</p>`;
       htmlText += `<p style="margin: 0 0 4px 0;">• <b>Coverage</b>: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)</p>`;
-      htmlText += `<p style="margin: 0 0 8px 0;">• <b>Status</b>: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)</p>`;
+      htmlText += `<p style="margin: 0 0 4px 0;">• <b>Status</b>: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)</p>`;
+      htmlText += `<p style="margin: 0 0 8px 0;">• <b>Golden Runs</b>: 🏆 <b>${goldenRunsAnalysis.goldenCount} / ${goldenRunsAnalysis.totalCount}</b> (${goldenRunsAnalysis.goldenPct}%) <span style="color: #64748b; font-size: 11px;">(Runs with ≤1 yellow, 0 reds)</span></p>`;
       if (reportDisclaimer && reportDisclaimer.trim()) {
         htmlText += `<p style="margin: 0 0 8px 0; color: #475569;"><b>Disclaimer:</b> ${reportDisclaimer.trim()}</p>`;
       }
@@ -1573,6 +1641,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
               {activeTab === 'features' && <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>}
             </div>
             <div className="text-xl font-black text-amber-300 mt-1 font-mono tracking-tight">{featureMetricsList.length} CUJs</div>
+            {goldenRunsAnalysis.totalCount > 0 && (
+              <div className="text-[10px] text-amber-300 font-mono font-bold mt-0.5 flex items-center gap-1">
+                <span>🏆</span>
+                <span>{goldenRunsAnalysis.goldenCount}/{goldenRunsAnalysis.totalCount} Golden</span>
+              </div>
+            )}
           </div>
           <div className={`p-2.5 rounded-xl border transition-all ${
             activeTab === 'features'
@@ -2953,11 +3027,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         : '🟢 System Healthy'}
                     </span>
                   </div>
+
+                  {/* Golden Runs Header Badge */}
+                  <div className="flex items-center gap-2 bg-gradient-to-r from-amber-500/15 to-yellow-500/15 border border-amber-400/30 px-3.5 h-9 rounded-2xl shadow-inner whitespace-nowrap flex-shrink-0" title="Golden Runs: Fully completed runs with 0 reds and at most 1 yellow">
+                    <span className="text-xs">🏆</span>
+                    <span className="text-[11px] text-amber-300 font-bold whitespace-nowrap">Golden Runs:</span>
+                    <span className="text-xs font-black font-mono text-amber-200">{goldenRunsAnalysis.goldenCount}/{goldenRunsAnalysis.totalCount}</span>
+                    <span className="text-[10px] text-amber-300/90 font-mono font-bold bg-amber-400/20 px-1.5 py-0.5 rounded-md">
+                      {goldenRunsAnalysis.goldenPct}%
+                    </span>
+                  </div>
                 </div>
               </div>
 
               {/* KPI Summary Cards */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
                 <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3.5">
                   <div className="text-[11px] text-slate-400 font-medium">Total Features Tracked</div>
                   <div className="text-2xl font-extrabold text-white mt-1 font-mono">{totalFeaturesCount}</div>
@@ -2989,6 +3073,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </div>
                   <div className="text-2xl font-extrabold text-emerald-300 mt-1 font-mono">{healthyFeaturesCount}</div>
                   <div className="text-[10px] text-emerald-400/80 mt-0.5">100% Passing test steps</div>
+                </div>
+
+                <div className="bg-gradient-to-br from-amber-950/40 via-yellow-950/30 to-amber-900/20 border border-amber-500/40 rounded-xl p-3.5 relative overflow-hidden shadow-sm hover:border-amber-400/70 transition-all col-span-2 sm:col-span-1">
+                  <div className="text-[11px] text-amber-300 font-semibold uppercase flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <span>🏆</span> Golden Runs
+                    </span>
+                    <span className="font-mono text-xs text-amber-400 font-bold">{goldenRunsAnalysis.goldenPct}%</span>
+                  </div>
+                  <div className="text-2xl font-extrabold text-amber-200 mt-1 font-mono flex items-baseline gap-1.5">
+                    <span>{goldenRunsAnalysis.goldenCount}</span>
+                    <span className="text-sm font-normal text-slate-400">/ {goldenRunsAnalysis.totalCount}</span>
+                  </div>
+                  <div className="text-[10px] text-amber-400/90 mt-0.5 font-medium">
+                    {goldenRunsAnalysis.totalCount === 0
+                      ? 'No completed runs'
+                      : `${goldenRunsAnalysis.goldenCount} clean run${goldenRunsAnalysis.goldenCount === 1 ? '' : 's'} (≤1 🟡, 0 🔴)`}
+                  </div>
                 </div>
               </div>
 
@@ -3049,74 +3151,152 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       Healthy: {healthyFeaturesCount} ({healthyPct}%)
                     </span>
                   </div>
+                  <div className="text-[11px] text-amber-300 font-mono font-bold flex items-center gap-1.5">
+                    <span>🏆</span>
+                    <span>Golden Runs: {goldenRunsAnalysis.goldenCount}/{goldenRunsAnalysis.totalCount} ({goldenRunsAnalysis.goldenPct}%)</span>
+                  </div>
                 </div>
               </div>
 
               {/* Fluid Liquid Glass Expandable Feature Breakdown Report Table */}
               <div className={`liquid-accordion-wrapper ${isFeatureReportExpanded ? 'expanded' : ''}`}>
                 <div className="liquid-accordion-inner">
-                  <div className="pt-4 pb-4 border-t border-slate-800 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
-                        <Tag className="w-3.5 h-3.5 text-purple-400" />
-                        Feature Health Breakdown Report ({featureMetricsList.length} Features)
-                      </h4>
-                      <span className="text-[10px] font-mono text-slate-400">Live Snapshot Table</span>
+                  <div className="pt-4 pb-4 border-t border-slate-800 space-y-6">
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                          <Tag className="w-3.5 h-3.5 text-purple-400" />
+                          Feature Health Breakdown Report ({featureMetricsList.length} Features)
+                        </h4>
+                        <span className="text-[10px] font-mono text-slate-400">Live Snapshot Table</span>
+                      </div>
+
+                      <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/90 shadow-inner">
+                        <table className="w-full text-left text-xs font-sans">
+                          <thead className="bg-slate-900/90 border-b border-slate-800 text-[11px] text-slate-200 uppercase font-bold tracking-wider">
+                            <tr>
+                              <th className="py-3 px-4">Feature Name</th>
+                              <th className="py-3 px-4">Status</th>
+                              <th className="py-3 px-4">Health Score</th>
+                              <th className="py-3 px-4">Execution Total</th>
+                              <th className="py-3 px-4">Passed (Green)</th>
+                              <th className="py-3 px-4">Warning (Yellow)</th>
+                              <th className="py-3 px-4">Failed (Red)</th>
+                              <th className="py-3 px-4">Bugs Logged</th>
+                              <th className="py-3 px-4">Issues Encountered</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-800/60 text-slate-100 font-medium">
+                            {featureMetricsList.map(metric => {
+                              const issueSummary = getBriefIssueSummarySync(metric.featureName, metric.associatedBugs, metric.yellowCount, metric.redCount);
+                              return (
+                                <tr key={metric.featureName} className="hover:bg-slate-900/50 transition">
+                                  <td className="py-2.5 px-4 font-bold text-white whitespace-nowrap">{metric.featureName}</td>
+                                  <td className="py-2.5 px-4 whitespace-nowrap">
+                                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase border ${
+                                      metric.status === 'healthy'
+                                        ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                        : metric.status === 'warning'
+                                        ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                        : 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                                    }`}>
+                                      <span className={`w-1.5 h-1.5 rounded-full ${
+                                        metric.status === 'healthy' ? 'bg-emerald-400' : metric.status === 'warning' ? 'bg-amber-400' : 'bg-rose-400'
+                                      }`}></span>
+                                      {metric.status === 'healthy' ? 'Healthy' : metric.status === 'warning' ? 'Degraded' : 'Critical'}
+                                    </span>
+                                  </td>
+                                  <td className="py-2.5 px-4 font-bold text-purple-300 font-mono whitespace-nowrap">{metric.healthScorePct}%</td>
+                                  <td className="py-2.5 px-4 font-mono font-semibold whitespace-nowrap">{metric.totalStepsExecuted}</td>
+                                  <td className="py-2.5 px-4 text-emerald-400 font-bold font-mono whitespace-nowrap">{metric.greenCount}</td>
+                                  <td className="py-2.5 px-4 text-amber-400 font-bold font-mono whitespace-nowrap">{metric.yellowCount}</td>
+                                  <td className="py-2.5 px-4 text-rose-400 font-bold font-mono whitespace-nowrap">{metric.redCount}</td>
+                                  <td className="py-2.5 px-4 text-rose-400 font-bold font-mono whitespace-nowrap">{metric.bugCount}</td>
+                                  <td className="py-2.5 px-4 text-xs font-sans text-slate-100 max-w-xs truncate" title={issueSummary || 'No issues encountered'}>
+                                    {issueSummary ? (
+                                      <span className="text-amber-200 font-semibold">{issueSummary}</span>
+                                    ) : (
+                                      <span className="text-slate-500 font-mono">-</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
 
-                    <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/90 shadow-inner">
-                      <table className="w-full text-left text-xs font-sans">
-                        <thead className="bg-slate-900/90 border-b border-slate-800 text-[11px] text-slate-200 uppercase font-bold tracking-wider">
-                          <tr>
-                            <th className="py-3 px-4">Feature Name</th>
-                            <th className="py-3 px-4">Status</th>
-                            <th className="py-3 px-4">Health Score</th>
-                            <th className="py-3 px-4">Execution Total</th>
-                            <th className="py-3 px-4">Passed (Green)</th>
-                            <th className="py-3 px-4">Warning (Yellow)</th>
-                            <th className="py-3 px-4">Failed (Red)</th>
-                            <th className="py-3 px-4">Bugs Logged</th>
-                            <th className="py-3 px-4">Issues Encountered</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-800/60 text-slate-100 font-medium">
-                          {featureMetricsList.map(metric => {
-                            const issueSummary = getBriefIssueSummarySync(metric.featureName, metric.associatedBugs, metric.yellowCount, metric.redCount);
-                            return (
-                              <tr key={metric.featureName} className="hover:bg-slate-900/50 transition">
-                                <td className="py-2.5 px-4 font-bold text-white whitespace-nowrap">{metric.featureName}</td>
-                                <td className="py-2.5 px-4 whitespace-nowrap">
-                                  <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase border ${
-                                    metric.status === 'healthy'
-                                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                                      : metric.status === 'warning'
-                                      ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
-                                      : 'bg-rose-500/15 text-rose-300 border-rose-500/30'
-                                  }`}>
-                                    <span className={`w-1.5 h-1.5 rounded-full ${
-                                      metric.status === 'healthy' ? 'bg-emerald-400' : metric.status === 'warning' ? 'bg-amber-400' : 'bg-rose-400'
-                                    }`}></span>
-                                    {metric.status === 'healthy' ? 'Healthy' : metric.status === 'warning' ? 'Degraded' : 'Critical'}
-                                  </span>
-                                </td>
-                                <td className="py-2.5 px-4 font-bold text-purple-300 font-mono whitespace-nowrap">{metric.healthScorePct}%</td>
-                                <td className="py-2.5 px-4 font-mono font-semibold whitespace-nowrap">{metric.totalStepsExecuted}</td>
-                                <td className="py-2.5 px-4 text-emerald-400 font-bold font-mono whitespace-nowrap">{metric.greenCount}</td>
-                                <td className="py-2.5 px-4 text-amber-400 font-bold font-mono whitespace-nowrap">{metric.yellowCount}</td>
-                                <td className="py-2.5 px-4 text-rose-400 font-bold font-mono whitespace-nowrap">{metric.redCount}</td>
-                                <td className="py-2.5 px-4 text-rose-400 font-bold font-mono whitespace-nowrap">{metric.bugCount}</td>
-                                <td className="py-2.5 px-4 text-xs font-sans text-slate-100 max-w-xs truncate" title={issueSummary || 'No issues encountered'}>
-                                  {issueSummary ? (
-                                    <span className="text-amber-200 font-semibold">{issueSummary}</span>
-                                  ) : (
-                                    <span className="text-slate-500 font-mono">-</span>
-                                  )}
-                                </td>
+                    {/* Golden Runs Execution Tracker Panel */}
+                    <div className="pt-4 border-t border-slate-800/80 space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                        <h4 className="text-xs font-bold text-amber-300 uppercase tracking-wider flex items-center gap-2">
+                          <span>🏆</span>
+                          Golden Runs Tracker ({goldenRunsAnalysis.goldenCount} of {goldenRunsAnalysis.totalCount} Qualified)
+                        </h4>
+                        <span className="text-[10px] font-mono text-slate-400">
+                          Criterion: 100% completed execution • ≤1 Yellow • 0 Reds
+                        </span>
+                      </div>
+
+                      {goldenRunsAnalysis.runs.length === 0 ? (
+                        <div className="p-4 rounded-xl border border-slate-800 bg-slate-950/60 text-center text-xs text-slate-400 font-medium">
+                          No completed test runs recorded for {selectedDailySessionDate === todayStr ? 'Today' : selectedDailySessionDate}.
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/90 shadow-inner">
+                          <table className="w-full text-left text-xs font-sans">
+                            <thead className="bg-slate-900/90 border-b border-slate-800 text-[11px] text-slate-200 uppercase font-bold tracking-wider">
+                              <tr>
+                                <th className="py-3 px-4">Test Plan / Suite</th>
+                                <th className="py-3 px-4">Tester</th>
+                                <th className="py-3 px-4">Device</th>
+                                <th className="py-3 px-4">Tracker Status</th>
+                                <th className="py-3 px-4">Passed (Green)</th>
+                                <th className="py-3 px-4">Degraded (Yellow)</th>
+                                <th className="py-3 px-4">Failed (Red)</th>
+                                <th className="py-3 px-4">Completed</th>
                               </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                            </thead>
+                            <tbody className="divide-y divide-slate-800/60 text-slate-100 font-medium">
+                              {goldenRunsAnalysis.runs.map(({ run, plan, isGolden, greenCount, yellowCount, redCount, totalSteps }) => {
+                                const completedTimeStr = run.completedAt
+                                  ? new Date(run.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                                  : run.startedAt
+                                  ? new Date(run.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                                  : '-';
+                                return (
+                                  <tr key={run.id} className={`transition ${isGolden ? 'bg-amber-500/5 hover:bg-amber-500/10' : 'hover:bg-slate-900/50'}`}>
+                                    <td className="py-2.5 px-4 font-bold text-white whitespace-nowrap">
+                                      <div className="flex items-center gap-2">
+                                        {isGolden ? <span className="text-amber-400">🏆</span> : <span className="text-slate-500">•</span>}
+                                        <span>{plan?.name || run.planName || 'Test Run'}</span>
+                                      </div>
+                                    </td>
+                                    <td className="py-2.5 px-4 text-slate-300 whitespace-nowrap">{run.testerName || 'Anonymous'}</td>
+                                    <td className="py-2.5 px-4 text-purple-300 font-mono whitespace-nowrap">{run.deviceName || 'Web/Desktop'}</td>
+                                    <td className="py-2.5 px-4 whitespace-nowrap">
+                                      {isGolden ? (
+                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                          <span>🏆</span> Golden Run {yellowCount === 0 ? '(Clean 100%)' : '(1 Yellow allowed)'}
+                                        </span>
+                                      ) : (
+                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold text-slate-400 bg-slate-800/60 border border-slate-700">
+                                          {redCount > 0 ? `🔴 Non-Golden (${redCount} Red)` : `🟡 Non-Golden (${yellowCount} Yellows)`}
+                                        </span>
+                                      )}
+                                    </td>
+                                    <td className="py-2.5 px-4 text-emerald-400 font-bold font-mono whitespace-nowrap">{greenCount} / {totalSteps}</td>
+                                    <td className="py-2.5 px-4 text-amber-400 font-bold font-mono whitespace-nowrap">{yellowCount}</td>
+                                    <td className="py-2.5 px-4 text-rose-400 font-bold font-mono whitespace-nowrap">{redCount}</td>
+                                    <td className="py-2.5 px-4 text-slate-400 font-mono whitespace-nowrap">{completedTimeStr}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
