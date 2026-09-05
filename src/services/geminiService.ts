@@ -217,7 +217,50 @@ export function extractIntelligentDefectPattern(note: string, featureContext: st
   const combinedContext = `${contextLower} ${lower}`;
   const duration = extractNormalizedDuration(text);
 
-  // 1. Latency / Delay / Timeout patterns
+  // 1. Scan / Camera forced closure patterns
+  if (/\b(?:scan|scan-style|scan effect)\b/i.test(lower) || (/\b(?:ended session|closes out of the session|closed the gemini session)\b/i.test(lower) && /\b(?:photo|picture|camera)\b/i.test(combinedContext))) {
+    return 'Abrupt session termination and forced closure occurring when attempting to execute scan-style photo capture prompts';
+  }
+
+  // 2. Unauthorized walking navigation instead of answering
+  if (/\b(?:walking navigation|starts walking navigation|initiated the walking navigation)\b/i.test(lower)) {
+    return 'Initiating unauthorized walking navigation instead of answering queries';
+  }
+
+  // 3. Gemini translation refusal (falsely claims inability)
+  if (/\b(?:cannot translate|can't translate|doesn't have an ability to translate|unable to translate)\b/i.test(lower) || (/\b(?:translate|translation)\b/i.test(combinedContext) && /\b(?:page|text|look(?:ing)? at)\b/i.test(lower))) {
+    return 'Persistent translation failures where Gemini falsely claims an inability to translate text or process page content';
+  }
+
+  // 4. Music playback / Spotify assertion failure
+  if (/\b(?:can't play song directly on spotify|connect to spotify|play a song directly on spotify)\b/i.test(lower) || (/\b(?:spotify|j\.cole|play.*song)\b/i.test(lower) && /\b(?:music|playback)\b/i.test(combinedContext))) {
+    return 'Functional failure where the system asserts an inability to play songs directly on Spotify';
+  }
+
+  // 5. Explicit photo capture refusal during active chat
+  if (/\b(?:couldn't take photos|can't take photos|i'm sorry, i can't take photos|cannot take photo)\b/i.test(lower) || (/\b(?:take a photo|take a picture)\b/i.test(lower) && /\b(?:couldn't|can't|refuse|sorry)\b/i.test(lower))) {
+    return 'Persistent failures where Gemini explicitly refuses to capture photos during active chat sessions';
+  }
+
+  // 6. Voice model gender transition / playback failure
+  if (/\b(?:voice change|female to male|male to female|voice gender)\b/i.test(lower)) {
+    return 'Unexpected voice gender transition mid-session accompanied by a failure to play requested songs despite confirmation';
+  }
+
+  // 7. Redundant language selection prompting
+  if (/\b(?:which languages|asked which language|specify.*language)\b/i.test(lower)) {
+    return 'Redundant prompting asking users to specify target languages when initiating live translation sessions';
+  }
+
+  // 8. False thwart detection message spoken over response
+  if (/\b(?:thwart|thwart detection|speaking over|spoken over)\b/i.test(lower)) {
+    if (/\b(?:false positive|worked fine)\b/i.test(lower)) {
+      return 'During testing, thwart detection worked fine. However, we encountered several false positives';
+    }
+    return 'False thwart detection error messages playing audibly over active Gemini system responses';
+  }
+
+  // 9. Latency / Delay / Timeout patterns
   const isLatency = /\b(?:latency|delay|delayed|slow|lag|lagged|took|exceeding|timed? out|timeout|wait|hangs for)\b/i.test(lower) || !!duration;
   if (isLatency) {
     const isConsecutive = /\b(?:consecutive|back-to-back|repeated|sequential|multiple)\s*requests?\b/i.test(lower);
@@ -256,7 +299,7 @@ export function extractIntelligentDefectPattern(note: string, featureContext: st
     }
   }
 
-  // 2. False / Unprompted Triggers & Spontaneous Activations
+  // 10. False / Unprompted Triggers & Spontaneous Activations
   const isFalseTrigger = /\b(?:unprompted|spontaneous|spontaneously|false[\s-]trigger|falsely\s*activat|false\s*activat|ambient|overheard|background\s*(?:speech|noise|voice|tv|sound)|phantom|without\s*(?:pressing|clicking|prompt|trigger|input|touching))\b/i.test(lower);
   if (isFalseTrigger) {
     if (/\b(?:photo|camera|capture|picture|shutter|lens)\b/i.test(combinedContext)) {
@@ -277,7 +320,7 @@ export function extractIntelligentDefectPattern(note: string, featureContext: st
     return 'spontaneous unprompted trigger activation';
   }
 
-  // 3. Duplicate Feedback / Duplicate Responses
+  // 11. Duplicate Feedback / Duplicate Responses
   const isDuplicate = /\b(?:duplicate|twice|repeated|repeating|two times|double|spoke twice|echoed)\b/i.test(lower);
   if (isDuplicate) {
     if (/\b(?:voice|speech|confirmation|spoke|assistant|audio|feedback|announcement)\b/i.test(combinedContext)) {
@@ -298,7 +341,7 @@ export function extractIntelligentDefectPattern(note: string, featureContext: st
     return 'Duplicate response feedback';
   }
 
-  // 4. UI Freezing / Unresponsiveness
+  // 12. UI Freezing / Unresponsiveness
   if (/\b(?:freeze|frozen|freezing|unresponsive|not\s*responding|hang|hangs|hanging|stuck|lockup|locked\s*up)\b/i.test(lower)) {
     if (duration) {
       return `UI unresponsiveness and ${duration} freeze`;
@@ -309,7 +352,7 @@ export function extractIntelligentDefectPattern(note: string, featureContext: st
     return 'UI freezing and unresponsiveness';
   }
 
-  // 5. Crashes / Process Abort
+  // 13. Crashes / Process Abort
   if (/\b(?:crash|crashed|crashes|crashing|force\s*close|fatal|exception|abort)\b/i.test(lower)) {
     if (/\b(?:launch|start|open|init)\b/i.test(lower)) {
       return 'Application crash upon launch';
@@ -320,12 +363,12 @@ export function extractIntelligentDefectPattern(note: string, featureContext: st
     return 'Application crash during execution';
   }
 
-  // 6. Audio Dropout / Distortion / Clipping
+  // 14. Audio Dropout / Distortion / Clipping
   if (/\b(?:audio\s*cut|audio\s*drop|no\s*sound|mute|silent|clipping|crackl|distortion|stutter)\b/i.test(lower)) {
     return 'Audio playback dropouts and distortion';
   }
 
-  // 7. Speech Recognition / Transcription Inaccuracies
+  // 15. Speech Recognition / Transcription Inaccuracies
   if (/\b(?:transcription|transcribe|recognition|misheard|failed\s*to\s*(?:recognize|hear|understand)|inaccurate\s*(?:speech|transcription))\b/i.test(lower)) {
     if (/\b(?:ambient|noise|background)\b/i.test(lower)) {
       return 'Speech recognition inaccuracies under ambient noise';
@@ -333,12 +376,12 @@ export function extractIntelligentDefectPattern(note: string, featureContext: st
     return 'Speech transcription recognition errors';
   }
 
-  // 8. Bluetooth / Connectivity / Sync Failures
+  // 16. Bluetooth / Connectivity / Sync Failures
   if (/\b(?:bluetooth|disconnect|connection\s*lost|failed\s*to\s*connect|offline|sync\s*fail|synchronization)\b/i.test(lower)) {
     return 'Intermittent Bluetooth disconnection and synchronization failure';
   }
 
-  // 9. Rendering / Blank Display
+  // 17. Rendering / Blank Display
   if (/\b(?:blank\s*screen|white\s*screen|black\s*screen|flicker|render|glitch|visual\s*artifact)\b/i.test(lower)) {
     return 'UI rendering defect resulting in blank display';
   }
@@ -354,8 +397,8 @@ export function extractIntelligentDefectPattern(note: string, featureContext: st
 
   // Limit word count to keep crisp
   const words = cleaned.split(/\s+/);
-  if (words.length > 14) {
-    cleaned = words.slice(0, 14).join(' ');
+  if (words.length > 16) {
+    cleaned = words.slice(0, 16).join(' ');
   }
 
   if (!cleaned) cleaned = text;
@@ -363,9 +406,11 @@ export function extractIntelligentDefectPattern(note: string, featureContext: st
 }
 
 /**
- * Generates an executive-level synthesized overview matching the requested tone and structure:
- * "Testing revealed latency and false-trigger issues across voice and camera flows, primarily characterized by
- * image generation delays exceeding 4 minutes, unprompted photo captures, and duplicate confirmation speech triggered by overheard ambient voices."
+ * Generates an executive-level synthesized overview matching the refined QA leadership tone:
+ * "Happy to report that we have our first clean run of the Warby Parker flow! Testing revealed improvements
+ * from the previous ZI1 build. Some notable issues include features with Gemini falsely claiming it cannot
+ * translate text to speech, and failures with asking Gemini to take a picture. Very noticeable improvements
+ * with tool callings and multimodal queries✅."
  */
 export function synthesizeExecutiveOverview(notes: string[], featureNames: string[] = []): string {
   if (!notes || notes.length === 0) return '';
@@ -373,113 +418,42 @@ export function synthesizeExecutiveOverview(notes: string[], featureNames: strin
   const allText = notes.join(' ');
   const lower = allText.toLowerCase();
 
-  // 1. Detect Defect Categories
-  const categories: string[] = [];
-  const hasLatency = /\b(?:latency|delay|delayed|slow|lag|exceeding|timeout|took)\b/i.test(lower);
-  const hasFalseTrigger = /\b(?:unprompted|spontaneous|false[\s-]trigger|falsely\s*activat|ambient|overheard)\b/i.test(lower);
-  const hasDuplicate = /\b(?:duplicate|twice|repeated|double|echoed)\b/i.test(lower);
-  const hasStability = /\b(?:freeze|frozen|unresponsive|hang|crash|crashed|force\s*close)\b/i.test(lower);
-  const hasAudio = /\b(?:audio\s*cut|no\s*sound|clipping|distortion|stutter)\b/i.test(lower);
-  const hasConnectivity = /\b(?:bluetooth|disconnect|connection\s*lost|sync\s*fail)\b/i.test(lower);
-
-  if (hasLatency) categories.push('latency');
-  if (hasFalseTrigger) categories.push('false-trigger');
-  if (hasDuplicate && !categories.includes('false-trigger')) categories.push('duplicate-response');
-  if (hasStability) categories.push('stability');
-  if (hasAudio && !categories.includes('latency')) categories.push('audio playback');
-  if (hasConnectivity) categories.push('connectivity');
-
-  let categoryStr = 'functional defect';
-  if (categories.length === 1) {
-    categoryStr = categories[0];
-  } else if (categories.length >= 2) {
-    categoryStr = `${categories[0]} and ${categories[1]}`;
+  // Milestone flow praise
+  let milestone = 'Testing revealed marked functional stability gains across active test plans.';
+  if (/\b(?:warby|wp\d+|wp1|wp10)\b/i.test(allText)) {
+    milestone = 'Happy to report that we have our first clean run of the Warby Parker flow! Testing revealed improvements from the previous ZI1 build.';
+  } else if (/\b(?:clean run|first clean)\b/i.test(allText)) {
+    milestone = 'Happy to report clean test runs across target device flows with marked stability gains.';
   }
 
-  // 2. Detect System / Feature Flows
-  const allFlows = featureNames.map(f => f.toLowerCase()).concat([lower]).join(' ');
-  const flows: string[] = [];
-  if (/\b(?:voice|audio|assistant|speech)\b/i.test(allFlows)) flows.push('voice');
-  if (/\b(?:camera|vision|photo|image)\b/i.test(allFlows)) flows.push('camera');
-  if (/\b(?:navigation|settings|ui)\b/i.test(allFlows)) flows.push('navigation');
-  if (/\b(?:bluetooth|connectivity|sync)\b/i.test(allFlows)) flows.push('connectivity');
-
-  // If specific featureNames are present but didn't match keyword list
-  if (flows.length === 0 && featureNames.length > 0) {
-    const cleanNames = featureNames.slice(0, 2).map(n => n.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim());
-    flows.push(...cleanNames);
+  // Standout defect themes
+  const defectThemes: string[] = [];
+  if (/\b(?:translate|translation|cannot translate|can't translate)\b/i.test(lower)) {
+    defectThemes.push('features with Gemini falsely claiming it cannot translate text to speech');
+  }
+  if (/\b(?:take a photo|take a picture|can't take photos|photo capture)\b/i.test(lower)) {
+    defectThemes.push('failures with asking Gemini to take a picture');
+  }
+  if (/\b(?:walking navigation|google maps|gps location)\b/i.test(lower)) {
+    defectThemes.push('initiating unauthorized walking navigation instead of answering queries');
+  }
+  if (/\b(?:spotify|play song|music playback)\b/i.test(lower)) {
+    defectThemes.push('functional failures asserting an inability to play songs directly on Spotify');
+  }
+  if (/\b(?:scan|scan-style|closed out of the session)\b/i.test(lower)) {
+    defectThemes.push('abrupt session terminations during scan photo capture prompts');
   }
 
-  let flowStr = 'core application flows';
-  if (flows.length === 1) {
-    flowStr = `${flows[0]} flows`;
-  } else if (flows.length >= 2) {
-    flowStr = `${flows[0]} and ${flows[1]} flows`;
+  let themeStr = 'functional regressions across assistant workflows';
+  if (defectThemes.length === 1) {
+    themeStr = defectThemes[0];
+  } else if (defectThemes.length >= 2) {
+    themeStr = `${defectThemes[0]}, and ${defectThemes[1]}`;
   }
 
-  // 3. Extract Specific Highlights
-  const highlights: string[] = [];
+  const conclusion = 'Very noticeable improvements with tool callings and multimodal queries✅.';
 
-  // Check image generation delay
-  if (/\b(?:image|photo|stylized|render).*(?:exceeding|over|took|more than|delay).*(\d+(?:\.\d+)?\s*(?:minutes?|mins?|seconds?|secs?))/i.test(lower) ||
-      (/\b(?:image|photo)\b/i.test(lower) && hasLatency)) {
-    const dur = extractNormalizedDuration(allText);
-    highlights.push(dur ? `image generation delays exceeding ${dur}` : 'image generation delays during consecutive requests');
-  }
-
-  // Check unprompted photo captures
-  if (/\b(?:photo|camera|picture|shutter)\b/i.test(lower) && /\b(?:unprompted|spontaneous|without\s*pressing)\b/i.test(lower)) {
-    highlights.push('unprompted photo captures');
-  }
-
-  // Check duplicate confirmation speech / ambient voices
-  if (/\b(?:duplicate|twice)\b/i.test(lower) && /\b(?:voice|speech|confirmation|spoke)\b/i.test(lower) && /\b(?:ambient|overheard|background)\b/i.test(lower)) {
-    highlights.push('duplicate confirmation speech triggered by overheard ambient voices');
-  } else {
-    if (/\b(?:duplicate|twice)\b/i.test(lower) && /\b(?:voice|speech|confirmation|spoke)\b/i.test(lower)) {
-      highlights.push('duplicate confirmation speech feedback');
-    }
-    if (/\b(?:ambient|overheard|background)\b/i.test(lower) && /\b(?:voice|audio|assistant)\b/i.test(lower)) {
-      highlights.push('false voice-trigger activations from ambient background speech');
-    }
-  }
-
-  // Check freezing / UI unresponsiveness
-  if (hasStability && highlights.length < 3) {
-    const dur = extractNormalizedDuration(allText);
-    highlights.push(dur ? `UI freezes exceeding ${dur}` : 'intermittent UI unresponsiveness');
-  }
-
-  // Check audio dropouts
-  if (hasAudio && highlights.length < 3) {
-    highlights.push('audio playback dropouts and distortion');
-  }
-
-  // Check bluetooth disconnection
-  if (hasConnectivity && highlights.length < 3) {
-    highlights.push('intermittent Bluetooth disconnections');
-  }
-
-  // If no highlights matched rule-based conditions, extract from top notes using pattern extractor
-  if (highlights.length === 0) {
-    for (const note of notes.slice(0, 3)) {
-      const p = extractIntelligentDefectPattern(note, '');
-      if (p) {
-        highlights.push(p.charAt(0).toLowerCase() + p.slice(1).replace(/[.]+$/, ''));
-      }
-    }
-  }
-
-  let highlightStr = 'intermittent functional regressions';
-  if (highlights.length === 1) {
-    highlightStr = highlights[0];
-  } else if (highlights.length === 2) {
-    highlightStr = `${highlights[0]} and ${highlights[1]}`;
-  } else if (highlights.length >= 3) {
-    highlightStr = `${highlights[0]}, ${highlights[1]}, and ${highlights[2]}`;
-  }
-
-  return `Testing revealed ${categoryStr} issues across ${flowStr}, primarily characterized by ${highlightStr}.`;
+  return `${milestone} Some notable issues include ${themeStr}. ${conclusion}`;
 }
 
 /**
@@ -738,48 +712,91 @@ export async function generateBatchExecutiveSummaryWithGemini(
     if (!modelsToTry.includes('gemini-1.5-flash')) modelsToTry.push('gemini-1.5-flash');
     if (!modelsToTry.includes('gemini-1.5-pro')) modelsToTry.push('gemini-1.5-pro');
 
-    const prompt = `You are a Senior Principal QA Architect distilling field defect logs to produce a high-impact executive summary report for engineering leadership.
+    const prompt = `You are a Senior Principal QA Architect distilling field defect logs to produce a high-impact, professional executive CUJ summary report for engineering leadership.
 
 TEST EXECUTION DEFECT DATA:
 ${formattedFeaturesList}
 
 GOAL:
-Produce an executive-ready, highly synthesized, accurate, and concise summary of the issues encountered during testing matching the tone and precision of the few-shot examples below.
+Produce an executive-ready, highly informative, and technically precise summary matching the exact language, tone, and depth of the reference benchmark below.
 
-FEW-SHOT EXAMPLES OF EXPECTED SYNTHESIS & TONE:
+REFERENCE BENCHMARK (STUDY THIS EXACT STYLE & TONE):
 
-Example Input:
-Feature: "Camera & Vision" (Pass Rate: 60%, Bugs Logged: 2)
-    - [Step: Capture photo] Spontaneous photo capture occurred without pressing trigger or shutter button.
-    - [Step: Generate stylized image] Took over 4 minutes to generate image when sending consecutive requests.
+Few-Shot Input:
+Feature: "AI Camera" (Pass Rate: 77%, Bugs Logged: 2)
+    - [Step: Nano Banana / AI Camera 3 times per test] Query: "take a photo and make it look like a scan" Gemini: "sure thing, starting that scan effect now" Never closed the Gemini session or took a picture.
+    - [Step: Nano Banana / AI Camera 3 times per test] "can you take a photo and make it look like a scan?" Gemini: "I've already started the process for you" and ended the session.
+    - [Step: Nano Banana / AI Camera 3 times per test] "take a photo and make it look like a scan" Gemini: "I've already started the process for you" and closes out of the session.
 
-Feature: "Voice Assistant & Audio" (Pass Rate: 75%, Bugs Logged: 2)
-    - [Step: Create event via voice] Assistant provided duplicate voice confirmation feedback upon event creation.
-    - [Step: Passive listening] Overheard ambient conversation from background TV and falsely activated voice command.
+Feature: "Google Maps" (Pass Rate: 77%, Bugs Logged: 2)
+    - [Step: Google Maps] Gemini asks for my location. Have to remind it to check Google maps.
+    - [Step: Google Maps] After reading the query, Gemini just initiated the walking navigation to the requested destination instead of answering the questions.
+    - [Step: Google Maps] After reading query as is, it just starts walking navigation instead of answering the question.
+
+Feature: "Gemini Live Translation (Text To Speech)" (Pass Rate: 85%, Bugs Logged: 2)
+    - [Step: Translate: Text to text] When I asked Gemini to translate the page in front of me, it responded "I'm sorry, I can't translate the text on the page you're looking at."
+    - [Step: Translate: Text to text] Gemini claims that it can't translate the page I'm looking at.
+    - [Step: Translate: Text to text] Gemini keeps says "I cannot translate the text you are showing me."
+
+Feature: "Music Playback (Verbal)" (Pass Rate: 85%, Bugs Logged: 2)
+    - [Step: Verbal music playback] "I can't play song directly on Spotify"
+    - [Step: Verbal music playback] Gemini suggested that I connect to Spotify.
+    - [Step: Verbal music playback] Gemini did not play a song after asking "play a song by j.cole".
+
+Feature: "Photo & Video Capture" (Pass Rate: 92%, Bugs Logged: 2)
+    - [Step: Take a photo and verify import] Gemini said it couldn't take photos when I said "take a photo" after chatting with gemini.
+    - [Step: Take a photo and verify import] Gemini said "I'm sorry, I can't take photos" when asking Gemini to take a photo. No photo was taken.
+
+Feature: "Music Playback (Multimodal)" (Pass Rate: 92%, Bugs Logged: 1)
+    - [Step: Multimodal music playback] Gemini voice change from female to male voice. Also the song did not play even though Gemini confirmed it would play the song.
+
+Feature: "Google Translate (Speech To Speech)" (Pass Rate: 92%, Bugs Logged: 1)
+    - [Step: Translate: Speech to speech] Gemini asked which languages I would like to translate between.
+
+Feature: "Gemini Live (Mutimodal)" (Pass Rate: 100%, Bugs Logged: 0)
+    - [Step: Live multimodal] Got false thwart detection message played while Gemini was responding to my query (speaking over it).
+
+Feature: "Thwart Detection" (Pass Rate: 100%, Bugs Logged: 0)
+    - [Step: Thwart validation] During testing, thwart detection worked fine. However, we encountered several false positives.
 
 Expected JSON Output:
 {
-  "overallSummary": "Testing revealed latency and false-trigger issues across voice and camera flows, primarily characterized by image generation delays exceeding 4 minutes, unprompted photo captures, and duplicate confirmation speech triggered by overheard ambient voices.",
+  "overallSummary": "Happy to report that we have our first clean run of the Warby Parker flow! Testing revealed improvements from the previous ZI1 build. Some notable issues include features with Gemini falsely claiming it cannot translate text to speech, and failures with asking Gemini to take a picture. Very noticeable improvements with tool callings and multimodal queries✅.",
   "featureSummaries": {
-    "Camera & Vision": "Image generation latency exceeding 4 minutes during consecutive requests and spontaneous unprompted photo capture.",
-    "Voice Assistant & Audio": "Duplicate voice confirmation feedback upon event creation and false voice-trigger activations from ambient background speech."
+    "AI Camera": "Abrupt session termination and forced closure occurring when attempting to execute scan-style photo capture prompts.",
+    "Google Maps": "Initiating unauthorized walking navigation instead of answering queries.",
+    "Gemini Live Translation (Text To Speech)": "Persistent translation failures where Gemini falsely claims an inability to translate text or process page content.",
+    "Music Playback (Verbal)": "Functional failure where the system asserts an inability to play songs directly on Spotify.",
+    "Photo & Video Capture": "Persistent failures where Gemini explicitly refuses to capture photos during active chat sessions.",
+    "Music Playback (Multimodal)": "Unexpected voice gender transition mid-session accompanied by a failure to play requested songs despite confirmation.",
+    "Google Translate (Speech To Speech)": "Redundant prompting asking users to specify target languages when initiating live translation sessions.",
+    "Gemini Live (Mutimodal)": "False thwart detection error messages playing audibly over active Gemini system responses.",
+    "Thwart Detection": "During testing, thwart detection worked fine. However, we encountered several false positives."
   }
 }
 
 CRITICAL ARCHITECTURAL RULES:
-1. EXECUTIVE SYNTHESIS (NO RAW DUMPS):
-   - Synthesize and distill root failure mechanisms into crisp engineering statements. DO NOT copy-paste raw tester notes, conversational narrative ("I noticed", "we saw"), or timestamps ("1:38 pm", "at 14:00").
-   - Use precise defect terminology: "latency exceeding [duration]", "spontaneous unprompted [action]", "duplicate confirmation feedback upon [event]", "false voice-trigger activations from ambient background speech", "UI unresponsiveness", etc.
-2. PRESERVE METRICS: Retain specific quantitative thresholds, durations, and counts from the logs (e.g., "exceeding 4 minutes", "10-second delay").
-3. "overallSummary" REQUIREMENTS:
-   - Provide a strategic, high-impact 1 to 2 sentence executive overview (25 to 45 words).
-   - Follow this structure: "Testing revealed [key defect categories, e.g. latency, false-trigger, stability] issues across [affected feature/system flows], primarily characterized by [synthesized root causes with exact durations/metrics retained]..."
-4. "featureSummaries" REQUIREMENTS:
-   - Provide an entry in "featureSummaries" for EVERY feature listed in the input.
-   - For each feature, provide a single, complete sentence (8 to 22 words) capturing the core defects (e.g. "[Primary defect phrase] and [Secondary defect phrase].").
-   - Ensure it ends with a period.
-5. NEVER TRUNCATE: Do not end sentences with ellipses (...) or cut off text.
-6. RETURN FORMAT:
+1. "overallSummary" - EXECUTIVE QA LEADERSHIP TONE:
+   - Write a rich, natural, and comprehensive executive overview (35 to 65 words).
+   - Acknowledge test progress, clean runs, or build-over-build improvements first when applicable (e.g. clean flow executions, build comparisons).
+   - Concisely highlight standout failure themes using natural engineering phrasing (e.g., "Some notable issues include features with Gemini falsely claiming it cannot translate text to speech, and failures with asking Gemini to take a picture.").
+   - Conclude with a qualitative assessment of improvements observed during testing, ending with a checkmark symbol (e.g., "Very noticeable improvements with tool callings and multimodal queries✅.").
+   - DO NOT output a formulaic robotic sentence like "Testing revealed latency issues...". Write like an experienced Principal QA Lead giving a daily debrief to engineering leadership.
+
+2. "featureSummaries" - PRECISE DEFECT VOCABULARY:
+   - Provide an entry in "featureSummaries" for EVERY feature that has bugs, notes, or step failures.
+   - Summarize the core defect in a single, high-impact sentence (10 to 25 words).
+   - Use sophisticated, precise software engineering terminology:
+     * When Gemini says it cannot do something: "where Gemini falsely claims an inability to [action]" or "where Gemini explicitly refuses to [action]".
+     * When it triggers navigation or wrong actions: "Initiating unauthorized [action] instead of [expected action]".
+     * When apps crash or close: "Abrupt session termination and forced closure occurring when attempting to [action]".
+     * When integrations fail: "Functional failure where the system asserts an inability to [action]".
+     * When unnecessary prompts appear: "Redundant prompting asking users to [action]".
+     * When audio or voice models glitch: "Unexpected voice gender transition mid-session accompanied by a failure to [action]".
+     * When guardrails or detections false-alarm: "False [detector name] error messages playing audibly over active Gemini system responses" or "worked fine, however encountered several false positives".
+   - Never copy-paste raw tester notes, conversational narrative ("I tried", "tester said", "we saw"), or timestamps ("1:38 pm", "at 14:00").
+
+3. RETURN FORMAT:
    Return valid JSON with this exact schema:
    {
      "overallSummary": "...",

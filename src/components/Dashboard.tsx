@@ -101,6 +101,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [expandedTesters, setExpandedTesters] = useState<Record<string, boolean>>({});
   const [expandedPlanSteps, setExpandedPlanSteps] = useState<Record<string, boolean>>({});
   const [subagentToast, setSubagentToast] = useState<string | null>(null);
+  const [reportDisclaimer, setReportDisclaimer] = useState<string>(() => {
+    try {
+      return localStorage.getItem('qa_report_disclaimer') || 'During these tests, we removed local flag overrides for Maps and Instacart.';
+    } catch (e) {
+      return 'During these tests, we removed local flag overrides for Maps and Instacart.';
+    }
+  });
 
   const [newDeviceName, setNewDeviceName] = useState('');
   const [newPersonName, setNewPersonName] = useState('');
@@ -1130,9 +1137,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
       let plainText = `📊 CUJ Report (${new Date().toLocaleDateString()})\n`;
       plainText += `• Coverage: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)\n`;
       plainText += `• Status: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)\n`;
+      if (reportDisclaimer && reportDisclaimer.trim()) {
+        plainText += `Disclaimer: ${reportDisclaimer.trim()}\n`;
+      }
       if (overallGeminiSummary) {
-        const overviewTag = result.modelUsed ? `Gemini Issue Overview [${result.modelUsed}]` : 'Executive Issue Overview';
-        plainText += `• ${overviewTag}: ${overallGeminiSummary}\n`;
+        plainText += `Issue Summary: ${overallGeminiSummary}\n`;
       }
       plainText += `\n`;
 
@@ -1142,8 +1151,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
           const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
           const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
           const summary = getFeatureSummary(m);
-          const summaryText = summary ? `\n   ↳ Summary: ${summary}` : '';
-          plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryText}\n`;
+          plainText += `${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})\n`;
+          if (summary) {
+            plainText += `↳ Summary: ${summary}\n`;
+          }
         });
         plainText += `\n`;
       }
@@ -1154,8 +1165,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
           const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
           const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
           const summary = getFeatureSummary(m);
-          const summaryText = summary ? `\n   ↳ Summary: ${summary}` : '';
-          plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryText}\n`;
+          plainText += `${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})\n`;
+          if (summary) {
+            plainText += `↳ Summary: ${summary}\n`;
+          }
         });
         plainText += `\n`;
       }
@@ -1166,8 +1179,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
           const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
           const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
           const summary = getFeatureSummary(m);
-          const summaryText = summary ? `\n   ↳ Summary: ${summary}` : '';
-          plainText += `• ${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryText}\n`;
+          plainText += `${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})\n`;
+          if (summary && (m.bugCount > 0 || m.healthScorePct < 100 || summary.toLowerCase().includes('false positive') || summary.toLowerCase().includes('worked fine') || summary.toLowerCase().includes('thwart'))) {
+            plainText += `↳ Summary: ${summary}\n`;
+          }
         });
       }
 
@@ -1176,58 +1191,57 @@ export const Dashboard: React.FC<DashboardProps> = ({
       htmlText += `<p style="margin: 0 0 6px 0;">📊 <b>CUJ Report</b> (${new Date().toLocaleDateString()})</p>`;
       htmlText += `<p style="margin: 0 0 4px 0;">• <b>Coverage</b>: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)</p>`;
       htmlText += `<p style="margin: 0 0 8px 0;">• <b>Status</b>: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)</p>`;
+      if (reportDisclaimer && reportDisclaimer.trim()) {
+        htmlText += `<p style="margin: 0 0 8px 0; color: #475569;"><b>Disclaimer:</b> ${reportDisclaimer.trim()}</p>`;
+      }
       if (overallGeminiSummary) {
-        if (result.modelUsed) {
-          const modelBadge = ` <span style="font-size: 10px; background: #e0e7ff; color: #4338ca; padding: 2px 6px; border-radius: 4px; font-family: monospace;">${result.modelUsed}</span>`;
-          htmlText += `<div style="background-color: #f1f5f9; border-left: 3px solid #6366f1; padding: 8px 12px; margin: 8px 0 12px 0; border-radius: 6px; font-size: 12.5px; color: #1e293b;">🤖 <b>Gemini Executive Issue Summary${modelBadge}:</b> ${overallGeminiSummary}</div>`;
-        } else {
-          htmlText += `<div style="background-color: #f1f5f9; border-left: 3px solid #6366f1; padding: 8px 12px; margin: 8px 0 12px 0; border-radius: 6px; font-size: 12.5px; color: #1e293b;">📋 <b>Executive Issue Summary:</b> ${overallGeminiSummary}</div>`;
-        }
+        htmlText += `<div style="background-color: #f8fafc; border-left: 3px solid #6366f1; padding: 8px 12px; margin: 8px 0 12px 0; border-radius: 6px; font-size: 12.5px; color: #1e293b; line-height: 1.55;"><b>Issue Summary:</b> ${overallGeminiSummary}</div>`;
       }
 
       if (criticalList.length > 0) {
         htmlText += `<p style="margin: 8px 0 4px 0; color: #dc2626; font-weight: 700;">🔴 Critical CUJs:</p>`;
-        htmlText += `<ul style="margin: 0 0 8px 0; padding-left: 18px;">`;
+        htmlText += `<div style="margin: 0 0 8px 0;">`;
         criticalList.forEach(m => {
           const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
           const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
           const summary = getFeatureSummary(m);
           const summaryHtml = summary
-            ? `<div style="color: #475569; font-size: 12px; margin-top: 2px; margin-left: 10px;">↳ <i>Summary: ${summary}</i></div>`
+            ? `<div style="color: #475569; font-size: 12px; margin-top: 1px; margin-left: 12px;">↳ <i>Summary: ${summary}</i></div>`
             : '';
-          htmlText += `<li style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</li>`;
+          htmlText += `<div style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</div>`;
         });
-        htmlText += `</ul>`;
+        htmlText += `</div>`;
       }
 
       if (warningList.length > 0) {
         htmlText += `<p style="margin: 8px 0 4px 0; color: #d97706; font-weight: 700;">🟡 Degraded CUJs:</p>`;
-        htmlText += `<ul style="margin: 0 0 8px 0; padding-left: 18px;">`;
+        htmlText += `<div style="margin: 0 0 8px 0;">`;
         warningList.forEach(m => {
           const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
           const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
           const summary = getFeatureSummary(m);
           const summaryHtml = summary
-            ? `<div style="color: #475569; font-size: 12px; margin-top: 2px; margin-left: 10px;">↳ <i>Summary: ${summary}</i></div>`
+            ? `<div style="color: #475569; font-size: 12px; margin-top: 1px; margin-left: 12px;">↳ <i>Summary: ${summary}</i></div>`
             : '';
-          htmlText += `<li style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</li>`;
+          htmlText += `<div style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</div>`;
         });
-        htmlText += `</ul>`;
+        htmlText += `</div>`;
       }
 
       if (healthyList.length > 0) {
         htmlText += `<p style="margin: 8px 0 4px 0; color: #16a34a; font-weight: 700;">🟢 Healthy CUJs:</p>`;
-        htmlText += `<ul style="margin: 0 0 4px 0; padding-left: 18px;">`;
+        htmlText += `<div style="margin: 0 0 4px 0;">`;
         healthyList.forEach(m => {
           const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
           const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
           const summary = getFeatureSummary(m);
-          const summaryHtml = summary
-            ? `<div style="color: #475569; font-size: 12px; margin-top: 2px; margin-left: 10px;">↳ <i>Summary: ${summary}</i></div>`
+          const shouldShowSummary = summary && (m.bugCount > 0 || m.healthScorePct < 100 || summary.toLowerCase().includes('false positive') || summary.toLowerCase().includes('worked fine') || summary.toLowerCase().includes('thwart'));
+          const summaryHtml = shouldShowSummary
+            ? `<div style="color: #475569; font-size: 12px; margin-top: 1px; margin-left: 12px;">↳ <i>Summary: ${summary}</i></div>`
             : '';
-          htmlText += `<li style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</li>`;
+          htmlText += `<div style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</div>`;
         });
-        htmlText += `</ul>`;
+        htmlText += `</div>`;
       }
 
       htmlText += `</div>`;
@@ -4101,6 +4115,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <p className="text-[10.5px] text-slate-400">
                 Default: <code className="text-purple-300 font-mono">gemini-2.0-flash</code>. You can select an auto-detected model or type any model ID.
               </p>
+            </div>
+
+            {/* Optional Disclaimer / Test Notes */}
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-bold text-slate-300">Test Context / Disclaimer (Optional)</label>
+              <input
+                type="text"
+                placeholder="e.g. During these tests, we removed local flag overrides for Maps and Instacart."
+                value={reportDisclaimer}
+                onChange={e => {
+                  setReportDisclaimer(e.target.value);
+                  localStorage.setItem('qa_report_disclaimer', e.target.value);
+                }}
+                className="w-full bg-slate-950 border border-slate-800 focus:border-purple-500 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none"
+              />
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-3 border-t border-white/10">
