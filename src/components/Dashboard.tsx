@@ -103,9 +103,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [subagentToast, setSubagentToast] = useState<string | null>(null);
   const [reportDisclaimer, setReportDisclaimer] = useState<string>(() => {
     try {
-      return localStorage.getItem('qa_report_disclaimer') || 'During these tests, we removed local flag overrides for Maps and Instacart.';
+      return localStorage.getItem('qa_report_disclaimer') || '';
     } catch (e) {
-      return 'During these tests, we removed local flag overrides for Maps and Instacart.';
+      return '';
     }
   });
 
@@ -1180,7 +1180,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
           const summary = getFeatureSummary(m);
           plainText += `${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})\n`;
-          if (summary && (m.bugCount > 0 || m.healthScorePct < 100 || summary.toLowerCase().includes('false positive') || summary.toLowerCase().includes('worked fine') || summary.toLowerCase().includes('thwart'))) {
+          if (summary && (m.bugCount > 0 || m.healthScorePct < 100 || summary.toLowerCase().includes('false positive') || summary.toLowerCase().includes('false trigger') || summary.toLowerCase().includes('worked fine') || summary.toLowerCase().includes('observation') || summary.toLowerCase().includes('thwart'))) {
             plainText += `↳ Summary: ${summary}\n`;
           }
         });
@@ -1235,7 +1235,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
           const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
           const summary = getFeatureSummary(m);
-          const shouldShowSummary = summary && (m.bugCount > 0 || m.healthScorePct < 100 || summary.toLowerCase().includes('false positive') || summary.toLowerCase().includes('worked fine') || summary.toLowerCase().includes('thwart'));
+          const shouldShowSummary = summary && (m.bugCount > 0 || m.healthScorePct < 100 || summary.toLowerCase().includes('false positive') || summary.toLowerCase().includes('false trigger') || summary.toLowerCase().includes('worked fine') || summary.toLowerCase().includes('observation') || summary.toLowerCase().includes('thwart'));
           const summaryHtml = shouldShowSummary
             ? `<div style="color: #475569; font-size: 12px; margin-top: 1px; margin-left: 12px;">↳ <i>Summary: ${summary}</i></div>`
             : '';

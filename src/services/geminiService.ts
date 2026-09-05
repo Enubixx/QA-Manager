@@ -412,46 +412,78 @@ export function extractIntelligentDefectPattern(note: string, featureContext: st
  * translate text to speech, and failures with asking Gemini to take a picture. Very noticeable improvements
  * with tool callings and multimodal queries✅."
  */
-export function synthesizeExecutiveOverview(notes: string[], featureNames: string[] = []): string {
-  if (!notes || notes.length === 0) return '';
+export function synthesizeExecutiveOverview(
+  notes: string[],
+  featureNames: string[] = [],
+  cleanFeatures: string[] = []
+): string {
+  if (!notes || notes.length === 0) {
+    if (cleanFeatures.length > 0) {
+      return `Testing completed with 100% pass rate across active CUJ flows (${cleanFeatures.slice(0, 3).join(', ')}). No functional regressions or blocking defects identified✅.`;
+    }
+    return 'Testing completed with 100% pass rate across active CUJ flows. No functional regressions or blocking defects identified✅.';
+  }
 
   const allText = notes.join(' ');
   const lower = allText.toLowerCase();
 
-  // Milestone flow praise
-  let milestone = 'Testing revealed marked functional stability gains across active test plans.';
-  if (/\b(?:warby|wp\d+|wp1|wp10)\b/i.test(allText)) {
-    milestone = 'Happy to report that we have our first clean run of the Warby Parker flow! Testing revealed improvements from the previous ZI1 build.';
-  } else if (/\b(?:clean run|first clean)\b/i.test(allText)) {
-    milestone = 'Happy to report clean test runs across target device flows with marked stability gains.';
+  // 1. Dynamic Milestone / Clean Flow statement based on input features
+  let milestone = 'Testing completed with positive baseline stability observed across active test plans.';
+  if (cleanFeatures.length > 0) {
+    const sampleFeatures = cleanFeatures.slice(0, 2).join(' and ');
+    milestone = `Testing demonstrated strong progress across active plans, with clean execution observed in core ${sampleFeatures} workflows.`;
+  } else {
+    const passingOrActive = featureNames.filter(f => f && f.toLowerCase() !== 'general');
+    if (passingOrActive.length > 0) {
+      const sampleFeature = passingOrActive[0];
+      milestone = `Testing demonstrated strong progress across active plans, with clean execution observed in core ${sampleFeature} workflows.`;
+    }
   }
 
-  // Standout defect themes
+  // 2. Extract 2-3 standout defect themes dynamically from the actual notes
   const defectThemes: string[] = [];
+
   if (/\b(?:translate|translation|cannot translate|can't translate)\b/i.test(lower)) {
-    defectThemes.push('features with Gemini falsely claiming it cannot translate text to speech');
+    defectThemes.push('features falsely claiming an inability to translate content');
   }
-  if (/\b(?:take a photo|take a picture|can't take photos|photo capture)\b/i.test(lower)) {
-    defectThemes.push('failures with asking Gemini to take a picture');
+  if (/\b(?:take a photo|take a picture|can't take photos|refuses to capture|couldn't take)\b/i.test(lower)) {
+    defectThemes.push('intermittent refusals during photo capture requests');
   }
-  if (/\b(?:walking navigation|google maps|gps location)\b/i.test(lower)) {
-    defectThemes.push('initiating unauthorized walking navigation instead of answering queries');
+  if (/\b(?:scan|ended session|closed session|force close|abrupt|crashed)\b/i.test(lower)) {
+    defectThemes.push('abrupt session terminations during intensive tasks');
   }
-  if (/\b(?:spotify|play song|music playback)\b/i.test(lower)) {
-    defectThemes.push('functional failures asserting an inability to play songs directly on Spotify');
+  if (/\b(?:navigation|walking navigation|gps location|destination)\b/i.test(lower)) {
+    defectThemes.push('unauthorized navigation triggers instead of direct query responses');
   }
-  if (/\b(?:scan|scan-style|closed out of the session)\b/i.test(lower)) {
-    defectThemes.push('abrupt session terminations during scan photo capture prompts');
+  if (/\b(?:playback|play song|spotify|music|audio drop|voice change)\b/i.test(lower)) {
+    defectThemes.push('functional assertions and playback failures during media requests');
+  }
+  if (/\b(?:latency|delay|slow|timeout|timed out|hang)\b/i.test(lower)) {
+    defectThemes.push('processing latency during sequential requests');
+  }
+  if (/\b(?:false positive|false trigger|thwart|ambient)\b/i.test(lower)) {
+    defectThemes.push('false-positive guardrail and detection triggers');
   }
 
-  let themeStr = 'functional regressions across assistant workflows';
+  // If none matched rule keywords, extract top pattern phrases dynamically from actual notes
+  if (defectThemes.length === 0) {
+    for (const note of notes.slice(0, 2)) {
+      const p = extractIntelligentDefectPattern(note, '');
+      if (p) {
+        defectThemes.push(p.charAt(0).toLowerCase() + p.slice(1).replace(/[.]+$/, ''));
+      }
+    }
+  }
+
+  let themeStr = 'functional regressions across target workflows';
   if (defectThemes.length === 1) {
     themeStr = defectThemes[0];
   } else if (defectThemes.length >= 2) {
     themeStr = `${defectThemes[0]}, and ${defectThemes[1]}`;
   }
 
-  const conclusion = 'Very noticeable improvements with tool callings and multimodal queries✅.';
+  // 3. Constructive closing note with checkmark
+  const conclusion = 'Noticeable improvements observed across core tool callings and active query flows✅.';
 
   return `${milestone} Some notable issues include ${themeStr}. ${conclusion}`;
 }
@@ -677,11 +709,15 @@ export async function generateBatchExecutiveSummaryWithGemini(
   features: FeaturePayload[],
   allBugs: BugLog[] = []
 ): Promise<ExecutiveQAResult> {
-  const featuresWithBugs = features.filter(f => f.bugCount > 0 || (f.bugs && f.bugs.length > 0));
+  const healthyFeatures = features.filter(f => f.healthScorePct === 100 && (!f.bugs || f.bugs.length === 0));
+  const featuresWithBugs = features.filter(f => f.bugCount > 0 || (f.bugs && f.bugs.length > 0) || f.healthScorePct < 100);
 
   if (featuresWithBugs.length === 0 && allBugs.length === 0) {
+    const cleanList = healthyFeatures.map(f => f.featureName);
     return {
-      overallSummary: '',
+      overallSummary: cleanList.length > 0
+        ? `Testing completed with 100% pass rate across active CUJ flows (${cleanList.slice(0, 3).join(', ')}). No functional regressions or blocking defects identified✅.`
+        : '',
       featureSummaries: {}
     };
   }
@@ -700,6 +736,10 @@ export async function generateBatchExecutiveSummaryWithGemini(
     return `Feature: "${f.featureName}" (Pass Rate: ${f.healthScorePct}%, Bugs Logged: ${f.bugCount})\n${bugNotes.join('\n')}`;
   }).join('\n\n');
 
+  const cleanFeaturesSummary = healthyFeatures.length > 0
+    ? healthyFeatures.map(f => f.featureName).join(', ')
+    : 'None';
+
   const userApiKey = getStoredGeminiApiKey();
   const preferredModel = getStoredGeminiModel();
   let lastErrorMessage = '';
@@ -714,89 +754,79 @@ export async function generateBatchExecutiveSummaryWithGemini(
 
     const prompt = `You are a Senior Principal QA Architect distilling field defect logs to produce a high-impact, professional executive CUJ summary report for engineering leadership.
 
-TEST EXECUTION DEFECT DATA:
-${formattedFeaturesList}
+TODAY'S TEST EXECUTION DATA:
+- Clean / Passing CUJs (100% Pass, 0 Bugs): ${cleanFeaturesSummary}
+- CUJs with Defects or Regressions (${featuresWithBugs.length} features):
+${formattedFeaturesList || 'No defect logs'}
 
 GOAL:
-Produce an executive-ready, highly informative, and technically precise summary matching the exact language, tone, and depth of the reference benchmark below.
+Synthesize an executive-ready, highly informative, and technically precise QA summary matching the exact style, tone, and depth of the reference benchmarks below.
 
-REFERENCE BENCHMARK (STUDY THIS EXACT STYLE & TONE):
+CRITICAL NOTICE: The benchmarks below are purely illustrations of the required EXECUTIVE TONE, SENTENCE STRUCTURE, and ACTIVE SOFTWARE ENGINEERING VOCABULARY. Do NOT copy specific product names or entities from the benchmarks. Ground 100% of your output in TODAY'S test execution data above.
 
-Few-Shot Input:
-Feature: "AI Camera" (Pass Rate: 77%, Bugs Logged: 2)
-    - [Step: Nano Banana / AI Camera 3 times per test] Query: "take a photo and make it look like a scan" Gemini: "sure thing, starting that scan effect now" Never closed the Gemini session or took a picture.
-    - [Step: Nano Banana / AI Camera 3 times per test] "can you take a photo and make it look like a scan?" Gemini: "I've already started the process for you" and ended the session.
-    - [Step: Nano Banana / AI Camera 3 times per test] "take a photo and make it look like a scan" Gemini: "I've already started the process for you" and closes out of the session.
+STYLE REFERENCE BENCHMARKS (STUDY THE TONE & STRUCTURE):
 
-Feature: "Google Maps" (Pass Rate: 77%, Bugs Logged: 2)
-    - [Step: Google Maps] Gemini asks for my location. Have to remind it to check Google maps.
-    - [Step: Google Maps] After reading the query, Gemini just initiated the walking navigation to the requested destination instead of answering the questions.
-    - [Step: Google Maps] After reading query as is, it just starts walking navigation instead of answering the question.
-
-Feature: "Gemini Live Translation (Text To Speech)" (Pass Rate: 85%, Bugs Logged: 2)
-    - [Step: Translate: Text to text] When I asked Gemini to translate the page in front of me, it responded "I'm sorry, I can't translate the text on the page you're looking at."
-    - [Step: Translate: Text to text] Gemini claims that it can't translate the page I'm looking at.
-    - [Step: Translate: Text to text] Gemini keeps says "I cannot translate the text you are showing me."
-
-Feature: "Music Playback (Verbal)" (Pass Rate: 85%, Bugs Logged: 2)
-    - [Step: Verbal music playback] "I can't play song directly on Spotify"
-    - [Step: Verbal music playback] Gemini suggested that I connect to Spotify.
-    - [Step: Verbal music playback] Gemini did not play a song after asking "play a song by j.cole".
-
-Feature: "Photo & Video Capture" (Pass Rate: 92%, Bugs Logged: 2)
-    - [Step: Take a photo and verify import] Gemini said it couldn't take photos when I said "take a photo" after chatting with gemini.
-    - [Step: Take a photo and verify import] Gemini said "I'm sorry, I can't take photos" when asking Gemini to take a photo. No photo was taken.
-
-Feature: "Music Playback (Multimodal)" (Pass Rate: 92%, Bugs Logged: 1)
-    - [Step: Multimodal music playback] Gemini voice change from female to male voice. Also the song did not play even though Gemini confirmed it would play the song.
-
-Feature: "Google Translate (Speech To Speech)" (Pass Rate: 92%, Bugs Logged: 1)
-    - [Step: Translate: Speech to speech] Gemini asked which languages I would like to translate between.
-
-Feature: "Gemini Live (Mutimodal)" (Pass Rate: 100%, Bugs Logged: 0)
-    - [Step: Live multimodal] Got false thwart detection message played while Gemini was responding to my query (speaking over it).
-
-Feature: "Thwart Detection" (Pass Rate: 100%, Bugs Logged: 0)
-    - [Step: Thwart validation] During testing, thwart detection worked fine. However, we encountered several false positives.
+--- [Style Benchmark 1: Hardware Assistant Device] ---
+Execution Context:
+- Clean / Passing CUJs: Device Pairing, Volume Control
+- CUJs with Defects:
+  Feature: "Voice Translation" (Pass Rate: 80%, Bugs Logged: 2)
+      - [Step: Text to Speech] System responded: "I am unable to translate text on this screen."
+  Feature: "Navigation" (Pass Rate: 85%, Bugs Logged: 1)
+      - [Step: Turn by Turn] System initiated unauthorized route guidance instead of answering user query.
 
 Expected JSON Output:
 {
-  "overallSummary": "Happy to report that we have our first clean run of the Warby Parker flow! Testing revealed improvements from the previous ZI1 build. Some notable issues include features with Gemini falsely claiming it cannot translate text to speech, and failures with asking Gemini to take a picture. Very noticeable improvements with tool callings and multimodal queries✅.",
+  "overallSummary": "Testing demonstrated strong progress across active plans, with clean execution observed in core Device Pairing and Volume Control workflows. Some notable issues include features falsely claiming an inability to translate text, and initiating unauthorized route guidance instead of answering queries. Noticeable improvements observed across core tool callings and active query flows✅.",
   "featureSummaries": {
-    "AI Camera": "Abrupt session termination and forced closure occurring when attempting to execute scan-style photo capture prompts.",
-    "Google Maps": "Initiating unauthorized walking navigation instead of answering queries.",
-    "Gemini Live Translation (Text To Speech)": "Persistent translation failures where Gemini falsely claims an inability to translate text or process page content.",
-    "Music Playback (Verbal)": "Functional failure where the system asserts an inability to play songs directly on Spotify.",
-    "Photo & Video Capture": "Persistent failures where Gemini explicitly refuses to capture photos during active chat sessions.",
-    "Music Playback (Multimodal)": "Unexpected voice gender transition mid-session accompanied by a failure to play requested songs despite confirmation.",
-    "Google Translate (Speech To Speech)": "Redundant prompting asking users to specify target languages when initiating live translation sessions.",
-    "Gemini Live (Mutimodal)": "False thwart detection error messages playing audibly over active Gemini system responses.",
-    "Thwart Detection": "During testing, thwart detection worked fine. However, we encountered several false positives."
+    "Voice Translation": "Persistent translation failures where the assistant falsely claims an inability to translate text on screen.",
+    "Navigation": "Initiating unauthorized route guidance instead of directly answering user queries."
   }
 }
 
-CRITICAL ARCHITECTURAL RULES:
-1. "overallSummary" - EXECUTIVE QA LEADERSHIP TONE:
-   - Write a rich, natural, and comprehensive executive overview (35 to 65 words).
-   - Acknowledge test progress, clean runs, or build-over-build improvements first when applicable (e.g. clean flow executions, build comparisons).
-   - Concisely highlight standout failure themes using natural engineering phrasing (e.g., "Some notable issues include features with Gemini falsely claiming it cannot translate text to speech, and failures with asking Gemini to take a picture.").
-   - Conclude with a qualitative assessment of improvements observed during testing, ending with a checkmark symbol (e.g., "Very noticeable improvements with tool callings and multimodal queries✅.").
-   - DO NOT output a formulaic robotic sentence like "Testing revealed latency issues...". Write like an experienced Principal QA Lead giving a daily debrief to engineering leadership.
+--- [Style Benchmark 2: Mobile E-Commerce Application] ---
+Execution Context:
+- Clean / Passing CUJs: User Profile, Product Search
+- CUJs with Defects:
+  Feature: "Checkout & Payments" (Pass Rate: 75%, Bugs Logged: 2)
+      - [Step: Payment Confirmation] Session force-closed when tapping confirm payment.
+  Feature: "Cart Management" (Pass Rate: 90%, Bugs Logged: 1)
+      - [Step: Quantity update] Redundant confirmation popup displayed repeatedly when incrementing quantity.
 
-2. "featureSummaries" - PRECISE DEFECT VOCABULARY:
-   - Provide an entry in "featureSummaries" for EVERY feature that has bugs, notes, or step failures.
+Expected JSON Output:
+{
+  "overallSummary": "Testing demonstrated strong progress across active plans, with clean execution observed in core User Profile and Product Search workflows. Some notable issues include abrupt session termination during payment confirmation, and redundant confirmation dialogs during cart updates. Noticeable improvements observed across checkout stability and active transaction flows✅.",
+  "featureSummaries": {
+    "Checkout & Payments": "Abrupt session termination and forced closure occurring when tapping confirm payment during checkout.",
+    "Cart Management": "Redundant confirmation dialogs appearing repeatedly when updating line item quantities."
+  }
+}
+
+CRITICAL ANTI-HALLUCINATION & STRICT DATA GROUNDING RULES:
+1. STRICT GROUNDING & ZERO HALLUCINATION:
+   - Base all statements solely on TODAY'S TEST EXECUTION DATA provided above.
+   - NEVER mention entities, brands, feature names, or bug descriptions from the benchmarks above (e.g., do NOT mention "Warby Parker", "ZI1", "Spotify", "Apple Pay", etc.) UNLESS they explicitly appear in today's data.
+   - If today's data is for a different product or platform, adapt the vocabulary naturally to that domain.
+
+2. "overallSummary" - EXECUTIVE QA LEADERSHIP TONE (35 to 65 words):
+   - Sentence 1: Executive execution status & milestone progress. Mention clean flows strictly from today's clean CUJs if available (e.g. "Testing demonstrated strong progress across active plans, with clean execution observed in core [Clean Feature Names] workflows.").
+   - Sentence 2: Synthesize 1 to 3 dominant defect themes observed in TODAY'S bugs using active software engineering phrasing (e.g., "Some notable issues include [dynamic defect theme A], and [dynamic defect theme B].").
+   - Sentence 3: Forward-looking qualitative trajectory note ending with a checkmark symbol (e.g., "Noticeable improvements observed across core tool callings and active query flows✅.").
+
+3. "featureSummaries" - PRECISE DEFECT VOCABULARY:
+   - Provide an entry in "featureSummaries" for EVERY feature listed with defects or notes today.
    - Summarize the core defect in a single, high-impact sentence (10 to 25 words).
-   - Use sophisticated, precise software engineering terminology:
-     * When Gemini says it cannot do something: "where Gemini falsely claims an inability to [action]" or "where Gemini explicitly refuses to [action]".
-     * When it triggers navigation or wrong actions: "Initiating unauthorized [action] instead of [expected action]".
-     * When apps crash or close: "Abrupt session termination and forced closure occurring when attempting to [action]".
+   - Use sophisticated, active software engineering terminology:
+     * When assistant claims it cannot perform a feature: "falsely claims an inability to [action]" or "explicitly refuses to [action]".
+     * When unauthorized actions trigger: "Initiating unauthorized [action] instead of [expected action]".
+     * When crashes / force-closes occur: "Abrupt session termination and forced closure occurring when attempting to [action]".
      * When integrations fail: "Functional failure where the system asserts an inability to [action]".
      * When unnecessary prompts appear: "Redundant prompting asking users to [action]".
-     * When audio or voice models glitch: "Unexpected voice gender transition mid-session accompanied by a failure to [action]".
-     * When guardrails or detections false-alarm: "False [detector name] error messages playing audibly over active Gemini system responses" or "worked fine, however encountered several false positives".
-   - Never copy-paste raw tester notes, conversational narrative ("I tried", "tester said", "we saw"), or timestamps ("1:38 pm", "at 14:00").
+     * When audio or voice models glitch: "Unexpected voice transition mid-session accompanied by a failure to [action]".
+     * When guardrails or detections false-alarm: "False [detector name] error messages playing audibly over active responses" or "worked fine, however encountered several false positives".
+   - Never copy raw conversational narrative ("I tried", "tester said", "we saw") or timestamps ("1:38 pm", "at 14:00").
 
-3. RETURN FORMAT:
+4. RETURN FORMAT:
    Return valid JSON with this exact schema:
    {
      "overallSummary": "...",
@@ -878,9 +908,12 @@ CRITICAL ARCHITECTURAL RULES:
 
   const allNotes = allBugs.map(b => b.note).filter(Boolean);
   const featureNamesWithBugs = featuresWithBugs.map(f => f.featureName);
+  const cleanFeatureNames = healthyFeatures.map(f => f.featureName);
   const fallbackOverall = allNotes.length > 0
-    ? synthesizeExecutiveOverview(allNotes, featureNamesWithBugs)
-    : '';
+    ? synthesizeExecutiveOverview(allNotes, featureNamesWithBugs, cleanFeatureNames)
+    : (cleanFeatureNames.length > 0
+        ? `Testing completed with 100% pass rate across active CUJ flows (${cleanFeatureNames.slice(0, 3).join(', ')}). No functional regressions or blocking defects identified✅.`
+        : '');
 
   return {
     overallSummary: fallbackOverall,
