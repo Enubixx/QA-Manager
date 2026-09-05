@@ -137,6 +137,35 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return `${secs}s`;
   };
 
+  // Helper to determine real, effective run status
+  const getEffectiveRunStatus = (run: TestRun) => {
+    const plan = testPlans.find(p => p.id === run.planId);
+    const totalSteps = plan?.steps.length || 0;
+    const stepEntries = Object.entries(run.results || {}).filter(
+      ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+    );
+    const completedCount = stepEntries.length;
+
+    // A run with zero recorded step results has no data recorded and must NEVER be treated as completed
+    if (completedCount === 0) {
+      if (run.status === 'in_progress' || (run.testerName && run.deviceName && run.status !== 'not_started')) {
+        return 'in_progress';
+      }
+      return 'not_started';
+    }
+
+    if (run.status === 'completed' || (totalSteps > 0 && (completedCount >= totalSteps || (run.currentStepIndex !== undefined && run.currentStepIndex >= totalSteps)))) {
+      return 'completed';
+    }
+    if (run.status === 'in_progress' || (run.testerName && run.deviceName)) {
+      return 'in_progress';
+    }
+    if (run.status === 'not_started' || (!run.testerName && completedCount === 0)) {
+      return 'not_started';
+    }
+    return 'in_progress';
+  };
+
   // Determine active testers currently running a test session on a device (with live step and status metrics)
   const activeTesterMap = useMemo(() => {
     const map = new Map<string, { 
@@ -368,35 +397,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedImagePreviewUrl]);
-
-  // Helper to determine real, effective run status
-  const getEffectiveRunStatus = (run: TestRun) => {
-    const plan = testPlans.find(p => p.id === run.planId);
-    const totalSteps = plan?.steps.length || 0;
-    const stepEntries = Object.entries(run.results || {}).filter(
-      ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
-    );
-    const completedCount = stepEntries.length;
-
-    // A run with zero recorded step results has no data recorded and must NEVER be treated as completed
-    if (completedCount === 0) {
-      if (run.status === 'in_progress' || (run.testerName && run.deviceName && run.status !== 'not_started')) {
-        return 'in_progress';
-      }
-      return 'not_started';
-    }
-
-    if (run.status === 'completed' || (totalSteps > 0 && (completedCount >= totalSteps || (run.currentStepIndex !== undefined && run.currentStepIndex >= totalSteps)))) {
-      return 'completed';
-    }
-    if (run.status === 'in_progress' || (run.testerName && run.deviceName)) {
-      return 'in_progress';
-    }
-    if (run.status === 'not_started' || (!run.testerName && completedCount === 0)) {
-      return 'not_started';
-    }
-    return 'in_progress';
-  };
 
   const handleCreateFeatureSubmit = (e: React.FormEvent) => {
     e.preventDefault();
