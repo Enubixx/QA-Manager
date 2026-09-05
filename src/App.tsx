@@ -93,7 +93,17 @@ export function App() {
   const [archivedRuns, setArchivedRuns] = useState<TestRun[]>(() => {
     try {
       const saved = localStorage.getItem('qa_archived_runs');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((r: TestRun) => {
+            const stepEntries = Object.entries(r.results || {}).filter(
+              ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+            );
+            return stepEntries.length > 0 || (r.bugLogs && r.bugLogs.length > 0);
+          });
+        }
+      }
     } catch (e) {}
     return [];
   });
@@ -204,11 +214,26 @@ export function App() {
       if (cloudData.testPlans && JSON.stringify(cloudData.testPlans) !== JSON.stringify(testPlansRef.current)) {
         setTestPlans(cloudData.testPlans);
       }
-      if (cloudData.testRuns && JSON.stringify(cloudData.testRuns) !== JSON.stringify(testRunsRef.current)) {
-        setTestRuns(cloudData.testRuns);
+      // Filter out empty ghost runs (0 recorded steps and 0 bugs)
+      const validTestRuns = (cloudData.testRuns || []).filter(r => {
+        const stepEntries = Object.entries(r.results || {}).filter(
+          ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+        );
+        return r.testerName || r.status !== 'not_started' || stepEntries.length > 0 || (r.bugLogs && r.bugLogs.length > 0);
+      });
+      if (cloudData.testRuns && JSON.stringify(validTestRuns) !== JSON.stringify(testRunsRef.current)) {
+        setTestRuns(validTestRuns);
       }
-      if (cloudData.archivedRuns && JSON.stringify(cloudData.archivedRuns) !== JSON.stringify(archivedRunsRef.current)) {
-        setArchivedRuns(cloudData.archivedRuns);
+
+      const validArchivedRuns = (cloudData.archivedRuns || []).filter(r => {
+        const stepEntries = Object.entries(r.results || {}).filter(
+          ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+        );
+        const hasBugs = r.bugLogs && r.bugLogs.length > 0;
+        return stepEntries.length > 0 || hasBugs;
+      });
+      if (cloudData.archivedRuns && JSON.stringify(validArchivedRuns) !== JSON.stringify(archivedRunsRef.current)) {
+        setArchivedRuns(validArchivedRuns);
       }
       if (cloudData.bugLogs && JSON.stringify(cloudData.bugLogs) !== JSON.stringify(bugLogsRef.current)) {
         setBugLogs(cloudData.bugLogs);
@@ -235,17 +260,27 @@ export function App() {
 
         const currentDevices = checkDailyQuotaReset(baseDevices);
 
-        const inProgressRuns = (cloudData.testRuns || []).filter(r => r.status === 'in_progress');
+        const inProgressRuns = validTestRuns.filter(r => r.status === 'in_progress');
         const allCompletedRuns = [
-          ...(cloudData.archivedRuns || []),
-          ...(cloudData.testRuns || []).filter(r => r.status === 'completed')
+          ...validArchivedRuns,
+          ...validTestRuns.filter(r => {
+            if (r.status !== 'completed') return false;
+            const stepEntries = Object.entries(r.results || {}).filter(
+              ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+            );
+            return stepEntries.length > 0;
+          })
         ];
         const todayStr = getLocalDateStr();
 
-        // Calculate today's completed runs per device and plan for quota automation
+        // Calculate today's completed runs per device and plan for quota automation (strictly requiring recorded step data)
         const runsTodayPerDevice: Record<string, Record<string, number>> = {};
         allCompletedRuns.forEach(r => {
           if (!r.completedAt) return;
+          const stepEntries = Object.entries(r.results || {}).filter(
+            ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+          );
+          if (stepEntries.length === 0) return;
           const rDate = getLocalDateStr(r.completedAt);
           if (rDate !== todayStr) return;
           const targetDev = currentDevices.find(d =>
@@ -968,8 +1003,8 @@ export function App() {
     const stepResultsEntries = Object.entries(updatedRun.results || {}).filter(
       ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in v
     );
-    // Run is only done when explicitly marked 'completed' at the final step
-    const isDone = updatedRun.status === 'completed';
+    // Run is only done when explicitly marked 'completed' at the final step and has actual step data recorded
+    const isDone = updatedRun.status === 'completed' && stepResultsEntries.length > 0;
 
     if (isDone) {
       const finishTimeIso = updatedRun.completedAt || new Date().toISOString();

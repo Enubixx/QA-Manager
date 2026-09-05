@@ -242,7 +242,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
     });
     
     runMap.forEach(run => {
-      if (run.status !== 'completed' || !run.completedAt) return;
+      if (getEffectiveRunStatus(run) !== 'completed' || !run.completedAt) return;
+
+      // Must have actual recorded step results (zero steps = never count towards quota!)
+      const stepEntries = Object.entries(run.results || {}).filter(
+        ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+      );
+      if (stepEntries.length === 0) return;
+
       const runDate = getLocalDateStr(run.completedAt);
       if (runDate !== todayStr) return;
       
@@ -256,7 +263,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       }
     });
     return map;
-  }, [archivedRuns, testRuns, devices]);
+  }, [archivedRuns, testRuns, devices, testPlans]);
 
   const fleetProgress = useMemo(() => {
     let totalTarget = 0;
@@ -370,6 +377,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
       ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
     );
     const completedCount = stepEntries.length;
+
+    // A run with zero recorded step results has no data recorded and must NEVER be treated as completed
+    if (completedCount === 0) {
+      if (run.status === 'in_progress' || (run.testerName && run.deviceName && run.status !== 'not_started')) {
+        return 'in_progress';
+      }
+      return 'not_started';
+    }
 
     if (run.status === 'completed' || (totalSteps > 0 && (completedCount >= totalSteps || (run.currentStepIndex !== undefined && run.currentStepIndex >= totalSteps)))) {
       return 'completed';
@@ -749,7 +764,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
       if (run.deviceName) profile.devicesUsed.add(run.deviceName);
 
       const effectiveStatus = getEffectiveRunStatus(run);
-      const isCompleted = effectiveStatus === 'completed';
+      const stepEntries = Object.entries(run.results || {}).filter(
+        ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+      );
+      const isCompleted = effectiveStatus === 'completed' && stepEntries.length > 0;
 
       if (isCompleted) {
         profile.allTimeCompletedCount++;
