@@ -1928,41 +1928,91 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       {/* Tab: Unified QA Testers Directory & Live Performance Tracking */}
       {activeTab === 'testers' && (
-        <div className="space-y-6">
+        <div className="space-y-4">
           
-          {/* Header & Live Testing Data Tracking Controls */}
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 liquid-glass-panel rounded-3xl p-6 shadow-2xl relative overflow-hidden">
-            <div className="space-y-1 relative z-10">
+          {/* Unified Compact Header, Filter & Date Control Bar */}
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 liquid-glass-panel rounded-2xl p-3.5 shadow-xl border border-white/10">
+            {/* Left: Title + Active Badge + View Toggle */}
+            <div className="flex flex-wrap items-center gap-3">
               <div className="flex items-center gap-2">
-                <span className="text-[10px] font-extrabold text-emerald-300 uppercase tracking-wider bg-emerald-500/10 px-2.5 py-0.5 rounded-full border border-emerald-500/20">
-                  Tester Directory & Live Performance Tracking
-                </span>
-                {activeTesterMap.size > 0 && (
-                  <span className="text-[10px] font-extrabold text-emerald-400 font-mono flex items-center gap-1 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-500/30">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                    {activeTesterMap.size} Active Testing Now
-                  </span>
-                )}
+                <div className="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                  <UserCheck className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-sm font-black text-white tracking-tight">Testers & Performance</h2>
+                    {activeTesterMap.size > 0 && (
+                      <span className="text-[10px] font-extrabold text-emerald-400 font-mono flex items-center gap-1 bg-emerald-500/15 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                        {activeTesterMap.size} Active
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-slate-400 hidden sm:block">
+                    Daily execution speed, completed plans & live device telemetry
+                  </p>
+                </div>
               </div>
-              <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight flex items-center gap-2 mt-1">
-                <UserCheck className="w-6 h-6 text-emerald-400" />
-                <span>QA Testers & Performance Log</span>
-              </h2>
-              <p className="text-xs text-slate-300 font-medium">
-                Manage registered tester profiles and monitor live daily test run completions, execution speed, and device assignments.
-              </p>
+
+              {/* All / Active Toggle Pills */}
+              <div className="flex items-center bg-slate-950/90 border border-slate-800 rounded-xl p-0.5 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => setTesterViewMode('all')}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer ${
+                    testerViewMode === 'all'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  All ({unifiedTesters.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTesterViewMode('active')}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition flex items-center gap-1 cursor-pointer ${
+                    testerViewMode === 'active'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span>Active ({activeTesterMap.size})</span>
+                </button>
+              </div>
             </div>
 
-            {/* Live Data Tracking Date Selector & Add Profile Button */}
-            <div className="flex flex-wrap items-center gap-3 relative z-10">
-              <div className="flex items-center gap-2 bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 shadow-inner">
-                <Calendar className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                <span className="text-xs font-bold text-slate-300">Log Date:</span>
+            {/* Right: Search + Log Date + New Tester Button */}
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Compact Search */}
+              <div className="relative w-36 sm:w-44">
+                <Search className="w-3 h-3 text-slate-400 absolute left-2.5 top-2 pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="Search tester..."
+                  value={searchTesterQuery}
+                  onChange={e => setSearchTesterQuery(e.target.value)}
+                  className="w-full bg-slate-950/90 border border-slate-800 rounded-xl pl-7 pr-6 py-1 text-[11px] text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                />
+                {searchTesterQuery && (
+                  <button
+                    onClick={() => setSearchTesterQuery('')}
+                    className="absolute right-2 top-1.5 text-slate-500 hover:text-white"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+
+              {/* Date Selector */}
+              <div className="flex items-center gap-1.5 bg-slate-950/90 border border-slate-800 rounded-xl px-2.5 py-1">
+                <Calendar className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+                <span className="text-[10px] font-bold text-slate-400 uppercase">Date:</span>
                 <select
                   value={selectedQaDate}
                   onChange={e => setSelectedQaDate(e.target.value)}
                   style={{ backgroundColor: '#0b101d', color: '#e0e7ff', WebkitAppearance: 'none' }}
-                  className="bg-slate-950 text-indigo-200 border border-slate-800 rounded-lg px-2.5 py-1 text-xs font-bold focus:outline-none cursor-pointer"
+                  className="bg-slate-950 text-indigo-200 border border-slate-800 rounded-lg px-2 py-0.5 text-[11px] font-bold focus:outline-none cursor-pointer"
                 >
                   <option value={todayStr}>Today ({todayStr})</option>
                   {allQaDatesList.filter(d => d !== todayStr).map(dateStr => (
@@ -1974,132 +2024,83 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </select>
               </div>
 
+              {/* Add Tester Button */}
               <button
                 type="button"
                 onClick={() => setShowCreateTesterForm(prev => !prev)}
-                className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
+                className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-[11px] font-extrabold flex items-center gap-1 transition-all shadow-sm active:scale-95 cursor-pointer"
               >
-                <Plus className={`w-4 h-4 transition-transform duration-200 ${showCreateTesterForm ? 'rotate-45' : ''}`} />
-                <span>{showCreateTesterForm ? 'Close Form' : 'New Tester'}</span>
+                <Plus className={`w-3.5 h-3.5 transition-transform duration-200 ${showCreateTesterForm ? 'rotate-45' : ''}`} />
+                <span>{showCreateTesterForm ? 'Close' : 'New Tester'}</span>
               </button>
             </div>
           </div>
 
-          {/* Collapsible Create Tester Profile Form */}
+          {/* Compact Collapsible Create Tester Profile Form */}
           {showCreateTesterForm && (
-            <div className="liquid-glass-panel rounded-3xl p-6 border border-emerald-500/30 bg-slate-900/80 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-200">
+            <div className="liquid-glass-panel rounded-2xl p-4 border border-emerald-500/30 bg-slate-900/90 shadow-xl space-y-3 animate-in fade-in zoom-in-95 duration-200">
               <div className="flex items-center justify-between pb-2 border-b border-white/10">
-                <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <User className="w-4 h-4 text-emerald-400" />
+                <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <User className="w-3.5 h-3.5 text-emerald-400" />
                   <span>Create New QA Tester Profile</span>
                 </h3>
                 <button
                   type="button"
                   onClick={() => setShowCreateTesterForm(false)}
-                  className="text-slate-400 hover:text-white p-1 cursor-pointer"
+                  className="text-slate-400 hover:text-white p-0.5 cursor-pointer"
                 >
-                  <X className="w-4 h-4" />
+                  <X className="w-3.5 h-3.5" />
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
                 <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">Full Name</label>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1">Full Name</label>
                   <input
                     type="text"
                     placeholder="e.g. Kevin Huang..."
                     value={newPersonName}
                     onChange={e => setNewPersonName(e.target.value)}
-                    className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
+                    className="w-full bg-slate-950/90 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">Role / Specialization</label>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1">Role / Specialization</label>
                   <input
                     type="text"
                     placeholder="e.g. Lead QA / Mobile Specialist..."
                     value={newPersonRole}
                     onChange={e => setNewPersonRole(e.target.value)}
-                    className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
+                    className="w-full bg-slate-950/90 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
                   />
                 </div>
-              </div>
 
-              <div className="flex justify-end pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!newPersonName.trim()) return;
-                    const newTester: TesterProfile = {
-                      id: `tester-${Date.now()}`,
-                      name: newPersonName.trim(),
-                      role: newPersonRole.trim() || 'Mobile Tester'
-                    };
-                    if (onSaveTester) onSaveTester(newTester);
-                    setNewPersonName('');
-                    setShowCreateTesterForm(false);
-                  }}
-                  className="px-5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Save Tester Profile</span>
-                </button>
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!newPersonName.trim()) return;
+                      const newTester: TesterProfile = {
+                        id: `tester-${Date.now()}`,
+                        name: newPersonName.trim(),
+                        role: newPersonRole.trim() || 'Mobile Tester'
+                      };
+                      if (onSaveTester) onSaveTester(newTester);
+                      setNewPersonName('');
+                      setShowCreateTesterForm(false);
+                    }}
+                    className="w-full sm:w-auto px-4 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Save Profile</span>
+                  </button>
+                </div>
               </div>
             </div>
           )}
 
-          {/* Quick Filters Bar */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900/40 p-2 rounded-2xl border border-white/5">
-            <div className="flex items-center gap-2">
-              <div className="flex items-center bg-slate-950/80 border border-slate-800 rounded-xl p-1 text-xs">
-                <button
-                  type="button"
-                  onClick={() => setTesterViewMode('all')}
-                  className={`px-3 py-1.5 rounded-lg font-bold transition cursor-pointer ${
-                    testerViewMode === 'all'
-                      ? 'bg-emerald-600 text-white shadow-md'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  All Testers ({unifiedTesters.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTesterViewMode('active')}
-                  className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                    testerViewMode === 'active'
-                      ? 'bg-emerald-600 text-white shadow-md'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                  <span>Active Now ({activeTesterMap.size})</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="relative flex-1 max-w-xs">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5 pointer-events-none" />
-              <input
-                type="text"
-                placeholder="Search testers..."
-                value={searchTesterQuery}
-                onChange={e => setSearchTesterQuery(e.target.value)}
-                className="w-full bg-slate-950/80 border border-slate-800 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
-              />
-              {searchTesterQuery && (
-                <button
-                  onClick={() => setSearchTesterQuery('')}
-                  className="absolute right-2.5 top-2 text-slate-500 hover:text-white text-xs"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Unified Testers Cards Grid */}
+          {/* Condensed High-Density 3-Column Testers Grid */}
           {(() => {
             let displayed = unifiedTesters;
             if (testerViewMode === 'active') {
@@ -2112,11 +2113,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
             if (displayed.length === 0) {
               return (
-                <div className="liquid-glass-panel rounded-3xl p-12 text-center space-y-3 border border-white/10">
-                  <div className="p-3 bg-slate-950 rounded-full border border-slate-800 text-slate-500 w-fit mx-auto">
-                    <UserCheck className="w-6 h-6" />
-                  </div>
-                  <h4 className="text-base font-bold text-white">
+                <div className="liquid-glass-panel rounded-2xl p-8 text-center space-y-2 border border-white/10">
+                  <UserCheck className="w-6 h-6 text-slate-500 mx-auto" />
+                  <h4 className="text-sm font-bold text-white">
                     {testerViewMode === 'active' ? 'No Testers Currently Active' : 'No Testers Found'}
                   </h4>
                   <p className="text-xs text-slate-400 max-w-sm mx-auto">
@@ -2129,7 +2128,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             }
 
             return (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-start">
                 {displayed.map(tester => {
                   const profile = tester.performanceProfile;
                   const dayData = !profile
@@ -2150,14 +2149,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   const avgMs = dayData.completedCount > 0 ? Math.round(dayData.totalDurationMs / dayData.completedCount) : 0;
                   const avgMins = Math.floor(avgMs / 60000);
                   const avgSecs = Math.floor((avgMs % 60000) / 1000);
-                  const avgFormatted = avgMs > 0 ? `${avgMins}m ${avgSecs < 10 ? '0' : ''}${avgSecs}s` : 'N/A';
+                  const avgFormatted = avgMs > 0 ? `${avgMins}m ${avgSecs < 10 ? '0' : ''}${avgSecs}s` : '—';
 
                   const dayDevices = !profile
                     ? []
                     : selectedQaDate === 'all'
                       ? Array.from(profile.devicesUsed)
                       : Array.from(('devicesUsedOnDay' in dayData && dayData.devicesUsedOnDay instanceof Set) ? dayData.devicesUsedOnDay : []);
-                  const devicesStr = dayDevices.join(', ') || 'None';
+                  const devicesStr = dayDevices.join(', ') || '—';
 
                   const isActive = activeTesterMap.has(tester.name.toLowerCase().trim());
                   const activeInfo = activeTesterMap.get(tester.name.toLowerCase().trim());
@@ -2166,57 +2165,55 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   return (
                     <div
                       key={tester.id || tester.name}
-                      className={`liquid-glass-panel rounded-3xl p-5 border transition-all duration-300 shadow-xl ${
+                      className={`liquid-glass-panel rounded-2xl p-3.5 border transition-all duration-200 shadow-lg ${
                         isActive
-                          ? 'border-emerald-500/40 bg-slate-900/90 ring-1 ring-emerald-500/30'
-                          : 'border-white/10 bg-slate-900/60'
+                          ? 'border-emerald-500/40 bg-slate-900/95 ring-1 ring-emerald-500/25'
+                          : 'border-white/10 bg-slate-900/65 hover:border-white/15'
                       }`}
                     >
-                      {/* Top Header: Avatar + Identity + Live Status Badge */}
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-3.5 min-w-0">
-                          <div className={`w-11 h-11 rounded-2xl font-black text-sm flex items-center justify-center border shadow-inner flex-shrink-0 ${
+                      {/* Compact Card Row 1: Avatar + Name/Role + Live Status Badge & Actions */}
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className={`w-8 h-8 rounded-xl font-black text-xs flex items-center justify-center border flex-shrink-0 ${
                             isActive
-                              ? 'bg-gradient-to-br from-emerald-500 to-teal-600 text-white border-emerald-400/50 shadow-emerald-500/25'
+                              ? 'bg-gradient-to-br from-emerald-500 to-teal-600 text-white border-emerald-400/50 shadow-sm'
                               : 'bg-slate-800 text-slate-200 border-slate-700'
                           }`}>
                             {tester.name.charAt(0).toUpperCase()}
                           </div>
                           <div className="truncate">
-                            <h4 className="text-sm font-black text-white truncate flex items-center gap-2">
-                              <span>{tester.name}</span>
-                            </h4>
-                            <div className="text-xs text-emerald-400 font-semibold truncate">{tester.role || 'Mobile Tester'}</div>
+                            <div className="flex items-center gap-1.5">
+                              <h4 className="text-xs font-black text-white truncate">{tester.name}</h4>
+                              <span className="text-[10px] text-slate-400 font-medium truncate hidden sm:inline">• {tester.role || 'QA'}</span>
+                            </div>
+                            {/* Active or Idle Status Line */}
+                            <div className="flex items-center gap-1.5 mt-0.5">
+                              {isActive ? (
+                                activeInfo?.isAway ? (
+                                  <span className="text-[10px] font-bold text-amber-300 flex items-center gap-1">
+                                    <Clock className="w-2.5 h-2.5 text-amber-400" />
+                                    Away on {activeInfo?.deviceName || 'Device'}
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                                    Active on {activeInfo?.deviceName || 'Device'}
+                                  </span>
+                                )
+                              ) : (
+                                <span className="text-[10px] font-medium text-slate-500">Idle</span>
+                              )}
+                              {isActive && activeInfo?.startedAt && (
+                                <span className="text-[10px] font-mono font-bold text-indigo-300 bg-indigo-950/60 px-1.5 py-0.2 rounded border border-indigo-500/30">
+                                  {formatOngoingDuration(activeInfo.startedAt)}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
 
-                        {/* Live Status Pill & Ongoing Counter */}
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          {isActive && activeInfo?.startedAt && (
-                            <div className="px-2.5 py-1 rounded-xl text-[11px] font-mono font-extrabold bg-indigo-950/70 text-indigo-300 border border-indigo-500/40 flex items-center gap-1.5 shadow-sm">
-                              <Timer className="w-3 h-3 text-indigo-400 animate-pulse" />
-                              <span>{formatOngoingDuration(activeInfo.startedAt)}</span>
-                            </div>
-                          )}
-                          {isActive ? (
-                            activeInfo?.isAway ? (
-                              <div className="px-2.5 py-1 rounded-xl text-[11px] font-extrabold bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1.5 shadow-sm">
-                                <Clock className="w-3 h-3 text-amber-400" />
-                                <span>Away on {activeInfo?.deviceName || 'Device'}</span>
-                              </div>
-                            ) : (
-                              <div className="px-2.5 py-1 rounded-xl text-[11px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1.5 shadow-sm">
-                                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                                <span>Active on {activeInfo?.deviceName || 'Device'}</span>
-                              </div>
-                            )
-                          ) : (
-                            <span className="px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-slate-800/80 text-slate-400 border border-slate-700">
-                              Idle
-                            </span>
-                          )}
-
-                          {/* Remote Boot Tester Button */}
+                        {/* Right Actions: Boot & Delete */}
+                        <div className="flex items-center gap-1 flex-shrink-0">
                           {isActive && onBootTester && (
                             <button
                               type="button"
@@ -2225,66 +2222,63 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   onBootTester(activeInfo?.runId || '', activeInfo?.deviceId, tester.name, activeInfo?.deviceName);
                                 }
                               }}
-                              className="px-2.5 py-1 rounded-xl text-[11px] font-extrabold bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 hover:text-white border border-rose-500/30 flex items-center gap-1 shadow-sm transition-all cursor-pointer active:scale-95"
-                              title={`Remote boot ${tester.name} off session and release device`}
+                              className="px-2 py-1 rounded-lg text-[10px] font-extrabold bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 flex items-center gap-1 transition cursor-pointer"
+                              title={`Remote boot ${tester.name} off session`}
                             >
-                              <Trash2 className="w-3 h-3 text-rose-400" />
+                              <Trash2 className="w-2.5 h-2.5 text-rose-400" />
                               <span>Boot</span>
                             </button>
                           )}
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (confirm(`Delete tester "${tester.name}" and all associated performance data?`)) {
+                                if (tester.id && onDeleteTesterProfile) {
+                                  onDeleteTesterProfile(tester.id);
+                                }
+                                if (onDeleteTester) {
+                                  onDeleteTester(tester.name);
+                                } else if (onDeleteTestRun) {
+                                  const runsToDelete = [...testRuns, ...archivedRuns].filter(r => r.testerName === tester.name);
+                                  runsToDelete.forEach(r => onDeleteTestRun(r.id));
+                                }
+                              }
+                            }}
+                            className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
+                            title={`Delete tester ${tester.name}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </div>
 
-                      {/* Live Active Test Walkthrough Details */}
+                      {/* Compact Live Active Test Walkthrough Strip (Only when actively testing) */}
                       {isActive && activeInfo && (
-                        <div className="mt-3 bg-gradient-to-br from-emerald-950/50 via-slate-950/70 to-indigo-950/40 border border-emerald-500/30 rounded-2xl p-3 space-y-2.5 shadow-md animate-in fade-in duration-300">
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="text-[11px] text-emerald-300 font-bold flex items-center gap-1.5 truncate">
-                              <Layers className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                              <span className="truncate">{activeInfo.planName || 'Live Walkthrough'}</span>
+                        <div className="mt-2.5 bg-slate-950/80 border border-emerald-500/30 rounded-xl p-2 space-y-1.5">
+                          <div className="flex items-center justify-between text-[10px] gap-2">
+                            <span className="text-emerald-300 font-bold truncate flex items-center gap-1">
+                              <Layers className="w-3 h-3 text-emerald-400 shrink-0" />
+                              <span className="truncate">{activeInfo.planName || 'Walkthrough'}</span>
                             </span>
-                            <div className="flex items-center gap-2 shrink-0">
-                              {activeInfo.startedAt && (
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-slate-900/90 text-indigo-300 border border-indigo-500/30 flex items-center gap-1">
-                                  <Clock className="w-2.5 h-2.5 text-indigo-400" />
-                                  <span>{formatOngoingDuration(activeInfo.startedAt)}</span>
-                                </span>
-                              )}
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 shrink-0">
-                                Step {activeInfo.currentStepIndex} of {activeInfo.totalSteps}
-                              </span>
-                            </div>
+                            <span className="font-mono font-extrabold text-slate-300 shrink-0">
+                              Step {activeInfo.currentStepIndex}/{activeInfo.totalSteps} ({activeInfo.progressPct || 0}%)
+                            </span>
                           </div>
 
                           {activeInfo.currentStepTitle && (
-                            <div className="bg-slate-900/70 rounded-xl px-2.5 py-1.5 border border-white/5 flex items-center justify-between text-[11px]">
-                              <span className="text-slate-400 text-[10px] uppercase font-bold tracking-wider">Current Step</span>
-                              <span className="text-indigo-300 font-semibold truncate max-w-[170px]" title={activeInfo.currentStepTitle}>
-                                {activeInfo.currentStepTitle}
-                              </span>
+                            <div className="text-[10px] text-indigo-300 font-medium truncate" title={activeInfo.currentStepTitle}>
+                              ↳ {activeInfo.currentStepTitle}
                             </div>
                           )}
 
-                          {/* Live Status Pills: Green, Yellow, Red */}
-                          <div className="flex items-center gap-1.5 text-[10px]">
-                            <span className="flex items-center gap-1 text-emerald-300 bg-emerald-950/80 px-2 py-0.5 rounded-lg border border-emerald-700/50 font-mono font-bold">
-                              <CheckCircle2 className="w-3 h-3 text-emerald-400" /> {activeInfo.greenCount || 0} Green
-                            </span>
-                            <span className="flex items-center gap-1 text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded-lg border border-amber-700/50 font-mono font-bold">
-                              <AlertTriangle className="w-3 h-3 text-amber-400" /> {activeInfo.yellowCount || 0} Yellow
-                            </span>
-                            <span className="flex items-center gap-1 text-rose-300 bg-rose-950/80 px-2 py-0.5 rounded-lg border border-rose-700/50 font-mono font-bold">
-                              <XCircle className="w-3 h-3 text-rose-400" /> {activeInfo.redCount || 0} Red
-                            </span>
-                          </div>
-
-                          {/* Live Progress Bar */}
-                          <div className="space-y-1">
-                            <div className="flex justify-between text-[10px] font-mono text-slate-400">
-                              <span>Progress</span>
-                              <span className="text-emerald-400 font-bold">{activeInfo.progressPct || 0}%</span>
+                          <div className="flex items-center justify-between gap-2 pt-0.5">
+                            <div className="flex items-center gap-1 text-[9px] font-mono">
+                              <span className="text-emerald-400 bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-800/50">✓{activeInfo.greenCount || 0}</span>
+                              <span className="text-amber-400 bg-amber-950/80 px-1.5 py-0.5 rounded border border-amber-800/50">!{activeInfo.yellowCount || 0}</span>
+                              <span className="text-rose-400 bg-rose-950/80 px-1.5 py-0.5 rounded border border-rose-800/50">✗{activeInfo.redCount || 0}</span>
                             </div>
-                            <div className="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden border border-white/5">
+                            <div className="flex-1 bg-slate-900 h-1.5 rounded-full overflow-hidden">
                               <div
                                 className="bg-gradient-to-r from-emerald-500 to-indigo-500 h-full transition-all duration-300"
                                 style={{ width: `${activeInfo.progressPct || 0}%` }}
@@ -2294,91 +2288,59 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         </div>
                       )}
 
-                      {/* Live Data Tracking KPI Cards 3-pack */}
-                      <div className="grid grid-cols-3 gap-2 mt-4">
-                        <div className="bg-slate-950/60 p-2.5 rounded-xl border border-white/5 text-center">
-                          <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">Finished</span>
-                          <span className="text-sm font-black text-emerald-400 font-mono mt-0.5 block">{dayData.completedCount} Plans</span>
+                      {/* Compact Inline KPI & Accordion Trigger Strip */}
+                      <div className="mt-2.5 pt-2 border-t border-white/10 flex items-center justify-between gap-2 text-[11px]">
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-slate-400 font-semibold">Plans:</span>
+                            <span className="font-black text-emerald-400 font-mono">{dayData.completedCount}</span>
+                          </div>
+
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-slate-400 font-semibold">Avg:</span>
+                            <span className="font-bold text-indigo-300 font-mono">{avgFormatted}</span>
+                          </div>
+
+                          <div className="flex items-center gap-1 truncate min-w-0">
+                            <span className="text-[10px] text-slate-400 font-semibold">Dev:</span>
+                            <span className="font-bold text-purple-300 font-mono truncate" title={devicesStr}>{devicesStr}</span>
+                          </div>
                         </div>
 
-                        <div className="bg-slate-950/60 p-2.5 rounded-xl border border-white/5 text-center">
-                          <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">Avg Speed</span>
-                          <span className="text-sm font-black text-indigo-300 font-mono mt-0.5 block">{avgFormatted}</span>
-                        </div>
-
-                        <div className="bg-slate-950/60 p-2.5 rounded-xl border border-white/5 text-center truncate">
-                          <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">Devices</span>
-                          <span className="text-xs font-bold text-purple-300 font-mono mt-1 block truncate" title={devicesStr}>{devicesStr}</span>
-                        </div>
-                      </div>
-
-                      {/* Card Footer: Accordion Toggle & Delete */}
-                      <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between gap-2">
                         <button
                           type="button"
                           onClick={() => toggleTesterExpand(tester.name)}
-                          className="px-3 py-1.5 bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl border border-slate-800 text-xs font-semibold flex items-center gap-1.5 transition shadow-sm cursor-pointer active:scale-95"
+                          className="px-2 py-0.5 bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg border border-slate-800 text-[10px] font-bold flex items-center gap-1 transition cursor-pointer shrink-0"
                         >
-                          <span>{isExpanded ? 'Hide Runs' : `View Runs (${completedRunsList.length})`}</span>
-                          <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-300 ${isExpanded ? 'rotate-180 text-emerald-400' : 'rotate-0'}`} />
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (confirm(`Delete tester "${tester.name}" and all associated performance data?`)) {
-                              if (tester.id && onDeleteTesterProfile) {
-                                onDeleteTesterProfile(tester.id);
-                              }
-                              if (onDeleteTester) {
-                                onDeleteTester(tester.name);
-                              } else if (onDeleteTestRun) {
-                                const runsToDelete = [...testRuns, ...archivedRuns].filter(r => r.testerName === tester.name);
-                                runsToDelete.forEach(r => onDeleteTestRun(r.id));
-                              }
-                            }
-                          }}
-                          className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-xl border border-slate-800 hover:border-rose-500/30 transition-all cursor-pointer active:scale-95"
-                          title={`Delete tester ${tester.name}`}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>{isExpanded ? 'Hide' : `Runs (${completedRunsList.length})`}</span>
+                          <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isExpanded ? 'rotate-180 text-emerald-400' : ''}`} />
                         </button>
                       </div>
 
-                      {/* Expandable Accordion: Completed Test Runs Breakdown */}
+                      {/* Expandable Compact Accordion: Completed Test Runs Breakdown */}
                       <div className={`liquid-accordion-wrapper ${isExpanded ? 'expanded' : ''}`}>
                         <div className="liquid-accordion-inner">
-                          <div className="mt-3 pt-3 border-t border-white/10 space-y-2">
-                            <div className="flex items-center justify-between text-xs font-bold text-slate-300">
-                              <span>Executed Plans ({selectedQaDate === todayStr ? 'Today' : selectedQaDate}):</span>
-                              <span className="text-[10px] text-slate-400 font-mono">{completedRunsList.length} total</span>
-                            </div>
-
+                          <div className="mt-2 pt-2 border-t border-white/10 space-y-1.5">
                             {completedRunsList.length === 0 ? (
-                              <div className="bg-slate-950/40 p-3 rounded-xl text-center text-xs text-slate-500 font-medium">
-                                No test runs recorded for {selectedQaDate === todayStr ? 'today' : selectedQaDate}.
+                              <div className="bg-slate-950/40 py-2 px-3 rounded-lg text-center text-[11px] text-slate-500">
+                                No runs recorded for {selectedQaDate === todayStr ? 'today' : selectedQaDate}.
                               </div>
                             ) : (
-                              <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                              <div className="space-y-1 max-h-44 overflow-y-auto pr-1">
                                 {completedRunsList.map((runItem, idx) => (
-                                  <div key={runItem.runId + idx} className="bg-slate-950/80 p-2.5 rounded-xl border border-white/10 flex items-center justify-between text-xs space-x-2">
+                                  <div key={runItem.runId + idx} className="bg-slate-950/80 px-2.5 py-1.5 rounded-lg border border-white/5 flex items-center justify-between text-[11px] gap-2">
                                     <div className="truncate flex-1">
                                       <div className="font-bold text-slate-200 truncate">{runItem.planName}</div>
-                                      <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
-                                        <span className="text-purple-300 font-mono flex items-center gap-1">
-                                          <Smartphone className="w-2.5 h-2.5" /> {runItem.deviceName}
-                                        </span>
+                                      <div className="flex items-center gap-1.5 text-[10px] text-slate-400 font-mono">
+                                        <span className="text-purple-300">{runItem.deviceName}</span>
                                         <span>•</span>
-                                        <span className="font-mono text-slate-400">{runItem.completedAtFormatted}</span>
+                                        <span>{runItem.completedAtFormatted}</span>
+                                        <span>•</span>
+                                        <span className="text-indigo-300">{runItem.durationFormatted}</span>
                                       </div>
                                     </div>
 
-                                    <div className="flex items-center gap-2">
-                                      <div className="bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-lg font-mono text-[10px] font-extrabold flex items-center gap-1">
-                                        <Clock className="w-3 h-3 text-indigo-400" />
-                                        <span>{runItem.durationFormatted}</span>
-                                      </div>
-
+                                    <div className="flex items-center gap-1.5 shrink-0">
                                       <div className="flex items-center gap-1 text-[10px] font-mono">
                                         <span className="text-emerald-400 font-bold">✓{runItem.greenCount}</span>
                                         {runItem.yellowCount > 0 && <span className="text-amber-400 font-bold">!{runItem.yellowCount}</span>}
@@ -2393,7 +2355,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                               onDeleteTestRun(runItem.runId);
                                             }
                                           }}
-                                          className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors ml-1 cursor-pointer"
+                                          className="p-0.5 text-slate-500 hover:text-rose-400 rounded transition-colors cursor-pointer"
                                           title="Delete this test run record"
                                         >
                                           <Trash2 className="w-3 h-3" />
