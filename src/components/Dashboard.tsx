@@ -1,9 +1,10 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota } from '../types';
-import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers } from 'lucide-react';
+import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers, FileSpreadsheet, ExternalLink } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard, copySingleBugToClipboard } from '../utils/exportUtils';
 import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel, discoverAvailableGeminiModels } from '../services/geminiService';
+import { GOOGLE_APPS_SCRIPT_CODE } from '../googleAppsScriptCode';
 import { toBlob } from 'html-to-image';
 
 interface DashboardProps {
@@ -351,6 +352,131 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [summaryToast, setSummaryToast] = useState<{ type: 'success' | 'warning' | 'error'; message: string } | null>(null);
   const [isVisualSnapshotModalOpen, setIsVisualSnapshotModalOpen] = useState<boolean>(false);
   const [selectedImagePreviewUrl, setSelectedImagePreviewUrl] = useState<string | null>(null);
+
+  // Google Sheets Integration & Smart Categorization Settings
+  const [bugCategorizations, setBugCategorizations] = useState<Record<string, {
+    bugType?: 'Bug' | 'Setup Issue' | 'Known Issue' | 'Feature Request' | 'Misc Issue';
+    priority?: 'P0' | 'P1' | 'P2';
+    status?: 'Filed' | 'New' | "Repro'd Issue";
+  }>>(() => {
+    try {
+      const saved = localStorage.getItem('qa_bug_categorizations');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return {};
+  });
+
+  const handleUpdateBugCategorization = (bugId: string, field: 'bugType' | 'priority' | 'status', value: any) => {
+    setBugCategorizations(prev => {
+      const existing = prev[bugId] || {};
+      const updated = {
+        ...prev,
+        [bugId]: {
+          ...existing,
+          [field]: value
+        }
+      };
+      localStorage.setItem('qa_bug_categorizations', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const [googleSheetUrl, setGoogleSheetUrl] = useState<string>(() => {
+    try {
+      return localStorage.getItem('qa_google_sheet_url') || 'https://script.google.com/a/macros/google.com/s/AKfycbzMH5O3zxz5mHQrQzH5gqc62jssceuXszuKxxRmnHMuj4Pq0AyEVRzrrv_OUrM7B5GlsA/exec';
+    } catch (e) {
+      return 'https://script.google.com/a/macros/google.com/s/AKfycbzMH5O3zxz5mHQrQzH5gqc62jssceuXszuKxxRmnHMuj4Pq0AyEVRzrrv_OUrM7B5GlsA/exec';
+    }
+  });
+
+  const [autoSyncSheet, setAutoSyncSheet] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('qa_auto_sync_sheet') === 'true';
+    } catch (e) {
+      return false;
+    }
+  });
+
+  const [isSheetModalOpen, setIsSheetModalOpen] = useState<boolean>(false);
+  const [isSyncingSheet, setIsSyncingSheet] = useState<boolean>(false);
+  const [sheetSyncStatus, setSheetSyncStatus] = useState<{ success?: boolean; message?: string } | null>(null);
+  const [copiedCodeGs, setCopiedCodeGs] = useState<boolean>(false);
+
+  const handleSyncToGoogleSheet = async (bugsToSync: BugLog[] = processedBugs) => {
+    if (bugsToSync.length === 0) {
+      setSheetSyncStatus({ success: false, message: 'No bugs found to sync.' });
+      return;
+    }
+    setIsSyncingSheet(true);
+    setSheetSyncStatus(null);
+    try {
+      const enriched = bugsToSync.map(b => {
+        const cat = bugCategorizations[b.id];
+        return {
+          ...b,
+          bugType: cat?.bugType || b.bugType || 'Bug',
+          priority: cat?.priority || b.priority || (b.severity === 'critical' ? 'P0' : b.severity === 'high' ? 'P1' : 'P2'),
+          status: cat?.status || b.status || 'Filed'
+        };
+      });
+
+      let success = false;
+      let respMsg = '';
+
+      // 1. Try serverless proxy first
+      try {
+        const res = await fetch('/api/sync-sheet', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scriptUrl: googleSheetUrl, bugs: enriched })
+        });
+        const data = await res.json();
+        if (res.ok && data.status === 'success') {
+          success = true;
+          respMsg = data.result?.message || `Successfully synced ${enriched.length} bug(s) to Google Sheets!`;
+        }
+      } catch (err) {
+        console.warn('Proxy sync failed, attempting direct browser request:', err);
+      }
+
+      // 2. Direct browser request with no-cors fallback (uses user Google session cookies)
+      if (!success && googleSheetUrl) {
+        try {
+          await fetch(googleSheetUrl, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ bugs: enriched })
+          });
+          success = true;
+          respMsg = `Submitted ${enriched.length} bug(s) to your Google Sheet! Check your individual tester tabs.`;
+        } catch (err: any) {
+          respMsg = err.message || 'Error connecting to Google Apps Script';
+        }
+      }
+
+      if (success) {
+        setSheetSyncStatus({ success: true, message: respMsg || `Successfully synced ${enriched.length} bug(s)!` });
+      } else {
+        setSheetSyncStatus({ success: false, message: respMsg || 'Failed to sync to Google Sheet.' });
+      }
+    } catch (e: any) {
+      setSheetSyncStatus({ success: false, message: e.message || 'Sync failed.' });
+    } finally {
+      setIsSyncingSheet(false);
+    }
+  };
+
+  const lastSyncedBugCountRef = useRef<number>(bugLogs.length);
+  useEffect(() => {
+    if (autoSyncSheet && googleSheetUrl && bugLogs.length > lastSyncedBugCountRef.current) {
+      const newBugs = bugLogs.slice(0, bugLogs.length - lastSyncedBugCountRef.current);
+      lastSyncedBugCountRef.current = bugLogs.length;
+      handleSyncToGoogleSheet(newBugs);
+    } else {
+      lastSyncedBugCountRef.current = bugLogs.length;
+    }
+  }, [bugLogs.length, autoSyncSheet, googleSheetUrl]);
 
   const handleCopyBugsToClipboard = async () => {
     const filterLabelDate = selectedDateFilter === 'all' 
@@ -1188,8 +1314,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
-  // Filter & Sort Bug Logs
-  let processedBugs = [...bugLogs];
+  // Filter & Sort Bug Logs (enriched with smart dropdown categorizations)
+  let processedBugs = bugLogs.map(b => {
+    const cat = bugCategorizations[b.id];
+    return {
+      ...b,
+      bugType: cat?.bugType || b.bugType || 'Bug',
+      priority: cat?.priority || b.priority || (b.severity === 'critical' ? 'P0' : b.severity === 'high' ? 'P1' : 'P2'),
+      status: cat?.status || b.status || 'Filed'
+    };
+  });
 
   if (selectedDeviceFilter !== 'all') {
     processedBugs = processedBugs.filter(
@@ -3233,6 +3367,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 )}
               </button>
 
+              {/* Google Sheets Sync & Settings Button */}
+              <button
+                type="button"
+                onClick={() => setIsSheetModalOpen(true)}
+                className="px-3.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-2xl text-xs font-bold transition flex items-center gap-1.5 shadow-lg border border-white/20 active:scale-95 cursor-pointer"
+                title="Google Sheets automatic sync and spreadsheet integration settings"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-200" />
+                <span>Google Sheets Sync</span>
+                {autoSyncSheet && (
+                  <span className="w-2 h-2 rounded-full bg-emerald-300 animate-pulse ml-0.5" title="Auto-sync is enabled"></span>
+                )}
+              </button>
+
               {/* Wipe All Bugs Button */}
               {bugLogs.length > 0 && onWipeAllBugs && (
                 <button
@@ -3438,6 +3586,65 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         >
                           <ChevronDown className={`w-4 h-4 transition-transform duration-300 ${isBugExpanded ? 'rotate-180 text-purple-400' : 'text-slate-400'}`} />
                         </button>
+
+                        {/* Smart Dropdown Badge 1: Bug Type */}
+                        <div className="relative inline-flex items-center" onClick={e => e.stopPropagation()}>
+                          <select
+                            value={bug.bugType || 'Bug'}
+                            onChange={e => handleUpdateBugCategorization(bug.id, 'bugType', e.target.value)}
+                            className="appearance-none text-[11px] font-bold px-2.5 py-1 pr-5 rounded-full cursor-pointer focus:outline-none transition shadow-sm bg-amber-300 text-amber-950 hover:bg-amber-200 border border-amber-400"
+                            title="Change Bug Type"
+                          >
+                            <option value="Bug" className="bg-slate-900 text-white">Bug</option>
+                            <option value="Setup Issue" className="bg-slate-900 text-white">Setup Issue</option>
+                            <option value="Known Issue" className="bg-slate-900 text-white">Known Issue</option>
+                            <option value="Feature Request" className="bg-slate-900 text-white">Feature Request</option>
+                            <option value="Misc Issue" className="bg-slate-900 text-white">Misc Issue</option>
+                          </select>
+                          <span className="absolute right-1.5 text-[9px] pointer-events-none text-amber-950 font-bold">▾</span>
+                        </div>
+
+                        {/* Smart Dropdown Badge 2: Priority */}
+                        <div className="relative inline-flex items-center" onClick={e => e.stopPropagation()}>
+                          <select
+                            value={bug.priority || (bug.severity === 'critical' ? 'P0' : bug.severity === 'high' ? 'P1' : 'P2')}
+                            onChange={e => handleUpdateBugCategorization(bug.id, 'priority', e.target.value)}
+                            className={`appearance-none text-[11px] font-extrabold px-2.5 py-1 pr-5 rounded-full cursor-pointer focus:outline-none transition shadow-sm text-white ${
+                              (bug.priority === 'P0' || bug.priority === '0')
+                                ? 'bg-rose-600 hover:bg-rose-500 border border-rose-400'
+                                : (bug.priority === 'P1' || bug.priority === '1')
+                                ? 'bg-orange-500 hover:bg-orange-400 border border-orange-400'
+                                : 'bg-amber-500 hover:bg-amber-400 border border-amber-400'
+                            }`}
+                            title="Change Priority"
+                          >
+                            <option value="P0" className="bg-slate-900 text-white">P0 (Critical)</option>
+                            <option value="P1" className="bg-slate-900 text-white">P1 (High)</option>
+                            <option value="P2" className="bg-slate-900 text-white">P2 (Normal)</option>
+                          </select>
+                          <span className="absolute right-1.5 text-[9px] pointer-events-none text-white font-bold">▾</span>
+                        </div>
+
+                        {/* Smart Dropdown Badge 3: Status */}
+                        <div className="relative inline-flex items-center" onClick={e => e.stopPropagation()}>
+                          <select
+                            value={bug.status || 'Filed'}
+                            onChange={e => handleUpdateBugCategorization(bug.id, 'status', e.target.value)}
+                            className={`appearance-none text-[11px] font-bold px-2.5 py-1 pr-5 rounded-full cursor-pointer focus:outline-none transition shadow-sm ${
+                              bug.status === 'Filed'
+                                ? 'bg-emerald-200 text-emerald-950 hover:bg-emerald-100 border border-emerald-300'
+                                : bug.status === 'New'
+                                ? 'bg-sky-200 text-sky-950 hover:bg-sky-100 border border-sky-300'
+                                : 'bg-purple-200 text-purple-950 hover:bg-purple-100 border border-purple-300'
+                            }`}
+                            title="Change Status"
+                          >
+                            <option value="Filed" className="bg-slate-900 text-white">Filed</option>
+                            <option value="New" className="bg-slate-900 text-white">New</option>
+                            <option value="Repro'd Issue" className="bg-slate-900 text-white">Repro'd Issue</option>
+                          </select>
+                          <span className="absolute right-1.5 text-[9px] pointer-events-none font-bold text-slate-800">▾</span>
+                        </div>
 
                         <div className="flex items-center gap-1.5 font-mono text-xs text-indigo-300 font-bold bg-indigo-950/60 px-3 py-1 rounded-xl border border-indigo-800/40">
                           <Clock className="w-3.5 h-3.5 text-indigo-400" />
@@ -3957,6 +4164,177 @@ export const Dashboard: React.FC<DashboardProps> = ({
               >
                 Save & Run AI Summary
               </button>
+            </div>
+          </div>
+        </div>,
+        document.getElementById('modal-portal') || document.body
+      )}
+
+      {/* Google Sheets Integration Modal Portal */}
+      {isSheetModalOpen && createPortal(
+        <div
+          onClick={() => setIsSheetModalOpen(false)}
+          className="fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md"
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="liquid-glass-panel rounded-3xl p-6 max-w-lg w-full border border-emerald-500/30 shadow-2xl bg-slate-900/95 space-y-4 text-left animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto"
+          >
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-emerald-500/20 text-emerald-300 rounded-xl border border-emerald-500/30">
+                  <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-black text-white flex items-center gap-2">
+                    <span>Google Sheets Bug Integration</span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                      Live
+                    </span>
+                  </h4>
+                  <p className="text-[11px] text-slate-400 font-medium">Automatic multi-tab spreadsheet sync with smart dropdowns</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSheetModalOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Sync Feedback Alert */}
+            {sheetSyncStatus && (
+              <div className={`p-3 rounded-2xl border text-xs font-semibold flex items-center gap-2 ${
+                sheetSyncStatus.success 
+                  ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40'
+                  : 'bg-rose-950/80 text-rose-300 border-rose-500/40'
+              }`}>
+                {sheetSyncStatus.success ? <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" /> : <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />}
+                <span>{sheetSyncStatus.message}</span>
+              </div>
+            )}
+
+            {/* Webhook URL Input */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-300 flex items-center justify-between">
+                <span>Google Apps Script Web App URL</span>
+                <span className="text-[10px] text-slate-400 font-normal">Deployed Webhook URL</span>
+              </label>
+              <input
+                type="url"
+                value={googleSheetUrl}
+                onChange={e => {
+                  setGoogleSheetUrl(e.target.value);
+                  localStorage.setItem('qa_google_sheet_url', e.target.value);
+                }}
+                placeholder="https://script.google.com/macros/s/.../exec"
+                className="w-full liquid-glass-input rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none font-mono"
+              />
+            </div>
+
+            {/* Controls: Auto-Sync Toggle & Sync Now Button */}
+            <div className="p-3.5 rounded-2xl bg-slate-950/70 border border-white/10 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold text-white">Auto-Sync New Bugs</div>
+                  <div className="text-[11px] text-slate-400">Automatically push bugs into the sheet when testers log them</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !autoSyncSheet;
+                    setAutoSyncSheet(next);
+                    localStorage.setItem('qa_auto_sync_sheet', String(next));
+                  }}
+                  className={`w-11 h-6 flex items-center rounded-full p-1 transition-colors cursor-pointer ${
+                    autoSyncSheet ? 'bg-emerald-500' : 'bg-slate-700'
+                  }`}
+                >
+                  <div
+                    className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${
+                      autoSyncSheet ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className="pt-2 border-t border-white/5 flex items-center justify-between">
+                <span className="text-xs text-slate-300 font-medium">
+                  {processedBugs.length} bug(s) ready to sync
+                </span>
+                <button
+                  type="button"
+                  disabled={isSyncingSheet || !googleSheetUrl.trim()}
+                  onClick={() => handleSyncToGoogleSheet(processedBugs)}
+                  className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-lg active:scale-95 disabled:opacity-50 cursor-pointer"
+                >
+                  {isSyncingSheet ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Syncing...</span>
+                    </>
+                  ) : (
+                    <>
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-200" />
+                      <span>Sync All {processedBugs.length} Bugs to Sheet</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Smart Dropdown Explanation & Features */}
+            <div className="space-y-2 text-xs text-slate-300">
+              <div className="font-bold text-white flex items-center gap-1.5">
+                <span>Features Configured in Google Sheets:</span>
+              </div>
+              <ul className="space-y-1.5 text-[11px] text-slate-400">
+                <li className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                  <span><b>Individual Tester Tabs:</b> Creates a separate tab for each person (e.g. John, Justin, Ed, Eric) + an All Bugs master tab.</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                  <span><b>Smart Dropdowns:</b> Pre-configured with Priority (P0, P1, P2), Bug Type, and Status validation chips.</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-purple-400"></span>
+                  <span><b>Visual Screenshots:</b> Screenshots display via <code className="text-purple-300 font-mono">=IMAGE()</code> formulas directly in row cells.</span>
+                </li>
+              </ul>
+            </div>
+
+            {/* Google Apps Script Code Accordion / Copy */}
+            <div className="pt-2 border-t border-white/10 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-white">Google Sheet Apps Script (Code.gs)</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(GOOGLE_APPS_SCRIPT_CODE);
+                    setCopiedCodeGs(true);
+                    setTimeout(() => setCopiedCodeGs(false), 3000);
+                  }}
+                  className="px-2.5 py-1 rounded-xl text-[11px] font-bold bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 flex items-center gap-1.5 transition cursor-pointer active:scale-95"
+                >
+                  {copiedCodeGs ? (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                      <span className="text-emerald-300">Copied!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5 text-purple-300" />
+                      <span>Copy Code.gs</span>
+                    </>
+                  )}
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Paste this into your Google Sheet under <b>Extensions &gt; Apps Script &gt; Code.gs</b> and deploy as a Web App with access set to <i>Anyone</i>.
+              </p>
             </div>
           </div>
         </div>,

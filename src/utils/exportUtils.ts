@@ -183,10 +183,40 @@ const getSeverityBadgeStyles = (severity: string) => {
   }
 };
 
+export const getBugCategorization = (bug: BugLog) => {
+  const bugType = bug.bugType || 'Bug';
+  let priority = bug.priority;
+  if (!priority) {
+    if (bug.severity === 'critical') priority = 'P0';
+    else if (bug.severity === 'high') priority = 'P1';
+    else priority = 'P2';
+  }
+  const status = bug.status || 'Filed';
+  return { bugType, priority, status };
+};
+
+export const getSmartBadgeHtml = (bugType: string, priority: string, status: string) => {
+  // Bug Type: Yellow pill matching user screenshot
+  const bugTypeBg = '#fef08a';
+  const bugTypeText = '#713f12';
+
+  // Priority: P0 Red, P1 Orange, P2 Yellow matching user screenshot
+  const prioBg = (priority === 'P0' || priority === '0') ? '#ef4444' : (priority === 'P1' || priority === '1') ? '#f97316' : '#eab308';
+  const prioText = '#ffffff';
+
+  // Status: Filed (green), New (blue), Repro'd Issue (purple) matching user screenshot
+  const statusBg = status === 'Filed' ? '#dcfce7' : status === 'New' ? '#dbeafe' : '#f3e8ff';
+  const statusText = status === 'Filed' ? '#166534' : status === 'New' ? '#1e40af' : '#6b21a8';
+
+  return `<span style="display: inline-block; background-color: ${bugTypeBg}; color: ${bugTypeText}; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 9999px; margin-right: 4px; vertical-align: middle; border: 1px solid rgba(0,0,0,0.08); font-family: inherit;">${bugType} ▾</span>` +
+         `<span style="display: inline-block; background-color: ${prioBg}; color: ${prioText}; font-size: 11px; font-weight: 800; padding: 2px 9px; border-radius: 9999px; margin-right: 4px; vertical-align: middle; font-family: inherit;">${priority} ▾</span>` +
+         `<span style="display: inline-block; background-color: ${statusBg}; color: ${statusText}; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 9999px; margin-right: 6px; vertical-align: middle; border: 1px solid rgba(0,0,0,0.08); font-family: inherit;">${status} ▾</span>`;
+};
+
 /**
  * Format a single bug into plain text & rich Google Docs-compatible HTML
- * using the clean original format requested by the user:
- * [Timestamp] Feature: <Feature>
+ * using the clean format with smart dropdown badges requested by the user:
+ * [Bug ▾] [P1 ▾] [Filed ▾] [Timestamp] Feature: <Feature>
  * Description: <Description>
  * <Screenshot Image>
  */
@@ -195,16 +225,19 @@ export function formatSingleBugToText(bug: BugLog): { plainText: string; htmlTex
   const feature = bug.feature || 'General';
   const description = bug.note || 'No description attached.';
   const publicImageUrl = getBugPublicImageUrl(bug);
+  const { bugType, priority, status } = getBugCategorization(bug);
+  const badgeHtml = getSmartBadgeHtml(bugType, priority, status);
 
-  // Plain Text representation (clean old style)
-  let plainText = `[${ts}] Feature: ${feature}\nDescription: ${description}\n`;
+  // Plain Text representation
+  let plainText = `[${bugType}] [${priority}] [${status}] [${ts}] Feature: ${feature}\nDescription: ${description}\n`;
   if (publicImageUrl) {
     plainText += `Screenshot: ${publicImageUrl}\n`;
   }
 
-  // Rich HTML for Google Docs (clean old style + inline screenshot)
+  // Rich HTML for Google Docs (smart chips + clean style + inline screenshot)
   let htmlText = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5; max-width: 680px; margin-bottom: 14px;">`;
   htmlText += `<div style="font-size: 13px; font-weight: 700; color: #0f172a; margin-bottom: 4px;">`;
+  htmlText += `${badgeHtml}`;
   htmlText += `<span style="color: #475569; font-weight: 600;">[${ts}]</span> `;
   htmlText += `<span style="color: #4f46e5; font-weight: 700;">Feature: ${feature}</span>`;
   htmlText += `</div>`;
@@ -225,8 +258,8 @@ export function formatSingleBugToText(bug: BugLog): { plainText: string; htmlTex
 
 /**
  * Format bugs list into plain text & rich HTML suitable for Google Docs, Word, email, Slack, and Teams
- * using the clean original format requested by the user:
- * [Timestamp] Feature: <Feature>
+ * using the clean format with smart dropdown badges requested by the user:
+ * [Bug ▾] [P1 ▾] [Filed ▾] [Timestamp] Feature: <Feature>
  * Description: <Description>
  * <Screenshot Image>
  */
@@ -238,15 +271,16 @@ export function formatBugsToText(bugs: BugLog[], filterOptions?: BugCopyFilterOp
     };
   }
 
-  // 1. Plain Text Output (clean old style)
+  // 1. Plain Text Output
   let plainText = '';
   bugs.forEach((bug, idx) => {
     const ts = getFormattedTimestamp(bug);
     const feature = bug.feature || 'General';
     const description = bug.note || 'No description attached.';
     const publicImageUrl = getBugPublicImageUrl(bug);
+    const { bugType, priority, status } = getBugCategorization(bug);
 
-    plainText += `[${ts}] Feature: ${feature}\n`;
+    plainText += `[${bugType}] [${priority}] [${status}] [${ts}] Feature: ${feature}\n`;
     plainText += `Description: ${description}\n`;
     if (publicImageUrl) {
       plainText += `Screenshot: ${publicImageUrl}\n`;
@@ -256,16 +290,19 @@ export function formatBugsToText(bugs: BugLog[], filterOptions?: BugCopyFilterOp
     }
   });
 
-  // 2. Rich HTML Output for Google Docs (clean old style + inline screenshots)
+  // 2. Rich HTML Output for Google Docs (smart badge pills + clean style + inline screenshots)
   let htmlText = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5; max-width: 680px;">`;
   bugs.forEach((bug, idx) => {
     const ts = getFormattedTimestamp(bug);
     const feature = bug.feature || 'General';
     const description = (bug.note || 'No description attached.').replace(/\n/g, '<br/>');
     const publicImageUrl = getBugPublicImageUrl(bug);
+    const { bugType, priority, status } = getBugCategorization(bug);
+    const badgeHtml = getSmartBadgeHtml(bugType, priority, status);
 
     htmlText += `<div style="margin-bottom: 16px; padding-bottom: 12px; ${idx < bugs.length - 1 ? 'border-bottom: 1px solid #f1f5f9;' : ''}">`;
     htmlText += `<div style="font-size: 13px; font-weight: 700; color: #0f172a; margin-bottom: 4px;">`;
+    htmlText += `${badgeHtml}`;
     htmlText += `<span style="color: #475569; font-weight: 600;">[${ts}]</span> `;
     htmlText += `<span style="color: #4f46e5; font-weight: 700;">Feature: ${feature}</span>`;
     htmlText += `</div>`;

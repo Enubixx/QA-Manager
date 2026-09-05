@@ -28,6 +28,9 @@ export interface BugLog {
   imageUrl?: string;
   timestamp: string; // ISO string with date & time
   formattedTime: string; // Human readable time
+  bugType?: 'Bug' | 'Setup Issue' | 'Known Issue' | 'Feature Request' | 'Misc Issue';
+  priority?: 'P0' | 'P1' | 'P2' | '0' | '1' | '2';
+  status?: 'Filed' | 'New' | "Repro'd Issue";
 }
 
 export interface StepResult {
