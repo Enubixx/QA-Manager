@@ -16,36 +16,36 @@ var SUPABASE_ANON_KEY = "sb_publishable_M2JvKUmCmgShodNziXNRDw_NwYoN_Rc";
 var TABLE_HEADER_BG = "#16532B"; // Google Forest Green Header
 var TABLE_HEADER_TEXT = "#FFFFFF";
 
-// Dropdown options (P0, P1, P2 only - no numbers)
+// Dropdown options (P0, P1, P2 only - strictly no numbers)
 var BUG_TYPES = ['Bug', 'Setup Issue', 'Known Issue', 'Feature Request', 'Misc Issue'];
 var PRIORITIES = ['P0', 'P1', 'P2'];
 var STATUSES = ['Filed', 'New', "Repro'd Issue"];
 
-// 10-column Smart Table schema
+// Exactly 10 columns - strictly aligned 1:1 with row data
 var HEADERS = [
-  'Bug Type',
-  'Priority',
-  'Status',
-  'Timestamp',
-  'Feature',
-  'Description',
-  'Device',
-  'Tester',
-  'Test Plan / Step',
-  'Screenshot Link'
+  'Bug Type',         // Col 1 (A)
+  'Priority',         // Col 2 (B)
+  'Status',           // Col 3 (C)
+  'Timestamp',        // Col 4 (D)
+  'Feature',          // Col 5 (E)
+  'Description',      // Col 6 (F)
+  'Device',           // Col 7 (G)
+  'Tester',           // Col 8 (H)
+  'Test Plan / Step', // Col 9 (I)
+  'Screenshot Link'   // Col 10 (J)
 ];
 
 var COLUMN_WIDTHS = [
-  130, // A: Bug Type
-  90,  // B: Priority
-  130, // C: Status
-  165, // D: Timestamp
-  180, // E: Feature
-  380, // F: Description
-  90,  // G: Device
-  110, // H: Tester
-  220, // I: Plan / Step
-  200  // J: Screenshot Link
+  130, // Col 1 (A): Bug Type
+  90,  // Col 2 (B): Priority
+  130, // Col 3 (C): Status
+  165, // Col 4 (D): Timestamp
+  180, // Col 5 (E): Feature
+  380, // Col 6 (F): Description
+  90,  // Col 7 (G): Device
+  110, // Col 8 (H): Tester
+  220, // Col 9 (I): Test Plan / Step
+  200  // Col 10 (J): Screenshot Link
 ];
 
 /**
@@ -83,7 +83,8 @@ function fetchBugsFromSupabase() {
 }
 
 /**
- * Master Sync Function: Pulls all bugs from Supabase and populates all tabs
+ * Master Sync Function: Pulls all bugs from Supabase, updates headers,
+ * removes any legacy columns, and populates all tabs accurately.
  */
 function syncBugsFromDatabase() {
   var bugs = fetchBugsFromSupabase();
@@ -101,8 +102,8 @@ function menuSyncNow() {
     SpreadsheetApp.getUi().alert(
       'QA Manager Sync Complete!\\n\\n' +
       '• Processed: ' + res.totalBugs + ' bug(s)\\n' +
-      '• Tester Tables: ' + res.testers.join(', ') + '\\n' +
-      '• Master Table: All Bugs'
+      '• Re-aligned 10-column Smart Tables: ' + res.testers.join(', ') + ', All Bugs\\n' +
+      '• Columns: Bug Type, Priority, Status, Timestamp, Feature, Description, Device, Tester, Plan/Step, Screenshot Link'
     );
   } catch (e) {
     Logger.log("Sync complete: " + JSON.stringify(res));
@@ -145,7 +146,7 @@ function removeAutoSyncTrigger(silent) {
 }
 
 /**
- * Master bug population function
+ * Master bug population function - formats headers & re-aligns columns on EVERY sync
  */
 function populateAllBugs(bugs) {
   var ss = getSpreadsheet();
@@ -173,11 +174,13 @@ function populateAllBugs(bugs) {
   for (var tester in bugsByTester) {
     testerList.push(tester);
     var sheet = getOrCreateTab(ss, tester);
+    setupTabFormatting(sheet); // ALWAYS re-align headers and delete extra columns!
     appendOrUpdateBugs(sheet, bugsByTester[tester]);
   }
 
   // Also populate master "All Bugs" Smart Table tab
   var allSheet = getOrCreateTab(ss, 'All Bugs');
+  setupTabFormatting(allSheet); // ALWAYS re-align headers and delete extra columns!
   appendOrUpdateBugs(allSheet, bugs);
 
   return {
@@ -210,7 +213,7 @@ function doGet(e) {
       '<div class="badge">SYNC SUCCESSFUL</div>' +
       '<h2>Google Sheet Updated!</h2>' +
       '<p>Successfully populated <strong>' + res.totalBugs + ' bug(s)</strong> across individual tester Smart Tables.</p>' +
-      '<div class="testers"><strong>Updated Tables:</strong><br>' + res.testers.join(', ') + ', All Bugs</div>' +
+      '<div class="testers"><strong>Re-aligned 10-Column Tables:</strong><br>' + res.testers.join(', ') + ', All Bugs</div>' +
       '<div class="close-note">This window will close automatically in 3 seconds...</div>' +
       '</div>' +
       '<script>setTimeout(function(){ window.close(); }, 3000);</script>' +
@@ -262,7 +265,7 @@ function doPost(e) {
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('QA Manager')
-    .addItem('⚡ Sync Bugs From Database Now', 'menuSyncNow')
+    .addItem('⚡ Sync Bugs & Fix Columns Now', 'menuSyncNow')
     .addItem('⏱️ Enable Auto-Sync (Every 5 Mins)', 'installAutoSyncTrigger')
     .addItem('🛑 Disable Auto-Sync', 'removeAutoSyncTrigger')
     .addSeparator()
@@ -280,35 +283,37 @@ function formatAllExistingTabs() {
     setupTabFormatting(sheets[i]);
   }
   try {
-    SpreadsheetApp.getUi().alert('All tabs formatted as Green Smart Tables with P0-P2 dropdowns and styling!');
+    SpreadsheetApp.getUi().alert('All tabs re-aligned as 10-Column Green Smart Tables with P0-P2 dropdowns!');
   } catch (e) {}
 }
 
 /**
- * Get existing sheet or create new tab with headers & smart dropdowns
+ * Get existing sheet or create new tab
  */
 function getOrCreateTab(ss, tabName) {
   var sheet = ss.getSheetByName(tabName);
   if (!sheet) {
     sheet = ss.insertSheet(tabName);
-    setupTabFormatting(sheet);
   }
   return sheet;
 }
 
 /**
- * Setup headers, column widths, freeze rows, banded rows, filters, and smart dropdowns
+ * Setup headers, column widths, delete legacy extra columns, freeze rows, and set dropdowns
  */
 function setupTabFormatting(sheet) {
-  // If there are lingering columns from previous 11/12/13-column versions, clear them
+  // 1. Delete or clear any lingering legacy columns (Col 11, 12, 13) from previous versions
   var maxCols = sheet.getMaxColumns();
   if (maxCols > HEADERS.length) {
     try {
       sheet.getRange(1, HEADERS.length + 1, sheet.getMaxRows(), maxCols - HEADERS.length).clear();
-    } catch (e) {}
+      sheet.deleteColumns(HEADERS.length + 1, maxCols - HEADERS.length);
+    } catch (e) {
+      Logger.log("Notice deleting extra columns: " + e);
+    }
   }
 
-  // 1. Set headers with Google Forest Green background matching user screenshot
+  // 2. Set exact 10 headers with Google Forest Green background matching user screenshot
   var headerRange = sheet.getRange(1, 1, 1, HEADERS.length);
   headerRange.setValues([HEADERS]);
   headerRange.setFontWeight('bold');
@@ -323,12 +328,12 @@ function setupTabFormatting(sheet) {
   // Freeze top row
   sheet.setFrozenRows(1);
 
-  // 2. Set column widths
+  // 3. Set column widths
   for (var c = 0; c < COLUMN_WIDTHS.length; c++) {
     sheet.setColumnWidth(c + 1, COLUMN_WIDTHS[c]);
   }
 
-  // 3. Setup Smart Dropdowns (for rows 2 to 1000)
+  // 4. Setup Smart Dropdowns (for rows 2 to 1000)
   var maxRows = Math.max(sheet.getMaxRows(), 500);
 
   // Col A: Bug Type Dropdown
@@ -352,12 +357,11 @@ function setupTabFormatting(sheet) {
     .build();
   sheet.getRange(2, 3, maxRows - 1, 1).setDataValidation(statusRule);
 
-  // 4. Wrap text on Description (Col F) & vertical middle alignment
+  // 5. Wrap text on Description (Col F) & vertical middle alignment
   sheet.getRange(2, 6, maxRows - 1, 1).setWrap(true);
   sheet.getRange(2, 1, maxRows - 1, HEADERS.length).setVerticalAlignment('middle');
 
-  // 5. Smart Table Filter (Dropdown filtering & sorting on every header)
-  // Preserve existing native table filter if already active
+  // 6. Smart Table Filter (Dropdown filtering & sorting on every header)
   try {
     var existingFilter = sheet.getFilter();
     if (!existingFilter) {
@@ -368,7 +372,7 @@ function setupTabFormatting(sheet) {
     Logger.log("Filter notice: " + filterErr);
   }
 
-  // 6. Smart Table Banding (Green theme matching Google Tables)
+  // 7. Smart Table Banding (Green theme matching Google Tables)
   try {
     var bandings = sheet.getBandings();
     if (!bandings || bandings.length === 0) {
@@ -380,10 +384,10 @@ function setupTabFormatting(sheet) {
     Logger.log("Table banding notice: " + bandErr);
   }
 
-  // 7. Apply smart chip conditional formatting (exact colors matching user screenshot)
+  // 8. Apply smart chip conditional formatting (exact colors matching user screenshot)
   applyConditionalFormatting(sheet);
 
-  // 8. Set comfortable table row heights
+  // 9. Set comfortable table row heights
   if (sheet.getLastRow() > 1) {
     sheet.setRowHeights(2, sheet.getLastRow() - 1, 34);
   }
@@ -440,7 +444,7 @@ function applyConditionalFormatting(sheet) {
     .setRanges([bugTypeRange])
     .build());
 
-  // Priority P0 -> Soft Red
+  // Priority P0 -> Soft Red (#FEE2E2 / #991B1B)
   rules.push(SpreadsheetApp.newConditionalFormatRule()
     .whenTextEqualTo('P0')
     .setBackground('#FEE2E2')
@@ -449,7 +453,7 @@ function applyConditionalFormatting(sheet) {
     .setRanges([priorityRange])
     .build());
 
-  // Priority P1 -> Soft Orange
+  // Priority P1 -> Soft Orange (#FFEDD5 / #C2410C)
   rules.push(SpreadsheetApp.newConditionalFormatRule()
     .whenTextEqualTo('P1')
     .setBackground('#FFEDD5')
@@ -494,7 +498,7 @@ function applyConditionalFormatting(sheet) {
 }
 
 /**
- * Append or update bugs in a specific sheet
+ * Append or update bugs in a specific sheet - strictly aligns all 10 columns
  */
 function appendOrUpdateBugs(sheet, bugs) {
   var lastRow = sheet.getLastRow();
@@ -524,7 +528,7 @@ function appendOrUpdateBugs(sheet, bugs) {
     var rawSeverity = (bug.severity || 'medium').toLowerCase();
     var defaultPrio = rawSeverity === 'critical' ? 'P0' : rawSeverity === 'high' ? 'P1' : 'P2';
     
-    // Normalize Priority: P0, P1, P2 only (no numbers)
+    // Normalize Priority: P0, P1, P2 only (strictly no numbers)
     var rawPrio = String(bug.priority || defaultPrio).trim();
     var priority = 'P2';
     if (rawPrio === 'P0' || rawPrio === '0') priority = 'P0';
@@ -566,41 +570,43 @@ function appendOrUpdateBugs(sheet, bugs) {
 
     var bugKey = formattedTimestamp.trim() + '___' + feature.trim();
 
-    // Preserve manual sheet dropdown changes if row already exists
+    // Preserve manual sheet dropdown changes only if valid dropdown value
     if (existingMap[bugKey]) {
       var targetRow = existingMap[bugKey];
       var existingRowVals = sheet.getRange(targetRow, 1, 1, 3).getValues()[0];
-      if (existingRowVals[0]) bugType = existingRowVals[0];
-      if (existingRowVals[1]) priority = existingRowVals[1];
-      if (existingRowVals[2]) status = existingRowVals[2];
+      if (existingRowVals[0] && BUG_TYPES.indexOf(existingRowVals[0]) !== -1) bugType = existingRowVals[0];
+      if (existingRowVals[1] && PRIORITIES.indexOf(existingRowVals[1]) !== -1) priority = existingRowVals[1];
+      if (existingRowVals[2] && STATUSES.indexOf(existingRowVals[2]) !== -1) status = existingRowVals[2];
 
+      // Exact 10-column values aligned 1:1 with HEADERS
       var rowValues = [
-        bugType,
-        priority,
-        status,
-        formattedTimestamp,
-        feature,
-        description,
-        device,
-        tester,
-        planStep,
-        imgLink
+        bugType,            // Col 1 (A): Bug Type
+        priority,           // Col 2 (B): Priority
+        status,             // Col 3 (C): Status
+        formattedTimestamp, // Col 4 (D): Timestamp
+        feature,            // Col 5 (E): Feature
+        description,        // Col 6 (F): Description
+        device,             // Col 7 (G): Device
+        tester,             // Col 8 (H): Tester
+        planStep,           // Col 9 (I): Test Plan / Step
+        imgLink             // Col 10 (J): Screenshot Link
       ];
 
       sheet.getRange(targetRow, 1, 1, rowValues.length).setValues([rowValues]);
       sheet.setRowHeight(targetRow, 34);
     } else {
+      // Exact 10-column values aligned 1:1 with HEADERS
       var rowValues = [
-        bugType,
-        priority,
-        status,
-        formattedTimestamp,
-        feature,
-        description,
-        device,
-        tester,
-        planStep,
-        imgLink
+        bugType,            // Col 1 (A): Bug Type
+        priority,           // Col 2 (B): Priority
+        status,             // Col 3 (C): Status
+        formattedTimestamp, // Col 4 (D): Timestamp
+        feature,            // Col 5 (E): Feature
+        description,        // Col 6 (F): Description
+        device,             // Col 7 (G): Device
+        tester,             // Col 8 (H): Tester
+        planStep,           // Col 9 (I): Test Plan / Step
+        imgLink             // Col 10 (J): Screenshot Link
       ];
 
       sheet.appendRow(rowValues);
