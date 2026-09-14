@@ -13,14 +13,15 @@ export const fetchAllSupabaseData = async () => {
       supabase.from('populated_features').select('*'),
     ]);
 
-    let devicesRes: any = { data: [] };
-    let testersRes: any = { data: [] };
-    try {
-      devicesRes = await supabase.from('devices').select('*');
-    } catch (e) {}
-    try {
-      testersRes = await supabase.from('testers').select('*');
-    } catch (e) {}
+    if (plansRes.error || runsRes.error || archivedRes.error || featuresRes.error) {
+      console.error('Supabase query error:', {
+        plans: plansRes.error,
+        runs: runsRes.error,
+        archived: archivedRes.error,
+        features: featuresRes.error,
+      });
+      return null;
+    }
 
     const testPlans: TestPlan[] = (plansRes.data || []).map((item: any) => ({
       id: item.id,
@@ -113,19 +114,8 @@ export const fetchAllSupabaseData = async () => {
 
     const rawFeaturesData = featuresRes.data || [];
     let populatedFeatures: string[] = [];
-    let devices: DeviceProfile[] = (devicesRes.data || []).map((item: any) => ({
-      id: item.id,
-      name: item.name || '',
-      isReady: item.is_ready ?? true,
-      quotas: item.quotas || [],
-      activeRunId: item.active_run_id || undefined,
-      activeTesterName: item.active_tester_name || undefined,
-    }));
-    let testers: TesterProfile[] = (testersRes.data || []).map((item: any) => ({
-      id: item.id,
-      name: item.name || '',
-      role: item.role || '',
-    }));
+    let devices: DeviceProfile[] = [];
+    let testers: TesterProfile[] = [];
 
     rawFeaturesData.forEach((item: any) => {
       const name = item.feature_name || '';

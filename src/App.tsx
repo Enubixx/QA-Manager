@@ -215,6 +215,9 @@ export function App() {
     if (cloudData) {
       if (cloudData.testPlans && JSON.stringify(cloudData.testPlans) !== JSON.stringify(testPlansRef.current)) {
         setTestPlans(cloudData.testPlans);
+        if (cloudData.testPlans.length > 0 && (!selectedPlanId || !cloudData.testPlans.some(p => p.id === selectedPlanId))) {
+          setSelectedPlanId(cloudData.testPlans[0].id);
+        }
       }
       // Filter out empty ghost runs (0 recorded steps and 0 bugs)
       const validTestRuns = (cloudData.testRuns || []).filter(r => {
