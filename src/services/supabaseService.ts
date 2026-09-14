@@ -82,8 +82,21 @@ export const fetchAllSupabaseData = async () => {
       };
     });
 
+    let bugsWipedAt = 0;
+    (featuresRes.data || []).forEach((item: any) => {
+      const name = item.feature_name || '';
+      if (name.startsWith('__GLOBAL_BUGS_WIPED_AT__:')) {
+        const ts = parseInt(name.replace('__GLOBAL_BUGS_WIPED_AT__:', ''), 10);
+        if (!isNaN(ts) && ts > bugsWipedAt) bugsWipedAt = ts;
+      }
+    });
+
     const bugMap = new Map<string, BugLog>();
     (bugsRes.data || []).forEach((item: any) => {
+      const itemTs = item.timestamp ? new Date(item.timestamp).getTime() : 0;
+      if (bugsWipedAt > 0 && itemTs > 0 && itemTs <= bugsWipedAt) {
+        return;
+      }
       bugMap.set(item.id, {
         id: item.id,
         testRunId: item.test_run_id,
@@ -101,11 +114,15 @@ export const fetchAllSupabaseData = async () => {
       });
     });
 
-    // Ingest embedded bugs from runs so bugs logged during testing are permanently resilient
+    // Ingest embedded bugs from runs so bugs logged during testing are permanently resilient (respecting bugsWipedAt)
     [...testRuns, ...archivedRuns].forEach(run => {
       (run.bugLogs || []).forEach(b => {
-        if (b && b.id && !bugMap.has(b.id)) {
-          bugMap.set(b.id, b);
+        if (b && b.id) {
+          const bTs = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+          if (bugsWipedAt > 0 && bTs > 0 && bTs <= bugsWipedAt) return;
+          if (!bugMap.has(b.id)) {
+            bugMap.set(b.id, b);
+          }
         }
       });
     });
@@ -243,6 +260,14 @@ export const deleteArchivedRunFromSupabase = async (runId: string) => {
 export const syncBugLogToSupabase = async (bug: BugLog) => {
   if (!supabase || !isSupabaseConfigured) return;
   try {
+    const wipedAtStr = typeof localStorage !== 'undefined' ? localStorage.getItem('qa_bugs_wiped_at') : null;
+    if (wipedAtStr) {
+      const wipedAt = parseInt(wipedAtStr, 10);
+      const bugTs = bug.timestamp ? new Date(bug.timestamp).getTime() : 0;
+      if (wipedAt > 0 && bugTs > 0 && bugTs <= wipedAt) {
+        return;
+      }
+    }
     const { error } = await supabase.from('bug_logs').upsert({
       id: bug.id,
       test_run_id: bug.testRunId,
@@ -275,7 +300,21 @@ export const deleteBugLogFromSupabase = async (bugId: string) => {
 
 export const wipeAllBugsFromSupabase = async () => {
   if (!supabase || !isSupabaseConfigured) return;
-  await supabase.from('bug_logs').delete().neq('id', 'all_bugs_delete_key');
+  try {
+    const wipedAt = Date.now();
+    await Promise.all([
+      supabase.from('bug_logs').delete().neq('id', 'all_bugs_delete_key'),
+      syncPopulatedFeatureToSupabase(`__GLOBAL_BUGS_WIPED_AT__:${wipedAt}`),
+    ]);
+    try {
+      await supabase.from('test_runs').update({ bug_logs: [] }).neq('id', 'all_bugs_dummy');
+    } catch (e) {}
+    try {
+      await supabase.from('archived_runs').update({ bug_logs: [] }).neq('id', 'all_bugs_dummy');
+    } catch (e) {}
+  } catch (err) {
+    console.error('wipeAllBugsFromSupabase error:', err);
+  }
 };
 
 export const syncPopulatedFeatureToSupabase = async (featureName: string) => {

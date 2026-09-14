@@ -241,32 +241,37 @@ export function App() {
         setArchivedRuns(validArchivedRuns);
       }
       if (cloudData.bugLogs) {
-        // Resilient merge: Combine cloud bugs with local bugs so locally recorded defects are never wiped out
-        const localBugs = bugLogsRef.current || [];
-        let storedBugs: BugLog[] = [];
-        try {
-          const raw = localStorage.getItem('qa_bug_logs');
-          if (raw) storedBugs = JSON.parse(raw);
-        } catch (e) {}
-
-        const bugMap = new Map<string, BugLog>();
-        // Add cloud bugs first
-        cloudData.bugLogs.forEach(b => {
-          if (b && b.id) bugMap.set(b.id, b);
-        });
-        // Merge local bugs so anything not yet in the cloud is retained and synced
-        [...storedBugs, ...localBugs].forEach(b => {
-          if (b && b.id) {
-            if (!bugMap.has(b.id)) {
-              bugMap.set(b.id, b);
-              safeSyncBugLog(b);
-            }
+        let cloudWipedAt = 0;
+        (cloudData.populatedFeatures || []).forEach(f => {
+          if (f && f.startsWith('__GLOBAL_BUGS_WIPED_AT__:')) {
+            const ts = parseInt(f.replace('__GLOBAL_BUGS_WIPED_AT__:', ''), 10);
+            if (!isNaN(ts) && ts > cloudWipedAt) cloudWipedAt = ts;
           }
         });
-        const mergedBugs = Array.from(bugMap.values());
-        if (JSON.stringify(mergedBugs) !== JSON.stringify(bugLogsRef.current)) {
-          setBugLogs(mergedBugs);
+        const localWipedAtStr = localStorage.getItem('qa_bugs_wiped_at');
+        const localWipedAt = localWipedAtStr ? parseInt(localWipedAtStr, 10) : 0;
+        const effectiveWipedAt = Math.max(cloudWipedAt, localWipedAt);
+
+        // Filter out any bugs recorded before the wipe timestamp
+        const validCloudBugs = cloudData.bugLogs.filter(b => {
+          if (effectiveWipedAt > 0) {
+            const bTs = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+            if (bTs > 0 && bTs <= effectiveWipedAt) return false;
+          }
+          return true;
+        });
+
+        if (JSON.stringify(validCloudBugs) !== JSON.stringify(bugLogsRef.current)) {
+          setBugLogs(validCloudBugs);
+          bugLogsRef.current = validCloudBugs;
         }
+
+        try {
+          localStorage.setItem('qa_bug_logs', JSON.stringify(validCloudBugs));
+          if (effectiveWipedAt > 0) {
+            localStorage.setItem('qa_bugs_wiped_at', String(effectiveWipedAt));
+          }
+        } catch (e) {}
       }
       if (cloudData.populatedFeatures && cloudData.populatedFeatures.length > 0) {
         if (JSON.stringify(cloudData.populatedFeatures) !== JSON.stringify(populatedFeaturesRef.current)) {
@@ -1041,10 +1046,14 @@ export function App() {
   };
 
   const handleWipeAllBugs = () => {
+    const wipedAt = Date.now();
     setBugLogs([]);
+    bugLogsRef.current = [];
     try {
-      localStorage.removeItem('qa_bug_logs');
+      localStorage.setItem('qa_bug_logs', '[]');
+      localStorage.setItem('qa_bugs_wiped_at', String(wipedAt));
     } catch (e) {}
+
     wipeAllBugsFromSupabase();
 
     setTestRuns(prev => prev.map(r => {
