@@ -11,6 +11,10 @@ const summaryCache = new Map<string, string>();
 const BATCH_CACHE_KEY = 'qa_gemini_batch_summary_cache';
 const BATCH_CACHE_MAX_ENTRIES = 12;
 
+// Bump whenever the executive summary prompt or tone rules change, so that
+// cached summaries generated under the previous style are not reused.
+const PROMPT_STYLE_VERSION = 'v2-reference-tone';
+
 function stableHash(input: string): string {
   let h1 = 0xdeadbeef;
   let h2 = 0x41c6ce57;
@@ -536,30 +540,18 @@ export function synthesizeExecutiveOverview(
   const allText = notes.join(' ');
   const lower = allText.toLowerCase();
 
-  // 1. Dynamic Milestone / Clean Flow statement based on input features
-  let milestone = 'Testing completed with positive baseline stability observed across active test plans.';
-  if (cleanFeatures.length > 0) {
-    const sampleFeatures = cleanFeatures.slice(0, 2).join(' and ');
-    milestone = `Testing demonstrated strong progress across active plans, with clean execution observed in core ${sampleFeatures} workflows.`;
-  } else {
-    const passingOrActive = featureNames.filter(f => f && f.toLowerCase() !== 'general');
-    if (passingOrActive.length > 0) {
-      const sampleFeature = passingOrActive[0];
-      milestone = `Testing demonstrated strong progress across active plans, with clean execution observed in core ${sampleFeature} workflows.`;
-    }
-  }
-
-  // 2. Extract 2-3 standout defect themes dynamically from the actual notes
+  // 1. Extract standout defect themes dynamically from the actual notes.
+  //    Reference-report style leads with the issues, so themes are computed first.
   const defectThemes: string[] = [];
 
   if (/\b(?:translate|translation|cannot translate|can't translate)\b/i.test(lower)) {
-    defectThemes.push('features falsely claiming an inability to translate content');
+    defectThemes.push('false claims of lacking translation capability');
   }
   if (/\b(?:take a photo|take a picture|can't take photos|refuses to capture|couldn't take)\b/i.test(lower)) {
     defectThemes.push('intermittent refusals during photo capture requests');
   }
   if (/\b(?:scan|ended session|closed session|force close|abrupt|crashed)\b/i.test(lower)) {
-    defectThemes.push('abrupt session terminations during intensive tasks');
+    defectThemes.push('abrupt session terminations and forced closures during intensive tasks');
   }
   if (/\b(?:navigation|walking navigation|gps location|destination)\b/i.test(lower)) {
     defectThemes.push('unauthorized navigation triggers instead of direct query responses');
@@ -573,10 +565,16 @@ export function synthesizeExecutiveOverview(
   if (/\b(?:false positive|false trigger|thwart|ambient)\b/i.test(lower)) {
     defectThemes.push('false-positive guardrail and detection triggers');
   }
+  if (/\b(?:camera access|camera unavailable|can't see|cannot see|no camera)\b/i.test(lower)) {
+    defectThemes.push('persistent refusals regarding camera accessibility');
+  }
+  if (/\b(?:previous|stale|carry ?over|earlier frame|prior query)\b/i.test(lower)) {
+    defectThemes.push('context-carryover from previous frames');
+  }
 
   // If none matched rule keywords, extract top pattern phrases dynamically from actual notes
   if (defectThemes.length === 0) {
-    for (const note of notes.slice(0, 2)) {
+    for (const note of notes.slice(0, 3)) {
       const p = extractIntelligentDefectPattern(note, '');
       if (p) {
         defectThemes.push(p.charAt(0).toLowerCase() + p.slice(1).replace(/[.]+$/, ''));
@@ -584,17 +582,51 @@ export function synthesizeExecutiveOverview(
     }
   }
 
+  // Up to three themes, joined as "A, B, and C" to match the reference report cadence.
+  const topThemes = Array.from(new Set(defectThemes)).slice(0, 3);
   let themeStr = 'functional regressions across target workflows';
-  if (defectThemes.length === 1) {
-    themeStr = defectThemes[0];
-  } else if (defectThemes.length >= 2) {
-    themeStr = `${defectThemes[0]}, and ${defectThemes[1]}`;
+  if (topThemes.length === 1) {
+    themeStr = topThemes[0];
+  } else if (topThemes.length === 2) {
+    themeStr = `${topThemes[0]} and ${topThemes[1]}`;
+  } else if (topThemes.length >= 3) {
+    themeStr = `${topThemes[0]}, ${topThemes[1]}, and ${topThemes[2]}`;
   }
 
-  // 3. Constructive closing note with checkmark
-  const conclusion = 'Noticeable improvements observed across core tool callings and active query flows✅.';
+  const issuesSentence = `Some notable issues include ${themeStr}.`;
 
-  return `${milestone} Some notable issues include ${themeStr}. ${conclusion}`;
+  // 2. Recurring systemic pattern sentence - only emitted when one failure mode
+  //    genuinely repeats across a meaningful share of today's notes.
+  let recurringSentence = '';
+  const patternCounts = new Map<string, number>();
+  for (const note of notes) {
+    const p = extractIntelligentDefectPattern(note, '');
+    if (!p) continue;
+    const key = p.replace(/[.]+$/, '').trim().toLowerCase();
+    if (!key) continue;
+    patternCounts.set(key, (patternCounts.get(key) || 0) + 1);
+  }
+  let topPattern = '';
+  let topCount = 0;
+  patternCounts.forEach((count, key) => {
+    if (count > topCount) {
+      topCount = count;
+      topPattern = key;
+    }
+  });
+  if (topPattern && topCount >= 3 && topCount / notes.length >= 0.2) {
+    const requiresRestart = /\b(?:restart|reboot|power cycle|unresponsive|froze|frozen)\b/i.test(lower);
+    recurringSentence = requiresRestart
+      ? ` There are noticeable common occurrences of ${topPattern}, which forces a needed device restart.`
+      : ` There are noticeable common occurrences of ${topPattern} across multiple CUJs.`;
+  }
+
+  // 3. Constructive closing note
+  const cleanNote = cleanFeatures.length > 0
+    ? `Noticeable improvements observed across core tool callings, including clean execution in ${cleanFeatures.slice(0, 2).join(' and ')}\u2705.`
+    : 'Noticeable improvements observed across core tool callings and active query flows\u2705.';
+
+  return `${issuesSentence}${recurringSentence} ${cleanNote}`;
 }
 
 /**
@@ -858,9 +890,11 @@ export async function generateBatchExecutiveSummaryWithGemini(
   const preferredModel = getStoredGeminiModel();
   let lastErrorMessage = '';
 
-  // Instant return on an unchanged dataset - avoids a multi-second round trip entirely
+  // Instant return on an unchanged dataset - avoids a multi-second round trip entirely.
+  // PROMPT_STYLE_VERSION is part of the key so that changing the summary prompt/tone
+  // invalidates previously cached summaries instead of serving stale-style text.
   const cacheKey = stableHash(
-    `${userApiKey}|${preferredModel}|${cleanFeaturesSummary}|${formattedFeaturesList}`
+    `${PROMPT_STYLE_VERSION}|${userApiKey}|${preferredModel}|${cleanFeaturesSummary}|${formattedFeaturesList}`
   );
   const cached = readBatchCache(cacheKey);
   if (cached) {
@@ -898,15 +932,21 @@ Execution Context:
 - CUJs with Defects:
   Feature: "Voice Translation" (Pass Rate: 80%, Bugs Logged: 2)
       - [Step: Text to Speech] System responded: "I am unable to translate text on this screen."
-  Feature: "Navigation" (Pass Rate: 85%, Bugs Logged: 1)
-      - [Step: Turn by Turn] System initiated unauthorized route guidance instead of answering user query.
+      - [Step: Language Select] Prompted the user to manually specify the target language again.
+  Feature: "Navigation" (Pass Rate: 85%, Bugs Logged: 3)
+      - [Step: Turn by Turn] Session force-closed while providing route instructions.
+      - [Step: Assistant Query] Asking the assistant anything during active guidance froze the unit until restart.
+  Feature: "Media Playback" (Pass Rate: 78%, Bugs Logged: 2)
+      - [Step: Play Request] Assistant began executing the action before the sentence was finished.
+      - [Step: Streaming] Claimed the streaming app was uninstalled while it was open.
 
 Expected JSON Output:
 {
-  "overallSummary": "Testing demonstrated strong progress across active plans, with clean execution observed in core Device Pairing and Volume Control workflows. Some notable issues include features falsely claiming an inability to translate text, and initiating unauthorized route guidance instead of answering queries. Noticeable improvements observed across core tool callings and active query flows✅.",
+  "overallSummary": "Some notable issues include abrupt session terminations during route guidance, explicit refusals to support live translation, and premature action execution during media playback requests. There are noticeable common occurrences of the assistant becoming unresponsive when queried during active navigation, which forces a needed device restart. Noticeable improvements observed across core tool callings.",
   "featureSummaries": {
-    "Voice Translation": "Persistent translation failures where the assistant falsely claims an inability to translate text on screen.",
-    "Navigation": "Initiating unauthorized route guidance instead of directly answering user queries."
+    "Voice Translation": "Explicit refusals to support live translation accompanied by redundant manual language specification prompts.",
+    "Navigation": "Abrupt session termination and forced closure occurring when providing route instructions. Also querying the assistant during active guidance freezes the unit until a device restart.",
+    "Media Playback": "Premature action execution prior to sentence completion during media playback requests. Also falsely asserting that third-party streaming applications are uninstalled."
   }
 }
 
@@ -916,15 +956,16 @@ Execution Context:
 - CUJs with Defects:
   Feature: "Checkout & Payments" (Pass Rate: 75%, Bugs Logged: 2)
       - [Step: Payment Confirmation] Session force-closed when tapping confirm payment.
-  Feature: "Cart Management" (Pass Rate: 90%, Bugs Logged: 1)
+  Feature: "Cart Management" (Pass Rate: 90%, Bugs Logged: 2)
       - [Step: Quantity update] Redundant confirmation popup displayed repeatedly when incrementing quantity.
+      - [Step: Add item] Items from a previously abandoned cart reappeared in the active list.
 
 Expected JSON Output:
 {
-  "overallSummary": "Testing demonstrated strong progress across active plans, with clean execution observed in core User Profile and Product Search workflows. Some notable issues include abrupt session termination during payment confirmation, and redundant confirmation dialogs during cart updates. Noticeable improvements observed across checkout stability and active transaction flows✅.",
+  "overallSummary": "Some notable issues include abrupt session termination during payment confirmation, redundant confirmation dialogs during cart updates, and context-carryover from previously abandoned sessions. Noticeable improvements observed across checkout stability and active transaction flows.",
   "featureSummaries": {
     "Checkout & Payments": "Abrupt session termination and forced closure occurring when tapping confirm payment during checkout.",
-    "Cart Management": "Redundant confirmation dialogs appearing repeatedly when updating line item quantities."
+    "Cart Management": "Redundant confirmation dialogs appearing repeatedly when updating line item quantities alongside context-carryover injecting stale items from abandoned sessions."
   }
 }
 
@@ -934,22 +975,41 @@ CRITICAL ANTI-HALLUCINATION & STRICT DATA GROUNDING RULES:
    - NEVER mention entities, brands, feature names, or bug descriptions from the benchmarks above (e.g., do NOT mention "Warby Parker", "ZI1", "Spotify", "Apple Pay", etc.) UNLESS they explicitly appear in today's data.
    - If today's data is for a different product or platform, adapt the vocabulary naturally to that domain.
 
-2. "overallSummary" - EXECUTIVE QA LEADERSHIP TONE (35 to 65 words):
-   - Sentence 1: Executive execution status & milestone progress. Mention clean flows strictly from today's clean CUJs if available (e.g. "Testing demonstrated strong progress across active plans, with clean execution observed in core [Clean Feature Names] workflows.").
-   - Sentence 2: Synthesize 1 to 3 dominant defect themes observed in TODAY'S bugs using active software engineering phrasing (e.g., "Some notable issues include [dynamic defect theme A], and [dynamic defect theme B].").
-   - Sentence 3: Forward-looking qualitative trajectory note ending with a checkmark symbol (e.g., "Noticeable improvements observed across core tool callings and active query flows✅.").
+2. "overallSummary" - EXECUTIVE QA LEADERSHIP TONE (40 to 75 words, 2 to 3 sentences):
+   - Sentence 1 (REQUIRED): Lead directly with the dominant defect themes. Synthesize 2 to 3 distinct
+     cross-feature themes from TODAY'S bugs: "Some notable issues include [theme A], [theme B], and [theme C]."
+     * If today's clean CUJs are worth calling out, you may prepend one short clause about clean execution -
+       but NEVER let it push the issues past sentence two.
+   - Sentence 2 (INCLUDE ONLY IF a pattern repeats across multiple CUJs or has a clear trigger/workaround):
+     Call out the recurring systemic behaviour with its concrete trigger and user impact:
+     "There are noticeable common occurrences of [behaviour] when [trigger], which [impact/workaround]."
+   - Sentence 3 (REQUIRED): Short forward-looking improvement note, e.g.
+     "Noticeable improvements observed across core tool callings." A trailing checkmark is optional.
+   - Prioritise being digestible: concrete triggers and impacts beat abstract adjectives.
 
-3. "featureSummaries" - PRECISE DEFECT VOCABULARY:
+3. "featureSummaries" - PRECISE, DIGESTIBLE DEFECT VOCABULARY:
    - Provide an entry in "featureSummaries" for EVERY feature listed with defects or notes today.
-   - Summarize the core defect in a single, high-impact sentence (10 to 25 words).
+   - 10 to 30 words. One sentence, or two when a genuinely distinct secondary defect exists.
+   - OPEN WITH A NOUN PHRASE naming the failure mode, not a subject-verb sentence.
+     Good: "Abrupt session termination and forced closure occurring when...", "Persistent refusals regarding...",
+           "Premature action execution prior to...", "Context-carryover from previous frames causing...",
+           "False claims of lacking...", "Functional failure to...", "Explicit refusals to..."
+     Bad:  "The app crashed when...", "Gemini said it could not..."
+   - JOIN a second related symptom with a connective: "accompanied by", "alongside", "causing",
+     "occurring when", "occurring immediately after", "prior to".
+   - For a genuinely separate secondary defect, add ONE more sentence starting with "Also ...".
+   - RETAIN concrete specifics that aid triage: named third-party apps in parentheses, counts,
+     durations, and the exact trigger step.
    - Use sophisticated, active software engineering terminology:
-     * When assistant claims it cannot perform a feature: "falsely claims an inability to [action]" or "explicitly refuses to [action]".
+     * When assistant claims it cannot perform a feature: "False claims of lacking [capability]" or "Explicit refusals to [action]".
      * When unauthorized actions trigger: "Initiating unauthorized [action] instead of [expected action]".
      * When crashes / force-closes occur: "Abrupt session termination and forced closure occurring when attempting to [action]".
-     * When integrations fail: "Functional failure where the system asserts an inability to [action]".
+     * When integrations fail: "Functional failure to [action]" or "Functional failure where the system asserts an inability to [action]".
      * When unnecessary prompts appear: "Redundant prompting asking users to [action]".
+     * When actions fire before the user finishes speaking: "Premature action execution prior to sentence completion during [flow]".
+     * When stale state bleeds across turns: "Context-carryover from previous frames causing [symptom]".
      * When audio or voice models glitch: "Unexpected voice transition mid-session accompanied by a failure to [action]".
-     * When guardrails or detections false-alarm: "False [detector name] error messages playing audibly over active responses" or "worked fine, however encountered several false positives".
+     * When guardrails or detections false-alarm: "False [detector name] errors erroneously blocking [legitimate flow]" or "worked fine, however encountered several false positives".
    - Never copy raw conversational narrative ("I tried", "tester said", "we saw") or timestamps ("1:38 pm", "at 14:00").
 
 4. RETURN FORMAT:
