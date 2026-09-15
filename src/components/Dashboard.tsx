@@ -351,6 +351,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [copiedImage, setCopiedImage] = useState<boolean>(false);
   const [copiedBugs, setCopiedBugs] = useState<boolean>(false);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState<boolean>(false);
+  // Holds the finished report so the user can tab away during generation and
+  // copy whenever they come back. Clipboard writes require an in-focus document,
+  // so copying is now an explicit second action instead of an automatic one.
+  const [generatedReport, setGeneratedReport] = useState<{
+    plainText: string;
+    htmlText: string;
+    generatedAt: number;
+    modelUsed?: string;
+  } | null>(null);
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState<boolean>(false);
   const [tempApiKey, setTempApiKey] = useState<string>(() => getStoredGeminiApiKey());
   const [tempModel, setTempModel] = useState<string>(() => getStoredGeminiModel());
@@ -1307,45 +1316,37 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       htmlText += `</div>`;
 
-      try {
-        if (navigator.clipboard && window.ClipboardItem) {
-          const textBlob = new Blob([plainText], { type: 'text/plain' });
-          const htmlBlob = new Blob([htmlText], { type: 'text/html' });
-          await navigator.clipboard.write([
-            new ClipboardItem({
-              'text/plain': textBlob,
-              'text/html': htmlBlob,
-            })
-          ]);
-        } else {
-          await navigator.clipboard.writeText(plainText);
-        }
-      } catch (clipboardErr) {
-        await navigator.clipboard.writeText(plainText);
-      }
+      // Store the finished report instead of writing to the clipboard here.
+      // Clipboard writes throw "Document is not focused" when the user tabs away
+      // mid-generation, which previously forced a full regeneration.
+      setGeneratedReport({
+        plainText,
+        htmlText,
+        generatedAt: Date.now(),
+        modelUsed: result.modelUsed
+      });
 
-      setCopiedReport(true);
-      setTimeout(() => setCopiedReport(false), 2500);
+      const cacheNote = result.fromCache ? ' (instant, cached)' : '';
 
       if (result.modelUsed) {
         setSummaryToast({
           type: 'success',
-          message: `✨ AI Executive Summary generated with ${result.modelUsed} & copied to clipboard!`
+          message: `✨ AI Executive Summary generated with ${result.modelUsed}${cacheNote}. Click "Copy Report" when you're ready.`
         });
       } else if (result.error && getStoredGeminiApiKey()) {
         setSummaryToast({
           type: 'error',
-          message: `⚠️ Gemini API Error (${result.error}). Standard clean summary copied. Please verify your API key in Gemini settings.`
+          message: `⚠️ Gemini API Error (${result.error}). Standard clean summary is ready to copy. Please verify your API key in Gemini settings.`
         });
       } else if (!getStoredGeminiApiKey()) {
         setSummaryToast({
           type: 'warning',
-          message: `📋 Standard synthesized summary copied. Click "Gemini AI" to configure an API key for full AI executive summaries.`
+          message: `📋 Standard synthesized summary ready. Click "Gemini AI" to configure an API key for full AI executive summaries.`
         });
       } else {
         setSummaryToast({
           type: 'success',
-          message: `📋 Copied clean synthesized CUJ report to clipboard!`
+          message: `📋 Clean synthesized CUJ report is ready to copy!`
         });
       }
       setTimeout(() => setSummaryToast(null), 5000);
@@ -1354,8 +1355,53 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
-  const handleCopyReportToClipboard = () => {
+  const handleGenerateSummary = () => {
     handleExecuteCopyReport(false);
+  };
+
+  /**
+   * Instant clipboard copy of the already-generated report.
+   * No API calls, no regeneration - safe to run any time after generating.
+   */
+  const handleCopyGeneratedReport = async () => {
+    if (!generatedReport) {
+      handleGenerateSummary();
+      return;
+    }
+
+    const { plainText, htmlText } = generatedReport;
+
+    try {
+      if (navigator.clipboard && window.ClipboardItem) {
+        const textBlob = new Blob([plainText], { type: 'text/plain' });
+        const htmlBlob = new Blob([htmlText], { type: 'text/html' });
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            'text/plain': textBlob,
+            'text/html': htmlBlob,
+          })
+        ]);
+      } else {
+        await navigator.clipboard.writeText(plainText);
+      }
+    } catch (clipboardErr) {
+      try {
+        await navigator.clipboard.writeText(plainText);
+      } catch (fallbackErr) {
+        // Last-resort copy path for browsers that block the async clipboard API
+        const ta = document.createElement('textarea');
+        ta.value = plainText;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        document.body.removeChild(ta);
+      }
+    }
+
+    setCopiedReport(true);
+    setTimeout(() => setCopiedReport(false), 2500);
   };
 
   const handleCopyVisualImageToClipboard = async () => {
@@ -2938,35 +2984,77 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2.5">
-                  {/* Copy Text Summary Button (with dedicated AI Subtask state) */}
+                  {/* Generate AI Summary Button - runs the Gemini subtask only, never touches the clipboard */}
                   <button
                     type="button"
                     disabled={isGeneratingSummary}
-                    onClick={handleCopyReportToClipboard}
+                    onClick={handleGenerateSummary}
                     className={`no-capture px-3.5 h-9 rounded-2xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all shadow-md border ${
                       isGeneratingSummary
                         ? 'bg-purple-600/30 text-purple-200 border-purple-400/60 cursor-wait animate-pulse'
                         : 'bg-gradient-to-r from-purple-500/20 to-indigo-500/20 hover:from-purple-500/30 hover:to-indigo-500/30 text-purple-200 border-purple-400/40 hover:scale-[1.02] active:scale-[0.98]'
                     }`}
-                    title="Extract bugs and generate AI summary report"
+                    title="Extract bugs and generate the AI summary report. Safe to tab away - the result is saved until you copy it."
                   >
                     {isGeneratingSummary ? (
                       <>
                         <Sparkles className="w-3.5 h-3.5 text-purple-300 animate-spin flex-shrink-0" />
                         <span className="leading-none text-purple-200">AI Summarizing...</span>
                       </>
-                    ) : copiedReport ? (
+                    ) : generatedReport ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
+                        <span className="leading-none">Regenerate</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
+                        <span className="leading-none">Generate Summary</span>
+                      </>
+                    )}
+                  </button>
+
+                  {/* Copy Report Button - instant, reads the stored result with zero regeneration */}
+                  <button
+                    type="button"
+                    disabled={!generatedReport || isGeneratingSummary}
+                    onClick={handleCopyGeneratedReport}
+                    className={`no-capture px-3.5 h-9 rounded-2xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all shadow-md border ${
+                      !generatedReport || isGeneratingSummary
+                        ? 'bg-slate-900/50 text-slate-500 border-white/5 cursor-not-allowed'
+                        : copiedReport
+                        ? 'bg-emerald-500/20 text-emerald-200 border-emerald-400/50'
+                        : 'bg-gradient-to-r from-indigo-500/20 to-cyan-500/20 hover:from-indigo-500/30 hover:to-cyan-500/30 text-indigo-200 border-indigo-400/40 hover:scale-[1.02] active:scale-[0.98]'
+                    }`}
+                    title={
+                      generatedReport
+                        ? 'Copy the generated report to your clipboard (rich text + plain text)'
+                        : 'Generate a summary first, then copy it here'
+                    }
+                  >
+                    {copiedReport ? (
                       <>
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
                         <span className="text-emerald-300 font-bold leading-none">Copied!</span>
                       </>
                     ) : (
                       <>
-                        <Sparkles className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
-                        <span className="leading-none">Copy Summary</span>
+                        <Copy className="w-3.5 h-3.5 flex-shrink-0" />
+                        <span className="leading-none">Copy Report</span>
                       </>
                     )}
                   </button>
+
+                  {/* Ready-to-copy indicator */}
+                  {generatedReport && !isGeneratingSummary && (
+                    <span
+                      className="no-capture text-[10px] font-bold text-emerald-300/90 bg-emerald-500/10 border border-emerald-400/30 px-2 py-1 rounded-full flex items-center gap-1 whitespace-nowrap"
+                      title={`Generated at ${new Date(generatedReport.generatedAt).toLocaleTimeString()}`}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                      Ready
+                    </span>
+                  )}
 
                   {/* Gemini API Key Config Button */}
                   <button

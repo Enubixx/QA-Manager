@@ -4,6 +4,63 @@ import { BugLog } from '../types';
 const summaryCache = new Map<string, string>();
 
 /**
+ * Persistent cross-session cache for expensive batch executive summaries.
+ * Keyed by a stable hash of the API key, model, and exact defect payload, so
+ * re-generating an unchanged report returns instantly with zero network calls.
+ */
+const BATCH_CACHE_KEY = 'qa_gemini_batch_summary_cache';
+const BATCH_CACHE_MAX_ENTRIES = 12;
+
+function stableHash(input: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+function readBatchCache(key: string): any | null {
+  try {
+    const raw = localStorage.getItem(BATCH_CACHE_KEY);
+    if (!raw) return null;
+    const store = JSON.parse(raw);
+    const hit = store?.[key];
+    if (hit && hit.overallSummary !== undefined) return hit;
+  } catch (e) {}
+  return null;
+}
+
+function writeBatchCache(key: string, value: any): void {
+  try {
+    const raw = localStorage.getItem(BATCH_CACHE_KEY);
+    const store = raw ? JSON.parse(raw) : {};
+    store[key] = { ...value, cachedAt: Date.now() };
+
+    // Evict the oldest entries to keep localStorage small
+    const keys = Object.keys(store);
+    if (keys.length > BATCH_CACHE_MAX_ENTRIES) {
+      keys
+        .sort((a, b) => (store[a]?.cachedAt || 0) - (store[b]?.cachedAt || 0))
+        .slice(0, keys.length - BATCH_CACHE_MAX_ENTRIES)
+        .forEach(k => delete store[k]);
+    }
+    localStorage.setItem(BATCH_CACHE_KEY, JSON.stringify(store));
+  } catch (e) {}
+}
+
+export function clearGeminiSummaryCaches(): void {
+  summaryCache.clear();
+  try {
+    localStorage.removeItem(BATCH_CACHE_KEY);
+  } catch (e) {}
+}
+
+/**
  * Gets stored Gemini API Key from localStorage or environment
  */
 export function getStoredGeminiApiKey(): string {
@@ -21,7 +78,7 @@ export function getStoredGeminiApiKey(): string {
 export function saveGeminiApiKey(key: string): void {
   try {
     localStorage.setItem('qa_gemini_api_key', key.trim());
-    summaryCache.clear();
+    clearGeminiSummaryCaches();
   } catch (e) {}
 }
 
@@ -52,30 +109,68 @@ export function getStoredGeminiModel(): string {
 export function saveGeminiModel(model: string): void {
   try {
     localStorage.setItem('qa_gemini_model', model);
-    summaryCache.clear();
+    clearGeminiSummaryCaches();
+  } catch (e) {}
+}
+
+/**
+ * Remembers which API version (v1beta or v1) successfully resolved a given model,
+ * so subsequent calls skip the wasted 404 round-trip entirely.
+ */
+const resolvedEndpointCache = new Map<string, string>();
+
+function loadResolvedEndpoints(): void {
+  try {
+    const raw = localStorage.getItem('qa_gemini_resolved_endpoints');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      Object.entries(parsed).forEach(([k, v]) => {
+        if (typeof v === 'string') resolvedEndpointCache.set(k, v);
+      });
+    }
+  } catch (e) {}
+}
+loadResolvedEndpoints();
+
+function persistResolvedEndpoint(model: string, version: string): void {
+  resolvedEndpointCache.set(model, version);
+  try {
+    const obj: Record<string, string> = {};
+    resolvedEndpointCache.forEach((v, k) => { obj[k] = v; });
+    localStorage.setItem('qa_gemini_resolved_endpoints', JSON.stringify(obj));
   } catch (e) {}
 }
 
 /**
  * Direct native fetch call to Google's Gemini REST API.
  * Ensures 100% browser compatibility, handles 'models/' prefix, and falls back between v1beta and v1 endpoints.
+ * Optimized: remembers the working API version per model, aborts hung requests, and caps output tokens.
  */
 async function callGeminiRestApi(
   apiKey: string,
   model: string,
   prompt: string,
-  asJson: boolean = false
+  asJson: boolean = false,
+  timeoutMs: number = 25000,
+  maxOutputTokens: number = 1200
 ): Promise<string> {
-  const cleanModel = model.replace(/^models\//, '').trim();
+  const cleanModel = model.replace(/^models/, '').replace(/^\//, '').trim();
   const key = apiKey.trim();
-  const endpoints = [
-    `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${key}`,
-    `https://generativelanguage.googleapis.com/v1/models/${cleanModel}:generateContent?key=${key}`
-  ];
+
+  // Prefer the API version previously proven to work for this model
+  let versions = ['v1beta', 'v1'];
+  const known = resolvedEndpointCache.get(cleanModel);
+  if (known) {
+    versions = [known, ...versions.filter(v => v !== known)];
+  }
 
   let lastError = '';
 
-  for (const url of endpoints) {
+  for (const version of versions) {
+    const url = `https://generativelanguage.googleapis.com/${version}/models/${cleanModel}:generateContent?key=${key}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
     try {
       const bodyPayload: any = {
         contents: [
@@ -85,6 +180,7 @@ async function callGeminiRestApi(
         ],
         generationConfig: {
           temperature: 0.2,
+          maxOutputTokens,
         }
       };
 
@@ -98,24 +194,37 @@ async function callGeminiRestApi(
           'Content-Type': 'application/json',
           'x-goog-api-key': key
         },
-        body: JSON.stringify(bodyPayload)
+        body: JSON.stringify(bodyPayload),
+        signal: controller.signal
       });
+
+      clearTimeout(timer);
 
       if (response.ok) {
         const data = await response.json();
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (text) return text;
-      } else {
-        const errorJson = await response.json().catch(() => null);
-        lastError = errorJson?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
-        // If 404 (model not found on this specific API version), try the other endpoint
-        if (response.status === 404) {
-          continue;
+        if (text) {
+          persistResolvedEndpoint(cleanModel, version);
+          return text;
         }
-        // If auth or invalid key error, fail fast
+        lastError = 'Empty response from model';
+        continue;
+      }
+
+      const errorJson = await response.json().catch(() => null);
+      lastError = errorJson?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+      // Only a 404 means "wrong API version for this model" - retry on the other version
+      if (response.status === 404) {
+        continue;
+      }
+      // Auth, quota, or payload errors will not be fixed by switching version - fail fast
+      throw new Error(lastError);
+    } catch (err: any) {
+      clearTimeout(timer);
+      if (err?.name === 'AbortError') {
+        lastError = `Request timed out after ${Math.round(timeoutMs / 1000)}s`;
         throw new Error(lastError);
       }
-    } catch (err: any) {
       if (err.message?.includes('API key') || err.message?.includes('PERMISSION_DENIED')) {
         throw err;
       }
@@ -598,6 +707,11 @@ CRITICAL REQUIREMENTS:
 
 /**
  * Synchronous reworded summary for instant UI rendering.
+ *
+ * PERF: This runs inside the render loop for every feature row. It must stay
+ * 100% local - previously it fired a background Gemini request per feature on
+ * every re-render, which saturated the API rate limit and starved the main
+ * executive summary request. Identical output text, zero network cost.
  */
 export function getBriefIssueSummarySync(
   featureName: string,
@@ -623,7 +737,6 @@ export function getBriefIssueSummarySync(
     return summaryCache.get(cacheKey)!;
   }
 
-  summarizeFeatureBugsWithGemini(featureName, bugs, yellowCount, redCount);
   return nlpCleanReword(notes, featureName);
 }
 
@@ -689,6 +802,7 @@ export interface ExecutiveQAResult {
   featureSummaries: Record<string, string>;
   modelUsed?: string;
   error?: string;
+  fromCache?: boolean;
 }
 
 export interface FeaturePayload {
@@ -744,13 +858,25 @@ export async function generateBatchExecutiveSummaryWithGemini(
   const preferredModel = getStoredGeminiModel();
   let lastErrorMessage = '';
 
+  // Instant return on an unchanged dataset - avoids a multi-second round trip entirely
+  const cacheKey = stableHash(
+    `${userApiKey}|${preferredModel}|${cleanFeaturesSummary}|${formattedFeaturesList}`
+  );
+  const cached = readBatchCache(cacheKey);
+  if (cached) {
+    return {
+      overallSummary: cached.overallSummary,
+      featureSummaries: cached.featureSummaries || {},
+      modelUsed: cached.modelUsed,
+      fromCache: true
+    };
+  }
+
   if (userApiKey) {
-    // Attempt with selected model first, then fallback to other standard models
+    // Attempt the selected model first, then a single fast fallback.
+    // Long sequential chains were the main cause of multi-minute waits on a bad key.
     const modelsToTry = [preferredModel];
     if (!modelsToTry.includes('gemini-2.0-flash')) modelsToTry.push('gemini-2.0-flash');
-    if (!modelsToTry.includes('gemini-1.5-flash-latest')) modelsToTry.push('gemini-1.5-flash-latest');
-    if (!modelsToTry.includes('gemini-1.5-flash')) modelsToTry.push('gemini-1.5-flash');
-    if (!modelsToTry.includes('gemini-1.5-pro')) modelsToTry.push('gemini-1.5-pro');
 
     const prompt = `You are a Senior Principal QA Architect distilling field defect logs to produce a high-impact, professional executive CUJ summary report for engineering leadership.
 
@@ -850,11 +976,13 @@ CRITICAL ANTI-HALLUCINATION & STRICT DATA GROUNDING RULES:
               }
             }
           }
-          return {
+          const result = {
             overallSummary: overall,
             featureSummaries: featureMap,
             modelUsed: modelName
           };
+          writeBatchCache(cacheKey, result);
+          return result;
         }
       } catch (err: any) {
         lastErrorMessage = err?.message || String(err);
@@ -862,12 +990,20 @@ CRITICAL ANTI-HALLUCINATION & STRICT DATA GROUNDING RULES:
       }
     }
 
-    // Dynamic auto-discovery: query Google for models supported by this user's API key
+    // Dynamic auto-discovery: query Google for models supported by this user's API key.
+    // Capped at 2 candidates so a misconfigured key fails fast instead of hanging for minutes.
     try {
       const discovery = await discoverAvailableGeminiModels(userApiKey);
       if (discovery.success && discovery.models.length > 0) {
-        for (const discoveredModel of discovery.models) {
-          if (modelsToTry.includes(discoveredModel)) continue;
+        const candidates = discovery.models
+          .filter(m => !modelsToTry.includes(m))
+          .sort((a, b) => {
+            const score = (n: string) => (n.includes('flash') ? 0 : 1);
+            return score(a) - score(b);
+          })
+          .slice(0, 2);
+
+        for (const discoveredModel of candidates) {
           try {
             const text = await callGeminiRestApi(userApiKey, discoveredModel, prompt, true);
             if (text) {
@@ -881,11 +1017,13 @@ CRITICAL ANTI-HALLUCINATION & STRICT DATA GROUNDING RULES:
                   }
                 }
               }
-              return {
+              const result = {
                 overallSummary: overall,
                 featureSummaries: featureMap,
                 modelUsed: discoveredModel
               };
+              writeBatchCache(cacheKey, result);
+              return result;
             }
           } catch (e: any) {
             lastErrorMessage = e?.message || String(e);
