@@ -183,28 +183,68 @@ export function App() {
   const testersRef = useRef(testers);
   useEffect(() => { testersRef.current = testers; }, [testers]);
 
-  // Daily Quota Reset check (auto resets devices to no plan assigned on date rollover)
-  const checkDailyQuotaReset = (devList: DeviceProfile[]) => {
+  // Reads the most recent __DAILY_QUOTA_RESET_DATE__ marker recorded in the cloud.
+  // Historically several of these rows accumulated (one per day), so take the max.
+  const getCloudResetDate = (cloudFeatures?: string[]): string => {
+    if (!cloudFeatures || cloudFeatures.length === 0) return '';
+    let latest = '';
+    const prefix = `${CONFIG_DAILY_RESET_DATE}:`;
+    for (const f of cloudFeatures) {
+      if (typeof f === 'string' && f.startsWith(prefix)) {
+        const val = f.slice(prefix.length).trim();
+        if (val && val > latest) latest = val;
+      }
+    }
+    return latest;
+  };
+
+  // Daily Quota Reset check (auto resets devices to no plan assigned on date rollover).
+  //
+  // The rollover marker is CLOUD-AUTHORITATIVE. It used to be gated purely on the
+  // per-browser localStorage key 'qa_last_quota_reset_date', which meant *any* client
+  // that woke up with a stale stamp - a phone backgrounded since yesterday, a dashboard
+  // tab left open overnight, a device in another timezone - would re-run the wipe and
+  // push empty quotas to every device for the whole team, blowing away quotas that had
+  // just been assigned. Gating on the shared cloud date ensures the rollover happens
+  // exactly once per day no matter how many clients are connected.
+  const checkDailyQuotaReset = (devList: DeviceProfile[], cloudFeatures?: string[]) => {
     const todayStr = getLocalDateStr();
-    const lastReset = localStorage.getItem('qa_last_quota_reset_date');
-    if (lastReset && lastReset !== todayStr) {
-      const resetList = devList.map(d => ({
-        ...d,
-        quotas: [],
-        isReady: true,
-        activeRunId: undefined,
-        activeTesterName: undefined
-      }));
-      localStorage.setItem('qa_last_quota_reset_date', todayStr);
-      localStorage.setItem('qa_devices_list', JSON.stringify(resetList));
-      safeSyncDevices(resetList);
-      syncPopulatedFeatureToSupabase(`${CONFIG_DAILY_RESET_DATE}:${todayStr}`);
-      return resetList;
+    const cloudResetDate = getCloudResetDate(cloudFeatures);
+
+    // Someone already rolled over today - never wipe again, just catch the local stamp up.
+    if (cloudResetDate === todayStr) {
+      if (localStorage.getItem('qa_last_quota_reset_date') !== todayStr) {
+        localStorage.setItem('qa_last_quota_reset_date', todayStr);
+      }
+      return devList;
     }
-    if (!lastReset) {
-      localStorage.setItem('qa_last_quota_reset_date', todayStr);
+
+    // No cloud marker at all (fresh project, or the cloud read failed / returned nothing).
+    // Fail closed: record today locally and leave quotas untouched rather than risk a wipe.
+    if (!cloudResetDate) {
+      if (localStorage.getItem('qa_last_quota_reset_date') !== todayStr) {
+        localStorage.setItem('qa_last_quota_reset_date', todayStr);
+      }
+      return devList;
     }
-    return devList;
+
+    // Cloud marker exists and predates today -> this is a genuine date rollover.
+    const resetList = devList.map(d => ({
+      ...d,
+      quotas: [],
+      isReady: true,
+      activeRunId: undefined,
+      activeTesterName: undefined
+    }));
+    localStorage.setItem('qa_last_quota_reset_date', todayStr);
+    localStorage.setItem('qa_devices_list', JSON.stringify(resetList));
+    safeSyncDevices(resetList);
+    syncPopulatedFeatureToSupabase(`${CONFIG_DAILY_RESET_DATE}:${todayStr}`);
+    // Drop the superseded marker so these rows stop accumulating one per day.
+    if (cloudResetDate !== todayStr) {
+      deletePopulatedFeatureFromSupabase(`${CONFIG_DAILY_RESET_DATE}:${cloudResetDate}`);
+    }
+    return resetList;
   };
 
   // Supabase Initial Fetch & Real-Time Sync Subscription
@@ -287,7 +327,7 @@ export function App() {
           ? devicesRef.current
           : filteredCloudDevices;
 
-        const currentDevices = checkDailyQuotaReset(baseDevices);
+        const currentDevices = checkDailyQuotaReset(baseDevices, cloudData.populatedFeatures);
 
         const inProgressRuns = validTestRuns.filter(r => r.status === 'in_progress');
         const allCompletedRuns = [
