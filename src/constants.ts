@@ -1,6 +1,6 @@
 // App Version Constants for Mobile APK and Server Compatibility Enforcement
-export const APP_VERSION_CODE = 2;
-export const APP_VERSION_NAME = '2.0.0';
+export const APP_VERSION_CODE = 3;
+export const APP_VERSION_NAME = '2.1.0';
 
 // Config identifiers stored in Supabase / LocalStorage
 export const CONFIG_MIN_APP_VERSION = '__APP_MIN_VERSION__';

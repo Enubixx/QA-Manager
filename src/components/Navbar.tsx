@@ -60,13 +60,13 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate }) => {
         {/* Right side APK download & navigation */}
         <div className="flex items-center gap-3">
           <a
-            href="/QA_Field_Tester_v2.0.apk"
-            download="QA_Field_Tester_v2.0.apk"
+            href="/QA_Field_Tester_v2.1.0.apk"
+            download="QA_Field_Tester_v2.1.0.apk"
             className="px-3 py-1.5 bg-gradient-to-r from-emerald-600/90 to-teal-600/90 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-emerald-500/20 border border-emerald-400/30 flex items-center gap-1.5 active:scale-95"
-            title="Download latest QA Field Tester Android APK (v2.0)"
+            title="Download latest QA Field Tester Android APK (v2.1.0)"
           >
             <Download className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Download</span> APK v2.0
+            <span className="hidden sm:inline">Download</span> APK v2.1
           </a>
         </div>
 
