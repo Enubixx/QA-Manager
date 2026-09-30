@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota } from '../types';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers, FileSpreadsheet, ExternalLink } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard, copySingleBugToClipboard } from '../utils/exportUtils';
+import { isRunFullyCompleted } from '../utils/runUtils';
 import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel, discoverAvailableGeminiModels } from '../services/geminiService';
 import { GOOGLE_APPS_SCRIPT_CODE } from '../googleAppsScriptCode';
 import { toBlob } from 'html-to-image';
@@ -279,13 +280,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
     });
     
     runMap.forEach(run => {
-      if (getEffectiveRunStatus(run) !== 'completed' || !run.completedAt) return;
-
-      // Must have actual recorded step results (zero steps = never count towards quota!)
-      const stepEntries = Object.entries(run.results || {}).filter(
-        ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
-      );
-      if (stepEntries.length === 0) return;
+      // Only runs with every plan step recorded count toward quota - same rule as the
+      // logged-data views, so partial runs cut short by a restart can't inflate the counter.
+      if (!run.completedAt || !isRunFullyCompleted(run, testPlans)) return;
 
       const runDate = getLocalDateStr(run.completedAt);
       if (runDate !== todayStr) return;
@@ -587,21 +584,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   // Filter runs to ONLY include fully finished test plan executions (100% of steps completed)
+  // Uses the same shared rule as the quota counters so the two can never disagree.
   const completedRuns = useMemo(() => {
     const map = new Map<string, TestRun>();
     const combined = [...archivedRuns, ...testRuns];
     combined.forEach(run => {
-      if (run.status !== 'completed') return;
-      const plan = testPlans.find(p => p.id === run.planId);
-      if (!plan || plan.steps.length === 0) return;
-
-      // 100% of all plan steps must have a non-pending result!
-      const nonPendingResults = plan.steps.filter(s => {
-        const res = run.results?.[s.id];
-        return res && res.status && res.status !== 'pending';
-      });
-
-      if (nonPendingResults.length >= plan.steps.length) {
+      if (isRunFullyCompleted(run, testPlans)) {
         map.set(run.id, run);
       }
     });
@@ -714,16 +702,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
   // Aggregate step results ONLY from 100% fully finished test runs for the selected Daily Session Date
   // (In-progress runs NEVER touch or contaminate the Features page until the user finishes 100% of the test)
   completedRuns.forEach(run => {
-    if (run.status !== 'completed') return;
     const plan = testPlans.find(p => p.id === run.planId);
     if (!plan || plan.steps.length === 0) return;
-
-    // Strict 100% verification: Every single step in the plan must have been executed
-    const executedSteps = plan.steps.filter(s => {
-      const res = run.results?.[s.id];
-      return res && res.status && res.status !== 'pending';
-    });
-    if (executedSteps.length < plan.steps.length) return;
+    // completedRuns is already filtered by isRunFullyCompleted (every step recorded,
+    // plus the dated one-time exceptions); steps without a result are skipped below.
 
     plan.steps.forEach(step => {
       const res = run.results[step.id];

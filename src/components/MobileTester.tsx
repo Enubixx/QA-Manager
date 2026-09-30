@@ -4,6 +4,7 @@ import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile } from '../type
 import { CheckCircle2, Clock, Bug, Smartphone, RefreshCw, Send, Check, Layers, ChevronDown, AlertTriangle, XCircle, ArrowRight, ArrowLeft, ChevronLeft, ChevronRight, Undo2, Sparkles, User, Download, Edit3, Trash2, Tag, Image, X, Mic, WifiOff } from 'lucide-react';
 import { exportTestRunToCSV } from '../utils/exportUtils';
 import { triggerHaptic } from '../utils/haptics';
+import { isRunFullyCompleted } from '../utils/runUtils';
 import { APP_VERSION_CODE, APP_VERSION_NAME } from '../constants';
 import { BootSignal, subscribeToSystemCommands } from '../services/supabaseService';
 
@@ -26,7 +27,7 @@ interface MobileTesterProps {
   onDeleteRun?: (runId: string) => void;
   onLogBug: (bug: BugLog) => void;
   onDeleteBug: (bugId: string) => void;
-  onRestartRun: (planId: string) => void;
+  onRestartRun: (planId: string, ownRunId?: string) => void;
   onNavigateToDashboard?: () => void;
 }
 
@@ -136,7 +137,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     });
 
     runMap.forEach(run => {
-      if (run.status !== 'completed' || !run.completedAt) return;
+      // Same rule as the dashboard: only runs with every plan step recorded count.
+      if (!run.completedAt || !isRunFullyCompleted(run, testPlans)) return;
       const d = new Date(run.completedAt);
       const runDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
       if (runDate !== todayStr) return;
@@ -151,7 +153,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       }
     });
     return map;
-  }, [archivedRuns, testRuns, devices, todayStr]);
+  }, [archivedRuns, testRuns, devices, todayStr, testPlans]);
 
   // Check localStorage for any persistent in-progress run for this plan
   const localSavedRunJson = currentPlan ? localStorage.getItem(`qa_in_progress_run_${currentPlan.id}`) : null;
@@ -1839,7 +1841,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                       setActiveStepIndex(0);
                       if (currentPlan) {
                         localStorage.removeItem(`qa_in_progress_run_${currentPlan.id}`);
-                        onRestartRun(currentPlan.id);
+                        // Pass THIS device's run id so restart never closes another tester's run on the same plan.
+                        onRestartRun(currentPlan.id, activeRun?.id);
                       }
                       if (activeRun?.deviceName && onSaveDevice) {
                         const matchedDev = devices.find(d => d.name.toLowerCase().trim() === activeRun.deviceName?.toLowerCase().trim());

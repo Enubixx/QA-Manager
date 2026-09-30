@@ -32,6 +32,7 @@ import {
 } from './services/supabaseService';
 import { isSupabaseConfigured } from './lib/supabase';
 import { getLocalDateStr } from './utils/dateUtils';
+import { isRunFullyCompleted } from './utils/runUtils';
 import {
   drainOfflineQueue,
   safeSyncTestRun,
@@ -342,14 +343,11 @@ export function App() {
         ];
         const todayStr = getLocalDateStr();
 
-        // Calculate today's completed runs per device and plan for quota automation (strictly requiring recorded step data)
+        // Calculate today's completed runs per device and plan for quota automation (every plan step must be recorded)
+        const plansForQuota = cloudData.testPlans || testPlansRef.current;
         const runsTodayPerDevice: Record<string, Record<string, number>> = {};
         allCompletedRuns.forEach(r => {
-          if (!r.completedAt) return;
-          const stepEntries = Object.entries(r.results || {}).filter(
-            ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
-          );
-          if (stepEntries.length === 0) return;
+          if (!r.completedAt || !isRunFullyCompleted(r, plansForQuota)) return;
           const rDate = getLocalDateStr(r.completedAt);
           if (rDate !== todayStr) return;
           const targetDev = currentDevices.find(d =>
@@ -1281,23 +1279,28 @@ export function App() {
     safeSyncBugLog(newBug);
   };
 
-  const handleRestartRun = (runIdOrPlanId: string) => {
+  const handleRestartRun = (runIdOrPlanId: string, ownRunId?: string) => {
     const plan = testPlans.find(p => p.id === runIdOrPlanId);
     const planId = plan ? plan.id : runIdOrPlanId;
     const planName = plan ? plan.name : 'Test Plan';
 
     setTestRuns(prev => {
-      const oldRun = prev.find(r => r.planId === planId || r.id === runIdOrPlanId);
+      // Only ever close the caller's OWN run, matched by exact run id. This used to match
+      // by planId, which grabbed the first unfinished run on the plan - i.e. another
+      // tester's live run - and archived it as 'completed' mid-test.
+      const oldRun = ownRunId ? prev.find(r => r.id === ownRunId) : undefined;
       if (oldRun) {
         const stepEntries = Object.entries(oldRun.results || {}).filter(
           ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
         );
         const hasBugs = oldRun.bugLogs && oldRun.bugLogs.length > 0;
         // If the session being ended had steps executed or bugs, ARCHIVE IT so results & bugs are never lost!
+        // A run that was cut short is 'terminated', never 'completed', so it can't count toward quota.
         if (stepEntries.length > 0 || hasBugs) {
+          const isFull = isRunFullyCompleted({ ...oldRun, status: 'completed' }, testPlans);
           const archivedRun: TestRun = {
             ...oldRun,
-            status: 'completed',
+            status: isFull ? 'completed' : 'terminated',
             completedAt: oldRun.completedAt || new Date().toISOString()
           };
           setArchivedRuns(aPrev => {
@@ -1309,8 +1312,8 @@ export function App() {
         safeDeleteTestRun(oldRun.id);
       }
 
-      // Remove any existing in-progress run for this plan
-      const filtered = prev.filter(r => r.planId !== planId && r.id !== runIdOrPlanId);
+      // Drop only the caller's own previous run from local state; other testers' runs on the same plan stay untouched.
+      const filtered = oldRun ? prev.filter(r => r.id !== oldRun.id) : prev;
       const newRun: TestRun = {
         id: `run-${planId}-${Date.now().toString(36)}`,
         planId: planId,
