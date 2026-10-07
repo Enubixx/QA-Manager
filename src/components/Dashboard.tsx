@@ -4,9 +4,16 @@ import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuot
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers, FileSpreadsheet, ExternalLink } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard, copySingleBugToClipboard } from '../utils/exportUtils';
 import { isRunFullyCompleted } from '../utils/runUtils';
-import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel, discoverAvailableGeminiModels } from '../services/geminiService';
+import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel, discoverAvailableGeminiModels, rankModelsForSummaries, DEFAULT_GEMINI_MODEL } from '../services/geminiService';
 import { GOOGLE_APPS_SCRIPT_CODE } from '../googleAppsScriptCode';
 import { toBlob } from 'html-to-image';
+
+/** Escapes text (e.g. AI output) before it is embedded in the copied rich-text report. */
+const escapeHtml = (text: string): string =>
+  text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/** Identifies an exact set of bugs, so a stored AI summary is only reused for the same bugs. */
+const makeBugsKey = (bugs: BugLog[]): string => bugs.map(b => String(b.id)).sort().join('|');
 
 interface DashboardProps {
   testPlans: TestPlan[];
@@ -356,6 +363,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
     htmlText: string;
     generatedAt: number;
     modelUsed?: string;
+    // Why the AI summary was unavailable (an offline summary was used instead)
+    aiError?: string;
+    // AI summaries per CUJ, tagged with the exact bugs they summarize
+    featureSummaries?: Record<string, { summary: string; bugsKey: string }>;
   } | null>(null);
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState<boolean>(false);
   const [tempApiKey, setTempApiKey] = useState<string>(() => getStoredGeminiApiKey());
@@ -1252,7 +1263,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         htmlText += `<p style="margin: 0 0 8px 0; color: #475569;"><b>Disclaimer:</b> ${reportDisclaimer.trim()}</p>`;
       }
       if (overallGeminiSummary) {
-        htmlText += `<div style="background-color: #f8fafc; border-left: 3px solid #6366f1; padding: 8px 12px; margin: 8px 0 12px 0; border-radius: 6px; font-size: 12.5px; color: #1e293b; line-height: 1.55;"><b>Issue Summary:</b> ${overallGeminiSummary}</div>`;
+        htmlText += `<div style="background-color: #f8fafc; border-left: 3px solid #6366f1; padding: 8px 12px; margin: 8px 0 12px 0; border-radius: 6px; font-size: 12.5px; color: #1e293b; line-height: 1.55;"><b>Issue Summary:</b> ${escapeHtml(overallGeminiSummary)}</div>`;
       }
 
       if (criticalList.length > 0) {
@@ -1263,7 +1274,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
           const summary = getFeatureSummary(m);
           const summaryHtml = summary
-            ? `<div style="color: #475569; font-size: 12px; margin-top: 1px; margin-left: 12px;">↳ <i>Summary: ${summary}</i></div>`
+            ? `<div style="color: #475569; font-size: 12px; margin-top: 1px; margin-left: 12px;">↳ <i>Summary: ${escapeHtml(summary)}</i></div>`
             : '';
           htmlText += `<div style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</div>`;
         });
@@ -1278,7 +1289,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
           const summary = getFeatureSummary(m);
           const summaryHtml = summary
-            ? `<div style="color: #475569; font-size: 12px; margin-top: 1px; margin-left: 12px;">↳ <i>Summary: ${summary}</i></div>`
+            ? `<div style="color: #475569; font-size: 12px; margin-top: 1px; margin-left: 12px;">↳ <i>Summary: ${escapeHtml(summary)}</i></div>`
             : '';
           htmlText += `<div style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</div>`;
         });
@@ -1294,7 +1305,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           const summary = getFeatureSummary(m);
           const shouldShowSummary = summary && (m.bugCount > 0 || m.healthScorePct < 100 || summary.toLowerCase().includes('false positive') || summary.toLowerCase().includes('false trigger') || summary.toLowerCase().includes('worked fine') || summary.toLowerCase().includes('observation') || summary.toLowerCase().includes('thwart'));
           const summaryHtml = shouldShowSummary
-            ? `<div style="color: #475569; font-size: 12px; margin-top: 1px; margin-left: 12px;">↳ <i>Summary: ${summary}</i></div>`
+            ? `<div style="color: #475569; font-size: 12px; margin-top: 1px; margin-left: 12px;">↳ <i>Summary: ${escapeHtml(summary)}</i></div>`
             : '';
           htmlText += `<div style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</div>`;
         });
@@ -1303,6 +1314,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       htmlText += `</div>`;
 
+      // Keep the AI summaries so the Feature Health table shows the same text,
+      // tagged with the exact bugs they cover (the table falls back if bugs change).
+      const aiFeatureSummaries: Record<string, { summary: string; bugsKey: string }> = {};
+      if (result.modelUsed) {
+        featureMetricsList.forEach(m => {
+          const bugsForDay = (m.associatedBugs || []).filter(isBugFromTargetDay);
+          const summary = bugsForDay.length > 0 ? getFeatureSummary(m) : '';
+          if (summary) aiFeatureSummaries[m.featureName] = { summary, bugsKey: makeBugsKey(bugsForDay) };
+        });
+      }
+
       // Store the finished report instead of writing to the clipboard here.
       // Clipboard writes throw "Document is not focused" when the user tabs away
       // mid-generation, which previously forced a full regeneration.
@@ -1310,22 +1332,27 @@ export const Dashboard: React.FC<DashboardProps> = ({
         plainText,
         htmlText,
         generatedAt: Date.now(),
-        modelUsed: result.modelUsed
+        modelUsed: result.modelUsed,
+        aiError: result.modelUsed ? undefined : result.error,
+        featureSummaries: aiFeatureSummaries
       });
 
       const cacheNote = result.fromCache ? ' (instant, cached)' : '';
+      const hasApiKey = !!getStoredGeminiApiKey();
+      const aiFailed = !result.modelUsed && !!result.error && hasApiKey;
 
       if (result.modelUsed) {
         setSummaryToast({
           type: 'success',
           message: `✨ AI Executive Summary generated with ${result.modelUsed}${cacheNote}. Click "Copy Report" when you're ready.`
         });
-      } else if (result.error && getStoredGeminiApiKey()) {
+      } else if (aiFailed) {
+        const shortError = result.error!.length > 180 ? `${result.error!.slice(0, 177)}...` : result.error;
         setSummaryToast({
           type: 'error',
-          message: `⚠️ Gemini API Error (${result.error}). Standard clean summary is ready to copy. Please verify your API key in Gemini settings.`
+          message: `⚠️ AI summary failed (${shortError}). A basic offline summary was used instead - check your key and model in Gemini AI settings.`
         });
-      } else if (!getStoredGeminiApiKey()) {
+      } else if (!hasApiKey) {
         setSummaryToast({
           type: 'warning',
           message: `📋 Standard synthesized summary ready. Click "Gemini AI" to configure an API key for full AI executive summaries.`
@@ -1336,7 +1363,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           message: `📋 Clean synthesized CUJ report is ready to copy!`
         });
       }
-      setTimeout(() => setSummaryToast(null), 5000);
+      setTimeout(() => setSummaryToast(null), aiFailed ? 9000 : 5000);
     } finally {
       setIsGeneratingSummary(false);
     }
@@ -3032,15 +3059,25 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     )}
                   </button>
 
-                  {/* Ready-to-copy indicator */}
+                  {/* Ready-to-copy indicator - shows whether the AI or the offline fallback wrote the summary */}
                   {generatedReport && !isGeneratingSummary && (
-                    <span
-                      className="no-capture text-[10px] font-bold text-emerald-300/90 bg-emerald-500/10 border border-emerald-400/30 px-2 py-1 rounded-full flex items-center gap-1 whitespace-nowrap"
-                      title={`Generated at ${new Date(generatedReport.generatedAt).toLocaleTimeString()}`}
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                      Ready
-                    </span>
+                    generatedReport.modelUsed ? (
+                      <span
+                        className="no-capture text-[10px] font-bold text-emerald-300/90 bg-emerald-500/10 border border-emerald-400/30 px-2 py-1 rounded-full flex items-center gap-1 whitespace-nowrap"
+                        title={`AI summary by ${generatedReport.modelUsed} - generated at ${new Date(generatedReport.generatedAt).toLocaleTimeString()}`}
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                        Ready · AI
+                      </span>
+                    ) : (
+                      <span
+                        className="no-capture text-[10px] font-bold text-amber-300/90 bg-amber-500/10 border border-amber-400/30 px-2 py-1 rounded-full flex items-center gap-1 whitespace-nowrap cursor-help"
+                        title={`AI summary unavailable${generatedReport.aiError ? ` (${generatedReport.aiError})` : ''} - a basic offline summary was used. Generated at ${new Date(generatedReport.generatedAt).toLocaleTimeString()}`}
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                        Ready · Offline
+                      </span>
+                    )
                   )}
 
                   {/* Gemini API Key Config Button */}
@@ -3048,6 +3085,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     type="button"
                     onClick={() => {
                       setTempApiKey(getStoredGeminiApiKey());
+                      setTempModel(getStoredGeminiModel());
                       setIsApiKeyModalOpen(true);
                     }}
                     className="no-capture px-2.5 h-9 bg-slate-900/60 hover:bg-slate-800/80 text-slate-300 hover:text-white border border-white/10 rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm"
@@ -3249,7 +3287,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           </thead>
                           <tbody className="divide-y divide-slate-800/60 text-slate-100 font-medium">
                             {featureMetricsList.map(metric => {
-                              const issueSummary = getBriefIssueSummarySync(metric.featureName, metric.associatedBugs, metric.yellowCount, metric.redCount);
+                              // Reuse the AI summary only if it was written for exactly these bugs
+                              const aiRowSummary = generatedReport?.featureSummaries?.[metric.featureName];
+                              const rowBugsKey = makeBugsKey(metric.associatedBugs || []);
+                              const isAiIssueSummary = !!aiRowSummary && !!rowBugsKey && aiRowSummary.bugsKey === rowBugsKey;
+                              const issueSummary = isAiIssueSummary
+                                ? aiRowSummary!.summary
+                                : getBriefIssueSummarySync(metric.featureName, metric.associatedBugs, metric.yellowCount, metric.redCount);
                               return (
                                 <tr key={metric.featureName} className="hover:bg-slate-900/50 transition">
                                   <td className="py-2.5 px-4 font-bold text-white whitespace-nowrap">{metric.featureName}</td>
@@ -3273,9 +3317,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   <td className="py-2.5 px-4 text-amber-400 font-bold font-mono whitespace-nowrap">{metric.yellowCount}</td>
                                   <td className="py-2.5 px-4 text-rose-400 font-bold font-mono whitespace-nowrap">{metric.redCount}</td>
                                   <td className="py-2.5 px-4 text-rose-400 font-bold font-mono whitespace-nowrap">{metric.bugCount}</td>
-                                  <td className="py-2.5 px-4 text-xs font-sans text-slate-100 max-w-xs truncate" title={issueSummary || 'No issues encountered'}>
+                                  <td className="py-2.5 px-4 text-xs font-sans text-slate-100 min-w-[18rem] max-w-md whitespace-normal break-words leading-snug" title={issueSummary ? `${issueSummary}${isAiIssueSummary ? ' (AI summary)' : ''}` : 'No issues encountered'}>
                                     {issueSummary ? (
-                                      <span className="text-amber-200 font-semibold">{issueSummary}</span>
+                                      <span className="text-amber-200 font-semibold">
+                                        {isAiIssueSummary && <Sparkles className="inline w-3 h-3 mr-1 -mt-0.5 text-purple-300" />}
+                                        {issueSummary}
+                                      </span>
                                     ) : (
                                       <span className="text-slate-500 font-mono">-</span>
                                     )}
@@ -4232,13 +4279,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     try {
                       const res = await discoverAvailableGeminiModels(tempApiKey.trim());
                       if (res.success && res.models.length > 0) {
+                        // Only text models that can write summaries, best first (no TTS/image/retired models)
+                        const ranked = rankModelsForSummaries(res.models);
+                        const keepCurrent = ranked.includes(tempModel.trim());
+                        const chosen = keepCurrent ? tempModel.trim() : ranked[0];
                         setTestKeyStatus({
                           success: true,
-                          message: `✅ Key verified! Found ${res.models.length} model(s): ${res.models.slice(0, 3).join(', ')}${res.models.length > 3 ? '...' : ''}`,
-                          models: res.models
+                          message: chosen
+                            ? `✅ Key verified! ${ranked.length} summary-capable model(s) available - using ${chosen}.`
+                            : `✅ Key verified, but no text model suitable for summaries was found (${res.models.slice(0, 3).join(', ')}${res.models.length > 3 ? '...' : ''}).`,
+                          models: ranked.length > 0 ? ranked : res.models
                         });
-                        const best = res.models.find(m => m.includes('2.0-flash')) || res.models.find(m => m.includes('1.5-flash')) || res.models[0];
-                        if (best) setTempModel(best);
+                        if (chosen) setTempModel(chosen);
                       } else {
                         setTestKeyStatus({
                           success: false,
@@ -4290,7 +4342,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <div className="flex gap-2">
                 <input
                   type="text"
-                  placeholder="e.g. gemini-2.0-flash"
+                  placeholder={`e.g. ${DEFAULT_GEMINI_MODEL}`}
                   value={tempModel}
                   onChange={e => setTempModel(e.target.value)}
                   className="flex-1 bg-slate-950 border border-slate-800 focus:border-purple-500 rounded-xl px-3 py-2 text-xs text-white font-mono placeholder-slate-600 focus:outline-none"
@@ -4316,7 +4368,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </select>
               </div>
               <p className="text-[10.5px] text-slate-400">
-                Default: <code className="text-purple-300 font-mono">gemini-2.0-flash</code>. You can select an auto-detected model or type any model ID.
+                Default: <code className="text-purple-300 font-mono">{DEFAULT_GEMINI_MODEL}</code>. You can select an auto-detected model or type any model ID. Retired models (Gemini 1.5 / 2.0) are switched to the default automatically.
               </p>
             </div>
 

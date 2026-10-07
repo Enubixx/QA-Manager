@@ -13,7 +13,7 @@ const BATCH_CACHE_MAX_ENTRIES = 12;
 
 // Bump whenever the executive summary prompt or tone rules change, so that
 // cached summaries generated under the previous style are not reused.
-const PROMPT_STYLE_VERSION = 'v3-current-day-strict';
+const PROMPT_STYLE_VERSION = 'v4-structured-issue-coverage';
 
 function stableHash(input: string): string {
   let h1 = 0xdeadbeef;
@@ -95,24 +95,96 @@ export interface GeminiModelOption {
   description: string;
 }
 
+/**
+ * Default model for report summaries. Google shut down the Gemini 1.5 family and
+ * Gemini 2.0 Flash / Flash-Lite (June 1, 2026); requests to them fail, which made
+ * every report silently fall back to the offline summarizer.
+ */
+export const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash';
+
 export const GEMINI_MODELS: GeminiModelOption[] = [
-  { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash (Latest & Recommended)', description: 'Next-gen multimodal speed, high accuracy & reasoning' },
-  { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro (Deep Reasoning)', description: 'Best for complex, multi-layered defect analysis' },
-  { id: 'gemini-2.0-flash-lite', name: 'Gemini 2.0 Flash-Lite', description: 'Ultra-fast lightweight generation' },
-  { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', description: 'Standard stable production model' },
+  { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash (Recommended)', description: 'Latest stable Flash model - best balance of summary quality and speed' },
+  { id: 'gemini-flash-latest', name: 'Gemini Flash (latest alias)', description: 'Always points at the newest Flash release' },
+  { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash-Lite', description: 'Fastest and cheapest, slightly less nuanced summaries' },
+  { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (Preview)', description: 'Deepest reasoning, noticeably slower' },
 ];
+
+/**
+ * Tried in order after the preferred model fails (e.g. it is not enabled for the
+ * key, is rate limited, or returns an unusable response).
+ */
+const FALLBACK_SUMMARY_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-flash-latest',
+  'gemini-3.7-flash',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash',
+  'gemini-3.5-flash-lite',
+];
+
+function normalizeModelId(model: string): string {
+  return (model || '').trim().replace(/^models\//i, '').trim();
+}
+
+/** Model families Google has shut down - requests to them always fail. */
+export function isRetiredGeminiModel(model: string): boolean {
+  const id = normalizeModelId(model).toLowerCase();
+  return /^gemini-(?:1\.0|1\.5|2\.0)(?:-|$)/.test(id) || /^gemini-pro(?:-vision)?$/.test(id);
+}
+
+/** Audio, image, embedding, agent and other non-text models cannot write summaries. */
+const NON_TEXT_MODEL_PATTERN = /(?:tts|live|audio|image|imagen|veo|embed|aqa|transcribe|omni|robotics|deep-research|lyria|antigravity|computer-use|nano-banana)/i;
+
+export function isSuitableSummaryModel(model: string): boolean {
+  const id = normalizeModelId(model);
+  return !!id && !isRetiredGeminiModel(id) && !NON_TEXT_MODEL_PATTERN.test(id);
+}
+
+/**
+ * Ranks model IDs (e.g. from ListModels) by suitability for report summaries:
+ * Flash first, then Flash-Lite, then Pro; newer versions first; previews last.
+ * Retired and non-text models are removed.
+ */
+export function rankModelsForSummaries(models: string[]): string[] {
+  const score = (id: string): number => {
+    const lower = id.toLowerCase();
+    const tier = /flash-lite/.test(lower) ? 2 : /flash/.test(lower) ? 3 : /pro/.test(lower) ? 1 : 0;
+    const versionMatch = lower.match(/^gemini-(\d+(?:\.\d+)?)/);
+    const version = versionMatch ? parseFloat(versionMatch[1]) : 0;
+    const isAlias = /-latest$/.test(lower);
+    let s = tier * 10000 + (isAlias ? 50 : version * 100);
+    if (/preview/.test(lower)) s -= 150;
+    if (/exp/.test(lower)) s -= 300;
+    return s;
+  };
+  const unique = Array.from(new Set(models.map(normalizeModelId).filter(Boolean)));
+  return unique
+    .filter(id => /^gemini-/i.test(id) && isSuitableSummaryModel(id))
+    .sort((a, b) => score(b) - score(a));
+}
+
+export function pickBestSummaryModel(models: string[]): string | undefined {
+  return rankModelsForSummaries(models)[0];
+}
 
 export function getStoredGeminiModel(): string {
   try {
-    const saved = localStorage.getItem('qa_gemini_model');
-    if (saved && GEMINI_MODELS.some(m => m.id === saved)) return saved;
+    const saved = normalizeModelId(localStorage.getItem('qa_gemini_model') || '');
+    // Honour any model the user picked unless Google retired it or it cannot
+    // produce text. (Previously only 4 hard-coded, now-retired IDs were accepted.)
+    if (saved && isSuitableSummaryModel(saved)) return saved;
   } catch (e) {}
-  return 'gemini-2.0-flash';
+  return DEFAULT_GEMINI_MODEL;
 }
 
 export function saveGeminiModel(model: string): void {
   try {
-    localStorage.setItem('qa_gemini_model', model);
+    const id = normalizeModelId(model);
+    if (id) {
+      localStorage.setItem('qa_gemini_model', id);
+    } else {
+      localStorage.removeItem('qa_gemini_model');
+    }
     clearGeminiSummaryCaches();
   } catch (e) {}
 }
@@ -146,6 +218,45 @@ function persistResolvedEndpoint(model: string, version: string): void {
 }
 
 /**
+ * Options for a single Gemini generateContent call.
+ */
+interface GeminiCallOptions {
+  asJson?: boolean;
+  timeoutMs?: number;
+  maxOutputTokens?: number;
+  /** OpenAPI-style schema for structured JSON output (only used with asJson). */
+  responseSchema?: Record<string, unknown>;
+}
+
+/**
+ * Error returned by the Gemini REST API. `fatal` errors (e.g. an invalid API key)
+ * fail identically for every model, so callers should stop trying other models.
+ */
+class GeminiApiError extends Error {
+  status?: number;
+  fatal: boolean;
+
+  constructor(message: string, status?: number, fatal: boolean = false) {
+    super(message);
+    this.name = 'GeminiApiError';
+    this.status = status;
+    this.fatal = fatal;
+  }
+}
+
+/**
+ * Gemini 3.x and later deprecate temperature / top_p / top_k (ignored today,
+ * HTTP 400 in future model generations), so they are only sent to older models.
+ */
+function supportsSamplingParams(model: string): boolean {
+  return /^gemini-(?:1|2)\./i.test(model);
+}
+
+function isInvalidApiKeyError(status: number, message: string): boolean {
+  return status === 401 || /API[_ ]?key (?:not valid|invalid|expired)|API_KEY_INVALID|API_KEY_EXPIRED|invalid api key/i.test(message);
+}
+
+/**
  * Direct native fetch call to Google's Gemini REST API.
  * Ensures 100% browser compatibility, handles 'models/' prefix, and falls back between v1beta and v1 endpoints.
  * Optimized: remembers the working API version per model, aborts hung requests, and caps output tokens.
@@ -154,11 +265,10 @@ async function callGeminiRestApi(
   apiKey: string,
   model: string,
   prompt: string,
-  asJson: boolean = false,
-  timeoutMs: number = 25000,
-  maxOutputTokens: number = 1200
+  options: GeminiCallOptions = {}
 ): Promise<string> {
-  const cleanModel = model.replace(/^models/, '').replace(/^\//, '').trim();
+  const { asJson = false, timeoutMs = 25000, maxOutputTokens = 1200, responseSchema } = options;
+  const cleanModel = normalizeModelId(model);
   const key = apiKey.trim();
 
   // Prefer the API version previously proven to work for this model
@@ -176,21 +286,26 @@ async function callGeminiRestApi(
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const bodyPayload: any = {
+      const generationConfig: Record<string, unknown> = { maxOutputTokens };
+      if (supportsSamplingParams(cleanModel)) {
+        generationConfig.temperature = 0.2;
+      }
+      if (asJson) {
+        generationConfig.responseMimeType = 'application/json';
+        if (responseSchema) {
+          generationConfig.responseSchema = responseSchema;
+        }
+      }
+
+      const bodyPayload = {
         contents: [
           {
+            role: 'user',
             parts: [{ text: prompt }]
           }
         ],
-        generationConfig: {
-          temperature: 0.2,
-          maxOutputTokens,
-        }
+        generationConfig
       };
-
-      if (asJson) {
-        bodyPayload.generationConfig.responseMimeType = 'application/json';
-      }
 
       const response = await fetch(url, {
         method: 'POST',
@@ -202,41 +317,58 @@ async function callGeminiRestApi(
         signal: controller.signal
       });
 
-      clearTimeout(timer);
-
       if (response.ok) {
         const data = await response.json();
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        const candidate = data?.candidates?.[0];
+        const parts: any[] = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
+        // Thinking models may return several parts - join the visible text and skip thought summaries
+        const text = parts
+          .filter(p => typeof p?.text === 'string' && !p?.thought)
+          .map(p => p.text as string)
+          .join('')
+          .trim();
+        const finishReason: string = candidate?.finishReason || '';
+
+        if (finishReason === 'MAX_TOKENS') {
+          throw new GeminiApiError(`Response was cut off at the ${maxOutputTokens}-token output limit`, response.status);
+        }
         if (text) {
           persistResolvedEndpoint(cleanModel, version);
           return text;
         }
-        lastError = 'Empty response from model';
-        continue;
+        const blockReason = data?.promptFeedback?.blockReason;
+        throw new GeminiApiError(
+          blockReason
+            ? `Request blocked by safety filters (${blockReason})`
+            : finishReason && finishReason !== 'STOP'
+            ? `Empty response (finish reason: ${finishReason})`
+            : 'Empty response from model',
+          response.status
+        );
       }
 
       const errorJson = await response.json().catch(() => null);
-      lastError = errorJson?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+      const message = errorJson?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
       // Only a 404 means "wrong API version for this model" - retry on the other version
       if (response.status === 404) {
+        lastError = message;
         continue;
       }
       // Auth, quota, or payload errors will not be fixed by switching version - fail fast
-      throw new Error(lastError);
+      throw new GeminiApiError(message, response.status, isInvalidApiKeyError(response.status, message));
     } catch (err: any) {
-      clearTimeout(timer);
+      if (err instanceof GeminiApiError) throw err;
       if (err?.name === 'AbortError') {
-        lastError = `Request timed out after ${Math.round(timeoutMs / 1000)}s`;
-        throw new Error(lastError);
+        throw new GeminiApiError(`Request timed out after ${Math.round(timeoutMs / 1000)}s`);
       }
-      if (err.message?.includes('API key') || err.message?.includes('PERMISSION_DENIED')) {
-        throw err;
-      }
+      // Network-level failure - try the other API version once
       lastError = err?.message || String(err);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
-  throw new Error(lastError || `Model ${cleanModel} could not be resolved`);
+  throw new GeminiApiError(lastError || `Model ${cleanModel} could not be resolved`, 404);
 }
 
 /**
@@ -304,6 +436,132 @@ export function cleanRawNote(raw: string): string {
 }
 
 /**
+ * Removes times of day that testers type into notes, e.g. "11.16 After I asked...",
+ * "...from a visual query. 10.48am" or "...the camera 1.18". They are noise in summaries.
+ */
+const LEADING_TYPED_TIME = /^(?:\[?\d{1,2}[:.][0-5]\d\s*(?:am|pm)?\]?[:.-]?\s+|at\s+\d{1,2}[:.][0-5]\d\s*(?:am|pm)?[:,-]?\s*)/i;
+const TRAILING_TYPED_TIME = /[\s,;:-]*(?:\bat\s+)?\(?\b\d{1,2}[:.][0-5]\d\s*(?:am|pm)?\)?\.?\s*$/i;
+
+export function stripTypedTimestamps(raw: string): string {
+  const original = (raw || '').trim();
+  const stripped = original.replace(LEADING_TYPED_TIME, '').replace(TRAILING_TYPED_TIME, '').trim();
+  return stripped.length >= 2 ? stripped : original;
+}
+
+/** Words that stay capitalized when they start a phrase in the middle of a list. */
+const PROPER_LEADING_WORDS = new Set([
+  'gemini', 'google', 'keep', 'spotify', 'youtube', 'android', 'pixel', 'bluetooth', 'chrome', 'gmail',
+  'maps', 'calendar', 'translate', 'lens', 'instacart', 'uber', 'warby', 'apple', 'samsung', 'wifi', 'wi-fi',
+  'alexa', 'siri', 'whatsapp'
+]);
+
+const CLAUSE_STARTERS = new Set(['but', 'which', 'since', 'because', 'so', 'although', 'though', 'while', 'whereas', 'then']);
+
+function capitalizeFirst(text: string): string {
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+}
+
+/** Lowercases the first letter unless the first word is an acronym or a proper noun. */
+function lowerFirstUnlessProper(text: string): string {
+  const firstWord = text.split(/\s+/)[0] || '';
+  const bare = firstWord.replace(/[^A-Za-z0-9'-]/g, '');
+  if (!bare) return text;
+  // Acronyms (DC, GL, UI), words with digits, inner capitals (YouTube, iOS) and "I" stay as written
+  if (/[0-9]/.test(bare) || /[A-Z]/.test(bare.slice(1)) || /^I(?:'|$)/.test(bare)) return text;
+  if (PROPER_LEADING_WORDS.has(bare.toLowerCase())) return text;
+  return text.charAt(0).toLowerCase() + text.slice(1);
+}
+
+function countWords(text: string): number {
+  return text.split(/\s+/).filter(Boolean).length;
+}
+
+function dedupeKey(phrase: string): string {
+  return phrase.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/**
+ * Shortens text to at most `maxWords`, preferring a clause boundary (comma,
+ * semicolon, "but", "which", ...). Only adds an ellipsis when no boundary exists.
+ */
+function truncateAtClauseBoundary(text: string, maxWords: number): string {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length <= maxWords) return text;
+  const minKeep = Math.max(4, Math.ceil(maxWords * 0.5));
+  for (let i = maxWords; i >= minKeep; i--) {
+    const last = words[i - 1];
+    const next = (words[i] || '').toLowerCase().replace(/[^a-z]/g, '');
+    if (/[,;:]$/.test(last) || CLAUSE_STARTERS.has(next)) {
+      return words.slice(0, i).join(' ').replace(/[,;:]+$/, '');
+    }
+  }
+  return `${words.slice(0, maxWords).join(' ').replace(/[,;:.]+$/, '')}…`;
+}
+
+/**
+ * Faithful local condensation of one tester note (used when the AI is unavailable):
+ * drops typed times and conversational lead-ins, keeps as many whole sentences as fit
+ * in `maxWords`, and only shortens extremely long notes (at a clause boundary).
+ */
+export function condenseNoteFaithfully(raw: string, maxWords: number = 24): string {
+  let text = stripTypedTimestamps(cleanRawNote(raw).replace(/\s+/g, ' ').trim());
+  if (!text) return '';
+  text = text
+    .replace(/^(?:so|also|and|then)\s+/i, '')
+    .replace(/^(?:i|we)\s+(?:noticed|observed|saw|found|realized|realised)\s+(?:that\s+)?/i, '')
+    .replace(/^(?:it\s+)?(?:seems|seemed|looks|looked)\s+like\s+/i, '')
+    .replace(/^(?:the\s+)?(?:user\s+)?(?:noticed|observed|reported)\s+that\s+/i, '')
+    .trim() || text;
+
+  // Split into sentences without breaking decimals such as "2.5 seconds"
+  const sentences = text
+    .replace(/([.!?;])\s+/g, '$1\u0000')
+    .split('\u0000')
+    .map(s => s.trim().replace(/[.!?;,:]+$/, ''))
+    .filter(Boolean);
+
+  let picked = sentences[0] || text;
+  // An over-long "After/When X, Y" sentence: the problem is in Y, so drop the setup clause
+  if (countWords(picked) > maxWords) {
+    const setup = picked.match(/^(?:after|when|while|once|upon|as soon as)\b[^,]{3,200},\s*(.+)$/i);
+    if (setup && countWords(setup[1]) >= 4) picked = setup[1];
+  }
+  // Testers often state the actual problem in the next sentence - keep sentences while they fit
+  for (let i = 1; i < sentences.length; i++) {
+    const fits = countWords(picked) + countWords(sentences[i]) <= maxWords;
+    if (!fits && countWords(picked) >= 5) break;
+    picked = `${picked} - ${lowerFirstUnlessProper(sentences[i])}`;
+    if (!fits) break;
+  }
+
+  picked = truncateAtClauseBoundary(picked, maxWords).replace(/[\s.;,:!?-]+$/, '').trim();
+  return capitalizeFirst(picked);
+}
+
+/**
+ * Joins issue phrases into one readable sentence: "A, B, and C." (semicolons when a
+ * phrase already contains a comma). Every phrase is kept - nothing is dropped.
+ */
+export function joinIssuePhrases(phrases: string[]): string {
+  const items = phrases
+    .map(p => (p || '').replace(/\s+/g, ' ').trim().replace(/[\s.;,:]+$/, ''))
+    .filter(Boolean)
+    .map((p, i) => (i === 0 ? capitalizeFirst(p) : lowerFirstUnlessProper(p)));
+  if (items.length === 0) return '';
+
+  let body: string;
+  if (items.length === 1) {
+    body = items[0];
+  } else if (items.length === 2) {
+    body = `${items[0]} and ${items[1]}`;
+  } else {
+    const sep = items.some(p => p.includes(',')) ? '; ' : ', ';
+    body = `${items.slice(0, -1).join(sep)}${sep}and ${items[items.length - 1]}`;
+  }
+  return /[.!?…]$/.test(body) ? body : `${body}.`;
+}
+
+/**
  * Extracts normalized duration string (e.g. "4 minutes", "15 seconds", "500 ms").
  */
 export function extractNormalizedDuration(text: string): string | null {
@@ -322,8 +580,8 @@ export function extractNormalizedDuration(text: string): string | null {
  * Intelligent pattern detection for individual QA defect notes.
  * Distills root failure mechanics into concise, executive-grade engineering phrases.
  */
-export function extractIntelligentDefectPattern(note: string, featureContext: string = ''): string {
-  const text = cleanRawNote(note);
+export function extractIntelligentDefectPattern(note: string, featureContext: string = '', maxWords: number = 24): string {
+  const text = stripTypedTimestamps(cleanRawNote(note));
   if (!text) return '';
   const lower = text.toLowerCase();
   const contextLower = (featureContext || '').toLowerCase();
@@ -499,23 +757,9 @@ export function extractIntelligentDefectPattern(note: string, featureContext: st
     return 'UI rendering defect resulting in blank display';
   }
 
-  // General fallback: clean conversational narrative while keeping essential core
-  let cleaned = text
-    .replace(/\b(?:I|we)\s+(?:took|tried|noticed|clicked|saw|went|tapped|tested|pressed|was|observed)\b/gi, '')
-    .replace(/^(?:the\s+)?(?:user\s+)?(?:noticed|observed|reported)\s+that\s+/i, '')
-    .trim();
-
-  // Remove trailing period or comma
-  cleaned = cleaned.replace(/[,;.]+$/, '').trim();
-
-  // Limit word count to keep crisp
-  const words = cleaned.split(/\s+/);
-  if (words.length > 16) {
-    cleaned = words.slice(0, 16).join(' ');
-  }
-
-  if (!cleaned) cleaned = text;
-  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+  // General fallback: faithful condensation of the tester's own words. This used to
+  // chop every note at 16 words mid-sentence, which produced cut-off summaries.
+  return condenseNoteFaithfully(text, maxWords) || capitalizeFirst(text);
 }
 
 /**
@@ -629,9 +873,15 @@ export function synthesizeExecutiveOverview(
   return `${issuesSentence}${recurringSentence} ${cleanNote}`;
 }
 
+/** Longest single-note phrase the offline summarizer keeps before shortening it. */
+const OFFLINE_PHRASE_MAX_WORDS = 40;
+
 /**
  * Synthesizes raw QA notes into concise, clean executive defect phrases.
- * Supports intelligent pattern detection for latency, duplicate feedback, false triggers, etc.
+ * Every distinct issue is kept (this used to join only the first two); repeats are
+ * counted as "(Nx)" and the most frequent issues are listed first. Each phrase is a
+ * faithful condensation of the tester's note - canned rewrites could state things
+ * that were never reported, so they are no longer used for per-CUJ summaries.
  */
 export function nlpCleanReword(notes: string[], featureName: string): string {
   if (!notes || notes.length === 0) return '';
@@ -640,33 +890,21 @@ export function nlpCleanReword(notes: string[], featureName: string): string {
     return synthesizeExecutiveOverview(notes, []);
   }
 
-  const synthesized: string[] = [];
+  const tally = new Map<string, { phrase: string; count: number; order: number }>();
   for (const note of notes) {
-    const pattern = extractIntelligentDefectPattern(note, featureName);
-    if (pattern && !synthesized.some(s => s.toLowerCase() === pattern.toLowerCase())) {
-      synthesized.push(pattern);
+    const phrase = condenseNoteFaithfully(note, OFFLINE_PHRASE_MAX_WORDS);
+    if (!phrase) continue;
+    const key = dedupeKey(phrase);
+    const existing = tally.get(key);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      tally.set(key, { phrase, count: 1, order: tally.size });
     }
   }
 
-  if (synthesized.length === 0) return '';
-
-  if (synthesized.length === 1) {
-    let single = synthesized[0].trim();
-    single = single.charAt(0).toUpperCase() + single.slice(1);
-    if (!single.endsWith('.')) single += '.';
-    return single;
-  }
-
-  // Connect two primary defect phrases with "and"
-  let first = synthesized[0].trim();
-  first = first.charAt(0).toUpperCase() + first.slice(1);
-  first = first.replace(/[.,;]+$/, '');
-
-  let second = synthesized[1].trim();
-  second = second.charAt(0).toLowerCase() + second.slice(1);
-  second = second.replace(/[.,;]+$/, '');
-
-  return `${first} and ${second}.`;
+  const ranked = Array.from(tally.values()).sort((a, b) => b.count - a.count || a.order - b.order);
+  return joinIssuePhrases(ranked.map(({ phrase, count }) => (count > 1 ? `${phrase} (${count}x)` : phrase)));
 }
 
 /**
@@ -721,7 +959,7 @@ CRITICAL REQUIREMENTS:
 3. NEVER TRUNCATE: Write a full, complete sentence ending with a period. Do not cut off text or use ellipses (...).
 4. Return ONLY the final summary string. Do not add intro text, quotes, prefixes, or markdown bullets.`;
 
-      const responseText = await callGeminiRestApi(userApiKey, selectedModel, prompt, false);
+      const responseText = await callGeminiRestApi(userApiKey, selectedModel, prompt, { maxOutputTokens: 8192 });
       const text = (responseText || '').trim().replace(/^["']|["']$/g, '');
       if (text) {
         summaryCache.set(cacheKey, text);
@@ -811,7 +1049,7 @@ CRITICAL REQUIREMENTS:
 4. COMPLETE SENTENCES: Write full, complete, grammatical sentences. Never cut off sentences or end with ellipses (...).
 5. Return ONLY the final executive summary text.`;
 
-      const responseText = await callGeminiRestApi(userApiKey, selectedModel, prompt, false);
+      const responseText = await callGeminiRestApi(userApiKey, selectedModel, prompt, { maxOutputTokens: 8192 });
       const text = (responseText || '').trim().replace(/^["']|["']$/g, '');
       if (text) {
         summaryCache.set(cacheKey, text);
@@ -847,6 +1085,181 @@ export interface FeaturePayload {
   bugs: BugLog[];
 }
 
+/** Time budgets for the batch report call (Gemini 3 models think before answering). */
+const BATCH_ATTEMPT_TIMEOUT_MS = 75000;
+const BATCH_TOTAL_BUDGET_MS = 150000;
+const BATCH_MIN_ATTEMPT_MS = 8000;
+// Thinking tokens count against this limit on Gemini 3 models - keep it generous so the JSON is never cut off.
+const BATCH_MAX_OUTPUT_TOKENS = 32768;
+
+/**
+ * Structured-output schema for the batch report: per CUJ, a list of distinct issues,
+ * each citing the bug numbers it covers, so coverage can be verified in code.
+ */
+const BATCH_RESPONSE_SCHEMA: Record<string, unknown> = {
+  type: 'OBJECT',
+  properties: {
+    features: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          featureId: { type: 'STRING' },
+          issues: {
+            type: 'ARRAY',
+            items: {
+              type: 'OBJECT',
+              properties: {
+                bugIds: { type: 'ARRAY', items: { type: 'INTEGER' } },
+                summary: { type: 'STRING' }
+              },
+              required: ['bugIds', 'summary'],
+              propertyOrdering: ['bugIds', 'summary']
+            }
+          }
+        },
+        required: ['featureId', 'issues'],
+        propertyOrdering: ['featureId', 'issues']
+      }
+    },
+    overallSummary: { type: 'STRING' }
+  },
+  required: ['features', 'overallSummary'],
+  propertyOrdering: ['features', 'overallSummary']
+};
+
+interface LabeledBug {
+  n: number;
+  note: string;
+  step: string;
+}
+
+interface LabeledFeature {
+  id: string;
+  featureName: string;
+  healthScorePct: number;
+  bugs: LabeledBug[];
+}
+
+/** Prompt-ready note: no list markers, typed times of day, or line breaks. */
+function cleanNoteForPrompt(note: string): string {
+  return stripTypedTimestamps(cleanRawNote(note || '')).replace(/\s+/g, ' ').trim();
+}
+
+/** Parses model JSON, tolerating code fences or stray text around the object. */
+function parseJsonLoose(text: string): any {
+  const trimmed = (text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch (e) {
+    const start = trimmed.indexOf('{');
+    const end = trimmed.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(trimmed.slice(start, end + 1));
+      } catch (inner) {}
+    }
+  }
+  throw new Error('AI response was not valid JSON');
+}
+
+/** Normalizes one AI issue phrase: no quotes, bullets, trailing period, or model-added counts. */
+function cleanIssuePhrase(raw: string): string {
+  return (raw || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[-•*]\s+/, '')
+    .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
+    .replace(/\s*\((?:x\s*\d+|\d+\s*(?:x|×|times?|reports?|bugs?))\)$/i, '')
+    .replace(/[\s.;,:]+$/, '')
+    .trim();
+}
+
+/**
+ * Turns the structured AI response into one summary sentence per CUJ while enforcing
+ * that every bug is covered: issues citing no real bug are dropped as unsupported,
+ * and any bug the model skipped is appended in condensed form.
+ */
+function assembleBatchResult(
+  parsed: any,
+  labeledFeatures: LabeledFeature[]
+): { featureSummaries: Record<string, string>; overallSummary: string; matchedCount: number; uncoveredCount: number } {
+  const entries: any[] = Array.isArray(parsed?.features) ? parsed.features : [];
+  const byIndex = new Map<number, any>();
+  const byName = new Map<string, any>();
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') continue;
+    const idMatch = String(entry.featureId ?? entry.id ?? '').match(/(\d+)/);
+    if (idMatch) {
+      const idx = parseInt(idMatch[1], 10);
+      if (!byIndex.has(idx)) byIndex.set(idx, entry);
+    }
+    const name = [entry.featureName, entry.feature, entry.name].find(v => typeof v === 'string');
+    if (name) byName.set(String(name).trim().toLowerCase(), entry);
+  }
+
+  const featureSummaries: Record<string, string> = {};
+  let matchedCount = 0;
+  let uncoveredCount = 0;
+
+  labeledFeatures.forEach((feature, index) => {
+    const entry = byIndex.get(index + 1) || byName.get(feature.featureName.trim().toLowerCase());
+    if (entry) matchedCount++;
+
+    const validIds = new Set(feature.bugs.map(b => b.n));
+    const covered = new Set<number>();
+    const merged = new Map<string, { summary: string; ids: Set<number> }>();
+
+    const issues: any[] = Array.isArray(entry?.issues) ? entry.issues : [];
+    for (const issue of issues) {
+      const summary = cleanIssuePhrase(typeof issue?.summary === 'string' ? issue.summary : '');
+      if (!summary) continue;
+      const rawIds: unknown[] = Array.isArray(issue?.bugIds) ? issue.bugIds : [];
+      const ids = rawIds
+        .map(v => (typeof v === 'number' ? v : parseInt(String(v).replace(/[^\d]/g, ''), 10)))
+        .filter(n => Number.isInteger(n) && validIds.has(n));
+      // An issue that cites no real bug is not supported by today's data - drop it
+      if (ids.length === 0) continue;
+      ids.forEach(n => covered.add(n));
+      const key = dedupeKey(summary);
+      const existing = merged.get(key);
+      if (existing) {
+        ids.forEach(n => existing.ids.add(n));
+      } else {
+        merged.set(key, { summary, ids: new Set(ids) });
+      }
+    }
+
+    const phrases: string[] = [];
+    merged.forEach(({ summary, ids }) => phrases.push(ids.size > 1 ? `${summary} (${ids.size}x)` : summary));
+
+    // Guarantee coverage: any bug the model skipped is added from the tester's own note
+    const skipped = new Map<string, { phrase: string; count: number }>();
+    for (const bug of feature.bugs) {
+      if (covered.has(bug.n)) continue;
+      const phrase = condenseNoteFaithfully(bug.note, 24);
+      if (!phrase) continue;
+      uncoveredCount++;
+      const key = dedupeKey(phrase);
+      const existing = skipped.get(key);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        skipped.set(key, { phrase, count: 1 });
+      }
+    }
+    skipped.forEach(({ phrase, count }) => phrases.push(count > 1 ? `${phrase} (${count}x)` : phrase));
+
+    const sentence = joinIssuePhrases(phrases);
+    if (sentence) featureSummaries[feature.featureName] = sentence;
+  });
+
+  const overallSummary = typeof parsed?.overallSummary === 'string'
+    ? parsed.overallSummary.replace(/\s+/g, ' ').trim()
+    : '';
+  return { featureSummaries, overallSummary, matchedCount, uncoveredCount };
+}
+
 /**
  * Dedicated subtask that extracts all bugs and their features, prompts Gemini with full context,
  * and returns high-quality, structured executive summaries for both overall session and per feature.
@@ -868,27 +1281,51 @@ export async function generateBatchExecutiveSummaryWithGemini(
     };
   }
 
-  // Format all defect logs cleanly grouped by feature
-  const formattedFeaturesList = featuresWithBugs.map(f => {
-    const bugNotes = (f.bugs || []).map(b => {
-      let text = (b.note || '').trim();
-      text = text.replace(/^(?:\[?\d{1,2}[:.]\d{2}\s*(?:am|pm)?\]?[:.-]?\s*|at\s+\d{1,2}[:.]\d{2}\s*(?:am|pm)?[:,-]?\s*)/i, '');
-      text = text.replace(/^(?:\d+[:.]|\*|-|•)\s*/g, '');
-      text = text.replace(/^(bug|issue|defect|error|problem|note|encountered|found|description):\s*/i, '');
-      const step = b.stepTitle ? ` [Step: ${b.stepTitle}]` : '';
-      return `    - ${step} ${text}`;
-    }).filter(Boolean);
+  // Label every CUJ (F1, F2, ...) and number its bugs (#1, #2, ...) so the model reports
+  // exactly which bugs each issue covers - that is how dropped issues are detected.
+  const labeledFeatures: LabeledFeature[] = featuresWithBugs
+    .map(f => ({
+      featureName: f.featureName,
+      healthScorePct: f.healthScorePct,
+      notes: (f.bugs || [])
+        .map(b => ({ note: cleanNoteForPrompt(b.note), step: (b.stepTitle || '').replace(/\s+/g, ' ').trim() }))
+        .filter(b => b.note.length > 0)
+    }))
+    .filter(f => f.notes.length > 0)
+    .map((f, i) => ({
+      id: `F${i + 1}`,
+      featureName: f.featureName,
+      healthScorePct: f.healthScorePct,
+      bugs: f.notes.map((b, j) => ({ n: j + 1, note: b.note, step: b.step }))
+    }));
 
-    return `Feature: "${f.featureName}" (Pass Rate: ${f.healthScorePct}%, Bugs Logged: ${f.bugCount})\n${bugNotes.join('\n')}`;
+  // Format all defect logs cleanly grouped by feature
+  const formattedFeaturesList = labeledFeatures.map(f => {
+    const bugLines = f.bugs.map(b => {
+      const step = b.step && b.step.toLowerCase() !== f.featureName.toLowerCase() ? `[Step: ${b.step}] ` : '';
+      return `  #${b.n} ${step}${b.note}`;
+    });
+    return `${f.id}: "${f.featureName}" (pass rate ${f.healthScorePct}%, ${f.bugs.length} bug${f.bugs.length === 1 ? '' : 's'})\n${bugLines.join('\n')}`;
   }).join('\n\n');
 
   const cleanFeaturesSummary = healthyFeatures.length > 0
     ? healthyFeatures.map(f => f.featureName).join(', ')
     : 'None';
 
+  const buildOfflineOverall = (): string => {
+    const allNotes = allBugs.map(b => b.note).filter(Boolean);
+    const featureNamesWithBugs = featuresWithBugs.map(f => f.featureName);
+    const cleanFeatureNames = healthyFeatures.map(f => f.featureName);
+    return allNotes.length > 0
+      ? synthesizeExecutiveOverview(allNotes, featureNamesWithBugs, cleanFeatureNames)
+      : (cleanFeatureNames.length > 0
+          ? `Testing completed with 100% pass rate across active CUJ flows (${cleanFeatureNames.slice(0, 3).join(', ')}). No functional regressions or blocking defects identified✅.`
+          : '');
+  };
+
   const userApiKey = getStoredGeminiApiKey();
   const preferredModel = getStoredGeminiModel();
-  let lastErrorMessage = '';
+  const failures: string[] = [];
 
   // Instant return on an unchanged dataset - avoids a multi-second round trip entirely.
   // PROMPT_STYLE_VERSION is part of the key so that changing the summary prompt/tone
@@ -906,194 +1343,130 @@ export async function generateBatchExecutiveSummaryWithGemini(
     };
   }
 
-  if (userApiKey) {
-    // Attempt the selected model first, then a single fast fallback.
-    // Long sequential chains were the main cause of multi-minute waits on a bad key.
-    const modelsToTry = [preferredModel];
-    if (!modelsToTry.includes('gemini-2.0-flash')) modelsToTry.push('gemini-2.0-flash');
+  if (userApiKey && labeledFeatures.length > 0) {
+    const prompt = `You are a senior QA lead writing today's CUJ (critical user journey) bug report for engineering leadership.
 
-    const prompt = `You are a Senior Principal QA Architect distilling field defect logs to produce a high-impact, professional executive CUJ summary report for engineering leadership.
+Below are TODAY'S bug reports, grouped by CUJ. Each CUJ has an ID (F1, F2, ...) and its bugs are numbered #1, #2, ... (the numbering restarts in every CUJ). Testers type notes quickly, so expect typos, shorthand, internal acronyms, and stray times of day such as "10.48am" or "1.18" - ignore the times.
 
-TODAY'S TEST EXECUTION DATA:
-- Clean / Passing CUJs (100% Pass, 0 Bugs): ${cleanFeaturesSummary}
-- CUJs with Defects or Regressions (${featuresWithBugs.length} features):
-${formattedFeaturesList || 'No defect logs'}
+CLEAN CUJs (passed with no bugs today): ${cleanFeaturesSummary}
 
-GOAL:
-Synthesize an executive-ready, highly informative, and technically precise QA summary matching the exact style, tone, and depth of the reference benchmarks below.
+CUJs WITH BUGS (${labeledFeatures.length}):
+${formattedFeaturesList}
 
-CRITICAL NOTICE: The benchmarks below are purely illustrations of the required EXECUTIVE TONE, SENTENCE STRUCTURE, and ACTIVE SOFTWARE ENGINEERING VOCABULARY. Do NOT copy specific product names or entities from the benchmarks. Ground 100% of your output in TODAY'S test execution data above.
+TASK 1 - "features": a complete, de-duplicated issue list for EVERY CUJ above.
+- Read every bug. One note can describe several problems - split them into separate issues (e.g. "latency and it couldn't connect to the camera" is two issues).
+- Merge bugs that describe the same problem into ONE issue and list ALL of their numbers in "bugIds".
+- COVERAGE IS MANDATORY: every bug number of a CUJ must appear in at least one of that CUJ's issues. Never drop a problem because it seems minor or was reported only once.
+- "summary" paraphrases the problem as a short noun phrase of roughly 4 to 14 words. Do NOT copy the tester's sentence and do NOT write a full sentence. Style examples: "slow responses of up to 6 seconds", "app closes without responding", "reports success but the action never happens".
+- Keep details that help triage: durations, the trigger or step, and the app or component involved. Keep product names and acronyms exactly as written.
+- No tester names, no times of day, no "I" or "we", no trailing period, and no commas or parentheses inside a summary.
+- Start each summary in lowercase unless its first word is a proper noun or an acronym.
+- Within a CUJ, order issues by how many bugs report them, then by severity (crashes and wrong behaviour before minor annoyances).
+- Use the exact CUJ IDs (F1, F2, ...) as "featureId" and include every CUJ listed above exactly once.
 
-STYLE REFERENCE BENCHMARKS (STUDY THE TONE & STRUCTURE):
+TASK 2 - "overallSummary": an executive overview of today's results (40 to 75 words, 2 to 3 sentences).
+- Sentence 1 (required): lead with the dominant cross-CUJ themes from today's bugs: "Some notable issues include [theme A], [theme B], and [theme C]." You may prepend one short clause about clean CUJs, but never push the issues past sentence two.
+- Sentence 2 (include ONLY if a problem clearly repeats across several CUJs): "There are noticeable common occurrences of [behaviour] when [trigger], which [impact]."
+- Sentence 3 (required): a short positive closing note grounded in today's data, such as the CUJs that ran clean. A trailing checkmark is optional.
+- Concrete triggers and impacts beat abstract adjectives.
 
---- [Style Benchmark 1: Hardware Assistant Device] ---
-Execution Context:
-- Clean / Passing CUJs: Device Pairing, Volume Control
-- CUJs with Defects:
-  Feature: "Voice Translation" (Pass Rate: 80%, Bugs Logged: 2)
-      - [Step: Text to Speech] System responded: "I am unable to translate text on this screen."
-      - [Step: Language Select] Prompted the user to manually specify the target language again.
-  Feature: "Navigation" (Pass Rate: 85%, Bugs Logged: 3)
-      - [Step: Turn by Turn] Session force-closed while providing route instructions.
-      - [Step: Assistant Query] Asking the assistant anything during active guidance froze the unit until restart.
-  Feature: "Media Playback" (Pass Rate: 78%, Bugs Logged: 2)
-      - [Step: Play Request] Assistant began executing the action before the sentence was finished.
-      - [Step: Streaming] Claimed the streaming app was uninstalled while it was open.
+STRICT GROUNDING:
+- Use ONLY the bug reports above. Never invent issues, causes, numbers, products, or improvements that they do not support.
+- Paraphrase faithfully: do not exaggerate (say "crash" only if a crash was reported) and do not soften real failures.
 
-Expected JSON Output:
-{
-  "overallSummary": "Some notable issues include abrupt session terminations during route guidance, explicit refusals to support live translation, and premature action execution during media playback requests. There are noticeable common occurrences of the assistant becoming unresponsive when queried during active navigation, which forces a needed device restart. Noticeable improvements observed across core tool callings.",
-  "featureSummaries": {
-    "Voice Translation": "Explicit refusals to support live translation accompanied by redundant manual language specification prompts.",
-    "Navigation": "Abrupt session termination and forced closure occurring when providing route instructions. Also querying the assistant during active guidance freezes the unit until a device restart.",
-    "Media Playback": "Premature action execution prior to sentence completion during media playback requests. Also falsely asserting that third-party streaming applications are uninstalled."
-  }
-}
+FORMAT EXAMPLE (a different product - copy the structure, never the content):
+Input:
+CLEAN CUJs (passed with no bugs today): Login
+F1: "Photo Upload" (pass rate 60%, 4 bugs)
+  #1 took like 20 sec to upload a photo
+  #2 Upload spinner never stopped, had to restart the app. also slow
+  #3 [Step: Share album] said it shared the album but my friend never got it
+  #4 super slow upload again
+Output:
+{"features":[{"featureId":"F1","issues":[{"bugIds":[1,2,4],"summary":"slow photo uploads taking up to 20 seconds"},{"bugIds":[2],"summary":"upload spinner hangs until the app is restarted"},{"bugIds":[3],"summary":"album share reported as sent but never delivered"}]}],"overallSummary":"Login ran clean, but some notable issues include photo uploads taking up to 20 seconds, an upload spinner that hangs until the app is restarted, and album shares that are reported as sent but never arrive. The Login flow remained stable throughout testing ✅."}
 
---- [Style Benchmark 2: Mobile E-Commerce Application] ---
-Execution Context:
-- Clean / Passing CUJs: User Profile, Product Search
-- CUJs with Defects:
-  Feature: "Checkout & Payments" (Pass Rate: 75%, Bugs Logged: 2)
-      - [Step: Payment Confirmation] Session force-closed when tapping confirm payment.
-  Feature: "Cart Management" (Pass Rate: 90%, Bugs Logged: 2)
-      - [Step: Quantity update] Redundant confirmation popup displayed repeatedly when incrementing quantity.
-      - [Step: Add item] Items from a previously abandoned cart reappeared in the active list.
+Return ONLY the JSON object.`;
 
-Expected JSON Output:
-{
-  "overallSummary": "Some notable issues include abrupt session termination during payment confirmation, redundant confirmation dialogs during cart updates, and context-carryover from previously abandoned sessions. Noticeable improvements observed across checkout stability and active transaction flows.",
-  "featureSummaries": {
-    "Checkout & Payments": "Abrupt session termination and forced closure occurring when tapping confirm payment during checkout.",
-    "Cart Management": "Redundant confirmation dialogs appearing repeatedly when updating line item quantities alongside context-carryover injecting stale items from abandoned sessions."
-  }
-}
+    const startedAt = Date.now();
+    const remainingMs = () => BATCH_TOTAL_BUDGET_MS - (Date.now() - startedAt);
+    const tried = new Set<string>();
+    let stopTrying = false;
 
-CRITICAL ANTI-HALLUCINATION & STRICT DATA GROUNDING RULES:
-1. STRICT GROUNDING & ZERO HALLUCINATION:
-   - Base all statements solely on TODAY'S TEST EXECUTION DATA provided above.
-   - NEVER mention entities, brands, feature names, or bug descriptions from the benchmarks above (e.g., do NOT mention "Warby Parker", "ZI1", "Spotify", "Apple Pay", etc.) UNLESS they explicitly appear in today's data.
-   - If today's data is for a different product or platform, adapt the vocabulary naturally to that domain.
+    const runAttempt = async (modelName: string): Promise<ExecutiveQAResult> => {
+      const callOnce = (withSchema: boolean) =>
+        callGeminiRestApi(userApiKey, modelName, prompt, {
+          asJson: true,
+          timeoutMs: Math.max(BATCH_MIN_ATTEMPT_MS, Math.min(BATCH_ATTEMPT_TIMEOUT_MS, remainingMs())),
+          maxOutputTokens: BATCH_MAX_OUTPUT_TOKENS,
+          responseSchema: withSchema ? BATCH_RESPONSE_SCHEMA : undefined
+        });
 
-2. "overallSummary" - EXECUTIVE QA LEADERSHIP TONE (40 to 75 words, 2 to 3 sentences):
-   - Sentence 1 (REQUIRED): Lead directly with the dominant defect themes. Synthesize 2 to 3 distinct
-     cross-feature themes from TODAY'S bugs: "Some notable issues include [theme A], [theme B], and [theme C]."
-     * If today's clean CUJs are worth calling out, you may prepend one short clause about clean execution -
-       but NEVER let it push the issues past sentence two.
-   - Sentence 2 (INCLUDE ONLY IF a pattern repeats across multiple CUJs or has a clear trigger/workaround):
-     Call out the recurring systemic behaviour with its concrete trigger and user impact:
-     "There are noticeable common occurrences of [behaviour] when [trigger], which [impact/workaround]."
-   - Sentence 3 (REQUIRED): Short forward-looking improvement note, e.g.
-     "Noticeable improvements observed across core tool callings." A trailing checkmark is optional.
-   - Prioritise being digestible: concrete triggers and impacts beat abstract adjectives.
-
-3. "featureSummaries" - PRECISE, DIGESTIBLE DEFECT VOCABULARY:
-   - Provide an entry in "featureSummaries" for EVERY feature listed with defects or notes today.
-   - 10 to 30 words. One sentence, or two when a genuinely distinct secondary defect exists.
-   - OPEN WITH A NOUN PHRASE naming the failure mode, not a subject-verb sentence.
-     Good: "Abrupt session termination and forced closure occurring when...", "Persistent refusals regarding...",
-           "Premature action execution prior to...", "Context-carryover from previous frames causing...",
-           "False claims of lacking...", "Functional failure to...", "Explicit refusals to..."
-     Bad:  "The app crashed when...", "Gemini said it could not..."
-   - JOIN a second related symptom with a connective: "accompanied by", "alongside", "causing",
-     "occurring when", "occurring immediately after", "prior to".
-   - For a genuinely separate secondary defect, add ONE more sentence starting with "Also ...".
-   - RETAIN concrete specifics that aid triage: named third-party apps in parentheses, counts,
-     durations, and the exact trigger step.
-   - Use sophisticated, active software engineering terminology:
-     * When assistant claims it cannot perform a feature: "False claims of lacking [capability]" or "Explicit refusals to [action]".
-     * When unauthorized actions trigger: "Initiating unauthorized [action] instead of [expected action]".
-     * When crashes / force-closes occur: "Abrupt session termination and forced closure occurring when attempting to [action]".
-     * When integrations fail: "Functional failure to [action]" or "Functional failure where the system asserts an inability to [action]".
-     * When unnecessary prompts appear: "Redundant prompting asking users to [action]".
-     * When actions fire before the user finishes speaking: "Premature action execution prior to sentence completion during [flow]".
-     * When stale state bleeds across turns: "Context-carryover from previous frames causing [symptom]".
-     * When audio or voice models glitch: "Unexpected voice transition mid-session accompanied by a failure to [action]".
-     * When guardrails or detections false-alarm: "False [detector name] errors erroneously blocking [legitimate flow]" or "worked fine, however encountered several false positives".
-   - Never copy raw conversational narrative ("I tried", "tester said", "we saw") or timestamps ("1:38 pm", "at 14:00").
-
-4. RETURN FORMAT:
-   Return valid JSON with this exact schema:
-   {
-     "overallSummary": "...",
-     "featureSummaries": {
-       "<FeatureName>": "..."
-     }
-   }
-`;
-
-    for (const modelName of modelsToTry) {
+      let text: string;
       try {
-        const text = await callGeminiRestApi(userApiKey, modelName, prompt, true);
-        if (text) {
-          const parsed = JSON.parse(text);
-          const overall = typeof parsed.overallSummary === 'string' ? parsed.overallSummary.trim() : '';
-          const featureMap: Record<string, string> = {};
-          if (parsed.featureSummaries && typeof parsed.featureSummaries === 'object') {
-            for (const [k, v] of Object.entries(parsed.featureSummaries)) {
-              if (typeof v === 'string') {
-                featureMap[k] = v.trim();
-              }
-            }
-          }
-          const result = {
-            overallSummary: overall,
-            featureSummaries: featureMap,
-            modelUsed: modelName
-          };
+        text = await callOnce(true);
+      } catch (err) {
+        // If this model / API version rejects the schema, retry once in plain JSON mode
+        const schemaRejected = err instanceof GeminiApiError && err.status === 400 &&
+          /schema|unknown name|invalid json payload|propertyordering/i.test(err.message);
+        if (!schemaRejected) throw err;
+        text = await callOnce(false);
+      }
+
+      const assembled = assembleBatchResult(parseJsonLoose(text), labeledFeatures);
+      if (assembled.matchedCount === 0) {
+        throw new Error('AI response did not include any of the CUJs');
+      }
+      if (assembled.uncoveredCount > 0) {
+        console.warn(`Gemini (${modelName}) skipped ${assembled.uncoveredCount} bug(s); they were added from the raw notes.`);
+      }
+      return {
+        overallSummary: assembled.overallSummary || buildOfflineOverall(),
+        featureSummaries: assembled.featureSummaries,
+        modelUsed: modelName
+      };
+    };
+
+    const tryModels = async (models: string[]): Promise<ExecutiveQAResult | null> => {
+      for (const modelName of models) {
+        if (stopTrying) break;
+        if (!modelName || tried.has(modelName)) continue;
+        if (remainingMs() < BATCH_MIN_ATTEMPT_MS) {
+          stopTrying = true;
+          break;
+        }
+        tried.add(modelName);
+        try {
+          const result = await runAttempt(modelName);
           writeBatchCache(cacheKey, result);
           return result;
+        } catch (err: any) {
+          failures.push(`${modelName}: ${err?.message || String(err)}`);
+          console.warn(`Gemini batch executive summary call failed with ${modelName}:`, err);
+          // An invalid API key fails identically for every model - stop right away
+          if (err instanceof GeminiApiError && err.fatal) stopTrying = true;
         }
-      } catch (err: any) {
-        lastErrorMessage = err?.message || String(err);
-        console.warn(`Gemini batch executive summary call failed with ${modelName}:`, err);
       }
-    }
+      return null;
+    };
 
-    // Dynamic auto-discovery: query Google for models supported by this user's API key.
-    // Capped at 2 candidates so a misconfigured key fails fast instead of hanging for minutes.
-    try {
-      const discovery = await discoverAvailableGeminiModels(userApiKey);
-      if (discovery.success && discovery.models.length > 0) {
-        const candidates = discovery.models
-          .filter(m => !modelsToTry.includes(m))
-          .sort((a, b) => {
-            const score = (n: string) => (n.includes('flash') ? 0 : 1);
-            return score(a) - score(b);
-          })
-          .slice(0, 2);
+    // The preferred model first, then current-generation fallbacks
+    const primary = await tryModels([preferredModel, ...FALLBACK_SUMMARY_MODELS]);
+    if (primary) return primary;
 
-        for (const discoveredModel of candidates) {
-          try {
-            const text = await callGeminiRestApi(userApiKey, discoveredModel, prompt, true);
-            if (text) {
-              const parsed = JSON.parse(text);
-              const overall = typeof parsed.overallSummary === 'string' ? parsed.overallSummary.trim() : '';
-              const featureMap: Record<string, string> = {};
-              if (parsed.featureSummaries && typeof parsed.featureSummaries === 'object') {
-                for (const [k, v] of Object.entries(parsed.featureSummaries)) {
-                  if (typeof v === 'string') {
-                    featureMap[k] = v.trim();
-                  }
-                }
-              }
-              const result = {
-                overallSummary: overall,
-                featureSummaries: featureMap,
-                modelUsed: discoveredModel
-              };
-              writeBatchCache(cacheKey, result);
-              return result;
-            }
-          } catch (e: any) {
-            lastErrorMessage = e?.message || String(e);
-          }
+    // Last resort: ask Google which models this key can use and try the two best text models
+    if (!stopTrying && remainingMs() >= BATCH_MIN_ATTEMPT_MS) {
+      try {
+        const discovery = await discoverAvailableGeminiModels(userApiKey);
+        if (discovery.success) {
+          const candidates = rankModelsForSummaries(discovery.models).filter(m => !tried.has(m)).slice(0, 2);
+          const discovered = await tryModels(candidates);
+          if (discovered) return discovered;
+        } else if (discovery.error) {
+          failures.push(`model discovery: ${discovery.error}`);
         }
-      } else if (discovery.error) {
-        lastErrorMessage = discovery.error;
+      } catch (discErr: any) {
+        failures.push(`model discovery: ${discErr?.message || String(discErr)}`);
       }
-    } catch (discErr: any) {
-      lastErrorMessage = discErr?.message || String(discErr);
     }
   }
 
@@ -1104,18 +1477,15 @@ CRITICAL ANTI-HALLUCINATION & STRICT DATA GROUNDING RULES:
     fallbackFeatureMap[f.featureName] = nlpCleanReword(notes, f.featureName);
   });
 
-  const allNotes = allBugs.map(b => b.note).filter(Boolean);
-  const featureNamesWithBugs = featuresWithBugs.map(f => f.featureName);
-  const cleanFeatureNames = healthyFeatures.map(f => f.featureName);
-  const fallbackOverall = allNotes.length > 0
-    ? synthesizeExecutiveOverview(allNotes, featureNamesWithBugs, cleanFeatureNames)
-    : (cleanFeatureNames.length > 0
-        ? `Testing completed with 100% pass rate across active CUJ flows (${cleanFeatureNames.slice(0, 3).join(', ')}). No functional regressions or blocking defects identified✅.`
-        : '');
+  const errorSummary = failures.length === 0
+    ? undefined
+    : failures.length === 1
+    ? failures[0]
+    : `${failures[0]} (+${failures.length - 1} more failed attempt${failures.length - 1 === 1 ? '' : 's'})`;
 
   return {
-    overallSummary: fallbackOverall,
+    overallSummary: buildOfflineOverall(),
     featureSummaries: fallbackFeatureMap,
-    error: lastErrorMessage || (!userApiKey ? 'No API Key configured' : undefined)
+    error: errorSummary || (!userApiKey ? 'No API Key configured' : undefined)
   };
 }
