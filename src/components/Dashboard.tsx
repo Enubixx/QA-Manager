@@ -4,7 +4,7 @@ import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuot
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers, FileSpreadsheet, ExternalLink } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard, copySingleBugToClipboard } from '../utils/exportUtils';
 import { isRunFullyCompleted } from '../utils/runUtils';
-import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel, discoverAvailableGeminiModels, rankModelsForSummaries, DEFAULT_GEMINI_MODEL } from '../services/geminiService';
+import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel, discoverAvailableGeminiModels, rankModelsForSummaries, DEFAULT_GEMINI_MODEL, getGeminiKeyErrorHint } from '../services/geminiService';
 import { GOOGLE_APPS_SCRIPT_CODE } from '../googleAppsScriptCode';
 import { toBlob } from 'html-to-image';
 
@@ -1347,10 +1347,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
           message: `✨ AI Executive Summary generated with ${result.modelUsed}${cacheNote}. Click "Copy Report" when you're ready.`
         });
       } else if (aiFailed) {
+        // Key/project problems get a plain-language fix; other errors show the (redacted) API message
+        const keyHint = getGeminiKeyErrorHint(result.error);
         const shortError = result.error!.length > 180 ? `${result.error!.slice(0, 177)}...` : result.error;
         setSummaryToast({
           type: 'error',
-          message: `⚠️ AI summary failed (${shortError}). A basic offline summary was used instead - check your key and model in Gemini AI settings.`
+          message: keyHint
+            ? `⚠️ AI summary failed: ${keyHint} A basic offline summary was used for now.`
+            : `⚠️ AI summary failed (${shortError}). A basic offline summary was used instead - check your key and model in Gemini AI settings.`
         });
       } else if (!hasApiKey) {
         setSummaryToast({
@@ -4292,9 +4296,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         });
                         if (chosen) setTempModel(chosen);
                       } else {
+                        const keyHint = getGeminiKeyErrorHint(res.error);
                         setTestKeyStatus({
                           success: false,
-                          message: `❌ ${res.error || 'No supported models found for this key.'}`
+                          message: keyHint
+                            ? `❌ ${keyHint} (Google said: ${res.error})`
+                            : `❌ ${res.error || 'No supported models found for this key.'}`
                         });
                       }
                     } catch (e: any) {

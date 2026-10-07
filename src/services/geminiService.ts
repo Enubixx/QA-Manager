@@ -252,8 +252,71 @@ function supportsSamplingParams(model: string): boolean {
   return /^gemini-(?:1|2)\./i.test(model);
 }
 
-function isInvalidApiKeyError(status: number, message: string): boolean {
-  return status === 401 || /API[_ ]?key (?:not valid|invalid|expired)|API_KEY_INVALID|API_KEY_EXPIRED|invalid api key/i.test(message);
+/**
+ * Errors caused by the API key or its Cloud project (invalid, expired, suspended,
+ * leaked, blocked, API disabled...). They fail identically for every model.
+ */
+const KEY_LEVEL_ERROR_PATTERN =
+  /API[_ ]?key (?:not valid|invalid|expired)|API_KEY_INVALID|API_KEY_EXPIRED|invalid api key|suspended|leaked|unrestricted|are blocked|API_KEY_SERVICE_BLOCKED|referr?er|SERVICE_DISABLED|has not been used in project|it is disabled|location is not supported/i;
+
+function isKeyLevelError(status: number, message: string): boolean {
+  return status === 401 || KEY_LEVEL_ERROR_PATTERN.test(message);
+}
+
+function maskApiKey(key: string): string {
+  return `…${key.slice(-4)}`;
+}
+
+/**
+ * Hides API keys in error text. Google echoes the full key in some errors
+ * (e.g. "Consumer 'api_key:…' has been suspended"), and these messages are
+ * shown in toasts and tooltips and written to the console.
+ */
+export function redactApiKeys(text: string, apiKey?: string): string {
+  let out = text || '';
+  const key = (apiKey || '').trim();
+  if (key.length >= 8) {
+    out = out.split(key).join(maskApiKey(key));
+  }
+  return out
+    .replace(/AIza[0-9A-Za-z_-]{20,}/g, m => maskApiKey(m))
+    .replace(/\bAQ\.[0-9A-Za-z_-]{16,}(?:\.[0-9A-Za-z_-]+)*/g, m => maskApiKey(m));
+}
+
+/**
+ * Plain-language fix for errors caused by the API key or its project, or null
+ * when the error is not key-related.
+ */
+export function getGeminiKeyErrorHint(error?: string): string | null {
+  if (!error) return null;
+  if (/suspended/i.test(error)) {
+    return 'Google has suspended this API key or its Cloud project. Create a new key in a new project at aistudio.google.com/apikey.';
+  }
+  if (/leaked/i.test(error)) {
+    return 'Google flagged this API key as leaked. Create a new key at aistudio.google.com/apikey and keep it private.';
+  }
+  if (/API[_ ]?key expired|API_KEY_EXPIRED/i.test(error)) {
+    return 'This API key has expired. Create a new one at aistudio.google.com/apikey.';
+  }
+  if (/API[_ ]?key not valid|API_KEY_INVALID|invalid api key/i.test(error)) {
+    return 'This API key is not valid. Paste it again, or create a new one at aistudio.google.com/apikey.';
+  }
+  if (/unrestricted/i.test(error)) {
+    return 'Google no longer accepts unrestricted keys. In AI Studio, restrict this key to the Gemini API, or create a new key.';
+  }
+  if (/referr?er/i.test(error)) {
+    return "This key's website restrictions block this site. Update the key's restrictions or create a new key.";
+  }
+  if (/SERVICE_DISABLED|has not been used in project|it is disabled/i.test(error)) {
+    return "The Gemini API is not enabled for this key's project. Create a key in AI Studio, which enables it automatically.";
+  }
+  if (/are blocked|API_KEY_SERVICE_BLOCKED/i.test(error)) {
+    return 'This key is not allowed to use the Gemini API. Create a new key at aistudio.google.com/apikey.';
+  }
+  if (/location is not supported/i.test(error)) {
+    return 'The Gemini API is not available in your region.';
+  }
+  return null;
 }
 
 /**
@@ -281,7 +344,8 @@ async function callGeminiRestApi(
   let lastError = '';
 
   for (const version of versions) {
-    const url = `https://generativelanguage.googleapis.com/${version}/models/${cleanModel}:generateContent?key=${key}`;
+    // Key goes in the x-goog-api-key header only - keys in URLs leak into browser logs
+    const url = `https://generativelanguage.googleapis.com/${version}/models/${cleanModel}:generateContent`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -348,14 +412,16 @@ async function callGeminiRestApi(
       }
 
       const errorJson = await response.json().catch(() => null);
-      const message = errorJson?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+      // Google echoes the key in some errors - never let it reach the UI or logs
+      const message = redactApiKeys(errorJson?.error?.message || `HTTP ${response.status}: ${response.statusText}`, key);
       // Only a 404 means "wrong API version for this model" - retry on the other version
       if (response.status === 404) {
         lastError = message;
         continue;
       }
-      // Auth, quota, or payload errors will not be fixed by switching version - fail fast
-      throw new GeminiApiError(message, response.status, isInvalidApiKeyError(response.status, message));
+      // Auth, quota, or payload errors will not be fixed by switching version - fail fast.
+      // Key/project problems (invalid, suspended, leaked...) also rule out every other model.
+      throw new GeminiApiError(message, response.status, isKeyLevelError(response.status, message));
     } catch (err: any) {
       if (err instanceof GeminiApiError) throw err;
       if (err?.name === 'AbortError') {
@@ -382,9 +448,10 @@ export async function discoverAvailableGeminiModels(
   }
 
   const key = apiKey.trim();
+  // Key goes in the x-goog-api-key header only; pageSize avoids missing newer models on page 2
   const endpoints = [
-    `https://generativelanguage.googleapis.com/v1beta/models?key=${key}`,
-    `https://generativelanguage.googleapis.com/v1/models?key=${key}`
+    'https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000',
+    'https://generativelanguage.googleapis.com/v1/models?pageSize=1000'
   ];
 
   let lastError = '';
@@ -411,10 +478,12 @@ export async function discoverAvailableGeminiModels(
         }
       } else {
         const errData = await response.json().catch(() => null);
-        lastError = errData?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+        lastError = redactApiKeys(errData?.error?.message || `HTTP ${response.status}: ${response.statusText}`, key);
+        // A bad / suspended key fails the same way on every API version
+        if (isKeyLevelError(response.status, lastError)) break;
       }
     } catch (err: any) {
-      lastError = err?.message || String(err);
+      lastError = redactApiKeys(err?.message || String(err), key);
     }
   }
 
@@ -1442,7 +1511,7 @@ Return ONLY the JSON object.`;
         } catch (err: any) {
           failures.push(`${modelName}: ${err?.message || String(err)}`);
           console.warn(`Gemini batch executive summary call failed with ${modelName}:`, err);
-          // An invalid API key fails identically for every model - stop right away
+          // Key/project problems (invalid, suspended, leaked...) fail identically for every model - stop right away
           if (err instanceof GeminiApiError && err.fatal) stopTrying = true;
         }
       }
