@@ -13,7 +13,7 @@ const BATCH_CACHE_MAX_ENTRIES = 12;
 
 // Bump whenever the executive summary prompt or tone rules change, so that
 // cached summaries generated under the previous style are not reused.
-const PROMPT_STYLE_VERSION = 'v2-reference-tone';
+const PROMPT_STYLE_VERSION = 'v3-current-day-strict';
 
 function stableHash(input: string): string {
   let h1 = 0xdeadbeef;
@@ -856,7 +856,7 @@ export async function generateBatchExecutiveSummaryWithGemini(
   allBugs: BugLog[] = []
 ): Promise<ExecutiveQAResult> {
   const healthyFeatures = features.filter(f => f.healthScorePct === 100 && (!f.bugs || f.bugs.length === 0));
-  const featuresWithBugs = features.filter(f => f.bugCount > 0 || (f.bugs && f.bugs.length > 0) || f.healthScorePct < 100);
+  const featuresWithBugs = features.filter(f => f.bugs && f.bugs.length > 0);
 
   if (featuresWithBugs.length === 0 && allBugs.length === 0) {
     const cleanList = healthyFeatures.map(f => f.featureName);

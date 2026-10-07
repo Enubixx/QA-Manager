@@ -746,7 +746,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   bugLogs.forEach(bug => {
     if (selectedDailySessionDate !== 'all') {
       const bugDate = bug.timestamp ? getLocalDateStr(bug.timestamp) : '';
-      if (bugDate && bugDate !== selectedDailySessionDate) return;
+      if (!bugDate || bugDate !== selectedDailySessionDate) return;
     }
 
     // Defect belongs to the selected session date (or all dates)
@@ -1133,31 +1133,44 @@ export const Dashboard: React.FC<DashboardProps> = ({
       const warningList = featureMetricsList.filter(m => m.status === 'warning');
       const healthyList = featureMetricsList.filter(m => m.status === 'healthy');
 
-      // Extract all features & bugs for the dedicated Gemini sub-task
-      const allBugs = featureMetricsList.flatMap(m => m.associatedBugs || []);
+      // Extract all features & bugs for the dedicated Gemini sub-task (strictly scoped to current day)
+      const targetSummaryDate = selectedDailySessionDate === 'all' ? todayStr : selectedDailySessionDate;
+      const isBugFromTargetDay = (b: BugLog) => {
+        if (!b.timestamp) return false;
+        return getLocalDateStr(b.timestamp) === targetSummaryDate;
+      };
+
       const featuresPayload = featureMetricsList.map(m => {
-        const bugsForFeature = (m.associatedBugs && m.associatedBugs.length > 0)
-          ? m.associatedBugs
-          : bugLogs.filter(b => b.feature && b.feature.trim().toLowerCase() === m.featureName.trim().toLowerCase());
+        const bugsForFeature = (m.associatedBugs || []).filter(isBugFromTargetDay);
         return {
           featureName: m.featureName,
           status: m.status,
           healthScorePct: m.healthScorePct,
           greenCount: m.greenCount,
           totalStepsExecuted: m.totalStepsExecuted,
-          bugCount: m.bugCount || bugsForFeature.length,
+          bugCount: bugsForFeature.length,
           bugs: bugsForFeature
         };
       });
 
-      // Spin up dedicated subtask prompt to Gemini
-      const effectiveBugs = allBugs.length > 0 ? allBugs : bugLogs;
-      const result = await generateBatchExecutiveSummaryWithGemini(featuresPayload, effectiveBugs);
+      const allBugs = featuresPayload.flatMap(f => f.bugs);
+
+      // Spin up dedicated subtask prompt to Gemini using ONLY current-day bugs
+      const result = await generateBatchExecutiveSummaryWithGemini(featuresPayload, allBugs);
       const overallGeminiSummary = result.overallSummary;
       const featureSummaryMap = result.featureSummaries;
 
-      // Helper to cleanly retrieve or synthesize summary for any feature with bugs
+      // Helper to cleanly retrieve or synthesize summary strictly from current-day bugs
       const getFeatureSummary = (metric: FeatureMetric): string => {
+        const bugs = (metric.associatedBugs || []).filter(isBugFromTargetDay);
+        if (bugs.length === 0) {
+          if (metric.redCount > 0 || metric.yellowCount > 0) {
+            const count = metric.redCount + metric.yellowCount;
+            return `${count} step failure${count > 1 ? 's' : ''}`;
+          }
+          return '';
+        }
+
         let summary = featureSummaryMap[metric.featureName];
         if (!summary) {
           const match = Object.entries(featureSummaryMap).find(
@@ -1166,15 +1179,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           if (match && match[1]) summary = match[1];
         }
         if (!summary) {
-          const bugs = (metric.associatedBugs && metric.associatedBugs.length > 0)
-            ? metric.associatedBugs
-            : bugLogs.filter(b => b.feature && b.feature.trim().toLowerCase() === metric.featureName.trim().toLowerCase());
-          if (bugs.length > 0) {
-            summary = nlpCleanReword(bugs.map(b => b.note).filter(Boolean), metric.featureName);
-          } else if (metric.redCount > 0 || metric.yellowCount > 0) {
-            const count = metric.redCount + metric.yellowCount;
-            summary = `${count} step failure${count > 1 ? 's' : ''}`;
-          }
+          summary = nlpCleanReword(bugs.map(b => b.note).filter(Boolean), metric.featureName);
         }
         return summary || '';
       };

@@ -274,49 +274,78 @@ export function formatBugsToText(bugs: BugLog[], filterOptions?: BugCopyFilterOp
     };
   }
 
-  // 1. Plain Text Output
-  let plainText = '';
-  bugs.forEach((bug, idx) => {
-    const ts = getFormattedTimestamp(bug);
-    const feature = bug.feature || 'General';
-    const description = bug.note || 'No description attached.';
-    const publicImageUrl = getBugPublicImageUrl(bug);
-    const { bugType, priority, status } = getBugCategorization(bug);
-
-    plainText += `[${bugType}] [${priority}] [${status}] [${ts}] Feature: ${feature}\n`;
-    plainText += `Description: ${description}\n`;
-    if (publicImageUrl) {
-      plainText += `Screenshot: ${publicImageUrl}\n`;
+  // Group bugs by the person who filed them (case-insensitive grouping, sorted alphabetically by name)
+  const groupedMap = new Map<string, { displayName: string; bugs: BugLog[] }>();
+  bugs.forEach(bug => {
+    const rawName = (bug.testerName || 'Unassigned').trim() || 'Unassigned';
+    const key = rawName.toLowerCase();
+    if (!groupedMap.has(key)) {
+      groupedMap.set(key, { displayName: rawName, bugs: [] });
     }
-    if (idx < bugs.length - 1) {
-      plainText += `\n`;
+    groupedMap.get(key)!.bugs.push(bug);
+  });
+
+  const sortedGroups = Array.from(groupedMap.values()).sort((a, b) =>
+    a.displayName.localeCompare(b.displayName, undefined, { sensitivity: 'base' })
+  );
+
+  // 1. Plain Text Output (Grouped by individual)
+  let plainText = '';
+  sortedGroups.forEach((group, groupIdx) => {
+    plainText += `${group.displayName}\n\n`;
+    group.bugs.forEach((bug, idx) => {
+      const ts = getFormattedTimestamp(bug);
+      const feature = bug.feature || 'General';
+      const description = bug.note || 'No description attached.';
+      const publicImageUrl = getBugPublicImageUrl(bug);
+      const { bugType, priority, status } = getBugCategorization(bug);
+
+      plainText += `[${bugType}] [${priority}] [${status}] [${ts}] Feature: ${feature}\n`;
+      plainText += `Description: ${description}\n`;
+      if (publicImageUrl) {
+        plainText += `Screenshot: ${publicImageUrl}\n`;
+      }
+      if (idx < group.bugs.length - 1) {
+        plainText += `\n`;
+      }
+    });
+
+    if (groupIdx < sortedGroups.length - 1) {
+      plainText += `\n\n`;
     }
   });
 
-  // 2. Rich HTML Output for Google Docs (smart badge pills + clean style + inline screenshots)
+  // 2. Rich HTML Output for Google Docs (Grouped by individual with smart badge pills + inline screenshots)
   let htmlText = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5; max-width: 680px;">`;
-  bugs.forEach((bug, idx) => {
-    const ts = getFormattedTimestamp(bug);
-    const feature = bug.feature || 'General';
-    const description = (bug.note || 'No description attached.').replace(/\n/g, '<br/>');
-    const publicImageUrl = getBugPublicImageUrl(bug);
-    const { bugType, priority, status } = getBugCategorization(bug);
-    const badgeHtml = getSmartBadgeHtml(bugType, priority, status);
+  sortedGroups.forEach((group, groupIdx) => {
+    htmlText += `<div style="${groupIdx > 0 ? 'margin-top: 28px; padding-top: 16px; border-top: 2px solid #cbd5e1;' : 'margin-top: 0;'}">`;
+    htmlText += `<div style="font-size: 16px; font-weight: 800; color: #0f172a; margin-bottom: 12px;">${group.displayName}</div>`;
 
-    htmlText += `<div style="margin-bottom: 16px; padding-bottom: 12px; ${idx < bugs.length - 1 ? 'border-bottom: 1px solid #f1f5f9;' : ''}">`;
-    htmlText += `<div style="font-size: 13px; font-weight: 700; color: #0f172a; margin-bottom: 4px;">`;
-    htmlText += `${badgeHtml}`;
-    htmlText += `<span style="color: #475569; font-weight: 600;">[${ts}]</span> `;
-    htmlText += `<span style="color: #4f46e5; font-weight: 700;">Feature: ${feature}</span>`;
-    htmlText += `</div>`;
-    htmlText += `<div style="margin: 4px 0; font-size: 13px; color: #1e293b;">`;
-    htmlText += `<b>Description:</b> ${description}`;
-    htmlText += `</div>`;
-    if (publicImageUrl) {
-      htmlText += `<div style="margin-top: 8px;">`;
-      htmlText += `<img src="${publicImageUrl}" alt="Bug Screenshot" width="450" style="max-width: 450px; width: 100%; height: auto; border-radius: 6px; display: block; border: 1px solid #cbd5e1;" />`;
+    group.bugs.forEach((bug, idx) => {
+      const ts = getFormattedTimestamp(bug);
+      const feature = bug.feature || 'General';
+      const description = (bug.note || 'No description attached.').replace(/\n/g, '<br/>');
+      const publicImageUrl = getBugPublicImageUrl(bug);
+      const { bugType, priority, status } = getBugCategorization(bug);
+      const badgeHtml = getSmartBadgeHtml(bugType, priority, status);
+
+      htmlText += `<div style="margin-bottom: 16px; padding-bottom: 12px; ${idx < group.bugs.length - 1 ? 'border-bottom: 1px solid #f1f5f9;' : ''}">`;
+      htmlText += `<div style="font-size: 13px; font-weight: 700; color: #0f172a; margin-bottom: 4px;">`;
+      htmlText += `${badgeHtml}`;
+      htmlText += `<span style="color: #475569; font-weight: 600;">[${ts}]</span> `;
+      htmlText += `<span style="color: #4f46e5; font-weight: 700;">Feature: ${feature}</span>`;
       htmlText += `</div>`;
-    }
+      htmlText += `<div style="margin: 4px 0; font-size: 13px; color: #1e293b;">`;
+      htmlText += `<b>Description:</b> ${description}`;
+      htmlText += `</div>`;
+      if (publicImageUrl) {
+        htmlText += `<div style="margin-top: 8px;">`;
+        htmlText += `<img src="${publicImageUrl}" alt="Bug Screenshot" width="450" style="max-width: 450px; width: 100%; height: auto; border-radius: 6px; display: block; border: 1px solid #cbd5e1;" />`;
+        htmlText += `</div>`;
+      }
+      htmlText += `</div>`;
+    });
+
     htmlText += `</div>`;
   });
   htmlText += `</div>`;
