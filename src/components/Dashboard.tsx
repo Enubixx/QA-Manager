@@ -1,10 +1,11 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota } from '../types';
-import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers, FileSpreadsheet, ExternalLink } from 'lucide-react';
+import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers, FileSpreadsheet, ExternalLink, MessageSquareText, ClipboardPaste } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard, copySingleBugToClipboard } from '../utils/exportUtils';
 import { isRunFullyCompleted } from '../utils/runUtils';
-import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel, discoverAvailableGeminiModels, rankModelsForSummaries, DEFAULT_GEMINI_MODEL, getGeminiKeyErrorHint } from '../services/geminiService';
+import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel, discoverAvailableGeminiModels, rankModelsForSummaries, DEFAULT_GEMINI_MODEL, getGeminiKeyErrorHint, buildChatSummaryPrompt, applyChatSummaryReply } from '../services/geminiService';
+import type { ExecutiveQAResult } from '../services/geminiService';
 import { GOOGLE_APPS_SCRIPT_CODE } from '../googleAppsScriptCode';
 import { toBlob } from 'html-to-image';
 
@@ -374,6 +375,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [isTestingKey, setIsTestingKey] = useState<boolean>(false);
   const [testKeyStatus, setTestKeyStatus] = useState<{ success: boolean; message: string; models?: string[] } | null>(null);
   const [summaryToast, setSummaryToast] = useState<{ type: 'success' | 'warning' | 'error'; message: string } | null>(null);
+  // "AI Chat" flow: copy a prompt into any AI chat, paste its reply back - no API key needed
+  const [isChatSummaryOpen, setIsChatSummaryOpen] = useState<boolean>(false);
+  const [chatReplyText, setChatReplyText] = useState<string>('');
+  const [chatPromptCopied, setChatPromptCopied] = useState<boolean>(false);
+  const [chatStatus, setChatStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [isVisualSnapshotModalOpen, setIsVisualSnapshotModalOpen] = useState<boolean>(false);
   const [selectedImagePreviewUrl, setSelectedImagePreviewUrl] = useState<string | null>(null);
 
@@ -1123,8 +1129,40 @@ export const Dashboard: React.FC<DashboardProps> = ({
     };
   }, [sessionCompletedRuns, testPlans]);
 
-  const handleExecuteCopyReport = async (skipKeyCheck: boolean = false) => {
-    if (!skipKeyCheck && !getStoredGeminiApiKey()) {
+  /**
+   * Current-day bugs per CUJ - the only data AI summaries may use. Shared by the Gemini
+   * path and the AI-chat path so the prompt and the pasted reply always match.
+   */
+  const buildDailySummaryPayload = () => {
+    const targetSummaryDate = selectedDailySessionDate === 'all' ? todayStr : selectedDailySessionDate;
+    const isBugFromTargetDay = (b: BugLog) => {
+      if (!b.timestamp) return false;
+      return getLocalDateStr(b.timestamp) === targetSummaryDate;
+    };
+
+    const featuresPayload = featureMetricsList.map(m => {
+      const bugsForFeature = (m.associatedBugs || []).filter(isBugFromTargetDay);
+      return {
+        featureName: m.featureName,
+        status: m.status,
+        healthScorePct: m.healthScorePct,
+        greenCount: m.greenCount,
+        totalStepsExecuted: m.totalStepsExecuted,
+        bugCount: bugsForFeature.length,
+        bugs: bugsForFeature
+      };
+    });
+
+    const allBugs = featuresPayload.flatMap(f => f.bugs);
+    return { targetSummaryDate, isBugFromTargetDay, featuresPayload, allBugs };
+  };
+
+  /**
+   * Builds the CUJ report. Pass `precomputedResult` (a pasted AI-chat reply) to skip
+   * the Gemini API entirely - no key needed.
+   */
+  const handleExecuteCopyReport = async (skipKeyCheck: boolean = false, precomputedResult?: ExecutiveQAResult) => {
+    if (!skipKeyCheck && !precomputedResult && !getStoredGeminiApiKey()) {
       setTempApiKey(getStoredGeminiApiKey());
       setIsApiKeyModalOpen(true);
       return;
@@ -1145,29 +1183,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
       const healthyList = featureMetricsList.filter(m => m.status === 'healthy');
 
       // Extract all features & bugs for the dedicated Gemini sub-task (strictly scoped to current day)
-      const targetSummaryDate = selectedDailySessionDate === 'all' ? todayStr : selectedDailySessionDate;
-      const isBugFromTargetDay = (b: BugLog) => {
-        if (!b.timestamp) return false;
-        return getLocalDateStr(b.timestamp) === targetSummaryDate;
-      };
+      const { isBugFromTargetDay, featuresPayload, allBugs } = buildDailySummaryPayload();
 
-      const featuresPayload = featureMetricsList.map(m => {
-        const bugsForFeature = (m.associatedBugs || []).filter(isBugFromTargetDay);
-        return {
-          featureName: m.featureName,
-          status: m.status,
-          healthScorePct: m.healthScorePct,
-          greenCount: m.greenCount,
-          totalStepsExecuted: m.totalStepsExecuted,
-          bugCount: bugsForFeature.length,
-          bugs: bugsForFeature
-        };
-      });
-
-      const allBugs = featuresPayload.flatMap(f => f.bugs);
-
-      // Spin up dedicated subtask prompt to Gemini using ONLY current-day bugs
-      const result = await generateBatchExecutiveSummaryWithGemini(featuresPayload, allBugs);
+      // Spin up dedicated subtask prompt to Gemini using ONLY current-day bugs,
+      // unless the summary was already written by an AI chat and pasted back
+      const result = precomputedResult ?? await generateBatchExecutiveSummaryWithGemini(featuresPayload, allBugs);
       const overallGeminiSummary = result.overallSummary;
       const featureSummaryMap = result.featureSummaries;
 
@@ -1353,7 +1373,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         setSummaryToast({
           type: 'error',
           message: keyHint
-            ? `⚠️ AI summary failed: ${keyHint} A basic offline summary was used for now.`
+            ? `⚠️ AI summary failed: ${keyHint} A basic offline summary was used - or click "AI Chat" to summarize without a key.`
             : `⚠️ AI summary failed (${shortError}). A basic offline summary was used instead - check your key and model in Gemini AI settings.`
         });
       } else if (!hasApiKey) {
@@ -1375,6 +1395,77 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   const handleGenerateSummary = () => {
     handleExecuteCopyReport(false);
+  };
+
+  /** Copies plain text, falling back to a hidden textarea when the async clipboard API is blocked. */
+  const copyPlainText = async (text: string): Promise<boolean> => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (err) {}
+      document.body.removeChild(ta);
+      return ok;
+    }
+  };
+
+  const openChatSummary = () => {
+    setChatStatus(null);
+    setChatPromptCopied(false);
+    setIsChatSummaryOpen(true);
+  };
+
+  /** AI Chat step 1: copy the same prompt the Gemini API would receive. */
+  const handleCopyChatPrompt = async () => {
+    const { targetSummaryDate, featuresPayload, allBugs } = buildDailySummaryPayload();
+    const built = buildChatSummaryPrompt(featuresPayload, allBugs);
+    if (!built) {
+      setChatStatus({ type: 'error', message: `No bug notes were logged on ${targetSummaryDate}, so there is nothing for the AI to summarize.` });
+      return;
+    }
+    const copied = await copyPlainText(built.prompt);
+    setChatPromptCopied(copied);
+    setChatStatus(copied
+      ? { type: 'success', message: `Prompt copied - ${built.bugCount} bug${built.bugCount === 1 ? '' : 's'} across ${built.cujCount} CUJ${built.cujCount === 1 ? '' : 's'} from ${targetSummaryDate}. Paste it into your AI chat.` }
+      : { type: 'error', message: 'Your browser blocked the copy. Click "Copy prompt" again.' });
+  };
+
+  const handlePasteChatReplyFromClipboard = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text && text.trim()) {
+        setChatReplyText(text);
+        setChatStatus(null);
+      } else {
+        setChatStatus({ type: 'error', message: "Your clipboard is empty - copy the AI's reply first." });
+      }
+    } catch (e) {
+      setChatStatus({ type: 'error', message: 'Your browser blocked clipboard access - click in the box and paste (⌘V / Ctrl+V) instead.' });
+    }
+  };
+
+  /** AI Chat step 3: check the pasted reply against today's bugs and build the report from it. */
+  const handleBuildReportFromChatReply = async () => {
+    const { featuresPayload, allBugs } = buildDailySummaryPayload();
+    let result: ExecutiveQAResult;
+    try {
+      result = applyChatSummaryReply(featuresPayload, allBugs, chatReplyText);
+    } catch (e: any) {
+      setChatStatus({ type: 'error', message: e?.message || "Couldn't read the AI's reply." });
+      return;
+    }
+    setIsChatSummaryOpen(false);
+    setChatReplyText('');
+    setChatStatus(null);
+    setChatPromptCopied(false);
+    await handleExecuteCopyReport(true, result);
   };
 
   /**
@@ -3100,6 +3191,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <span className={`w-1.5 h-1.5 rounded-full ${getStoredGeminiApiKey() ? 'bg-emerald-400 shadow-sm shadow-emerald-400/50' : 'bg-amber-400'}`} />
                   </button>
 
+                  {/* AI Chat - summarize with any AI chat, no API key needed */}
+                  <button
+                    type="button"
+                    onClick={openChatSummary}
+                    disabled={isGeneratingSummary}
+                    className="no-capture px-2.5 h-9 bg-slate-900/60 hover:bg-slate-800/80 text-slate-300 hover:text-white border border-white/10 rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="No API key? Summarize with any AI chat: copy a prompt, paste the reply back"
+                  >
+                    <MessageSquareText className="w-3 h-3 text-cyan-300" />
+                    <span className="hidden sm:inline text-[11px] font-mono">AI Chat</span>
+                  </button>
+
                   {/* Export PNG Image Button */}
                   <button
                     type="button"
@@ -4268,6 +4371,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   Google AI Studio
                 </a>.
               </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsApiKeyModalOpen(false);
+                  openChatSummary();
+                }}
+                className="text-[11px] text-cyan-300 hover:text-cyan-200 font-semibold underline underline-offset-2 transition"
+              >
+                Can't get a key? Summarize with an AI chat instead →
+              </button>
             </div>
 
             <div className="space-y-1.5">
@@ -4418,6 +4531,114 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-extrabold shadow-lg shadow-purple-500/20 active:scale-95 transition"
               >
                 Save & Run AI Summary
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.getElementById('modal-portal') || document.body
+      )}
+
+      {/* AI Chat (no API key) Modal Portal */}
+      {isChatSummaryOpen && createPortal(
+        <div
+          onClick={() => setIsChatSummaryOpen(false)}
+          className="fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md"
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="liquid-glass-panel rounded-3xl p-6 max-w-lg w-full border border-cyan-500/30 shadow-2xl bg-slate-900/95 space-y-4 text-left animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto"
+          >
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-cyan-500/20 text-cyan-300 rounded-xl border border-cyan-500/30">
+                  <MessageSquareText className="w-4 h-4 text-cyan-300" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-black text-white">Summarize with an AI chat</h4>
+                  <p className="text-[11px] text-slate-400 font-medium">No API key needed - use any AI chat you're allowed to use</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsChatSummaryOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              <p className="text-[11px] font-bold text-slate-300">1. Copy the prompt (the day's bugs plus instructions)</p>
+              <button
+                type="button"
+                onClick={handleCopyChatPrompt}
+                className={`px-3.5 py-2 rounded-xl text-xs font-extrabold flex items-center gap-1.5 border transition active:scale-95 ${
+                  chatPromptCopied
+                    ? 'bg-emerald-500/15 text-emerald-200 border-emerald-400/40'
+                    : 'bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-200 border-cyan-400/40'
+                }`}
+              >
+                {chatPromptCopied ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{chatPromptCopied ? 'Prompt copied - click to copy again' : 'Copy prompt'}</span>
+              </button>
+            </div>
+
+            <div className="space-y-1">
+              <p className="text-[11px] font-bold text-slate-300">2. Paste it into an AI chat and send it</p>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                For example the Gemini app or your coding assistant. Then copy the AI's whole reply - it's a block of JSON.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] font-bold text-slate-300">3. Paste the reply here</p>
+                <button
+                  type="button"
+                  onClick={handlePasteChatReplyFromClipboard}
+                  className="text-[10px] text-cyan-300 hover:text-cyan-200 font-semibold flex items-center gap-1 transition"
+                >
+                  <ClipboardPaste className="w-3 h-3" />
+                  <span>Paste from clipboard</span>
+                </button>
+              </div>
+              <textarea
+                value={chatReplyText}
+                onChange={e => {
+                  setChatReplyText(e.target.value);
+                  setChatStatus(null);
+                }}
+                placeholder='{"reportId": "QA-...", "features": [...], "overallSummary": "..."}'
+                rows={6}
+                className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-3 py-2 text-[11px] text-white font-mono placeholder-slate-600 focus:outline-none resize-y"
+              />
+            </div>
+
+            {chatStatus && (
+              <div className={`p-2 rounded-lg text-[10.5px] border leading-relaxed ${
+                chatStatus.type === 'success'
+                  ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                  : 'bg-rose-950/60 border-rose-500/40 text-rose-300'
+              }`}>
+                {chatStatus.message}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-white/10">
+              <button
+                type="button"
+                onClick={() => setIsChatSummaryOpen(false)}
+                className="px-3.5 py-2 text-xs font-semibold text-slate-400 hover:text-white transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!chatReplyText.trim() || isGeneratingSummary}
+                onClick={handleBuildReportFromChatReply}
+                className="px-4 py-2 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white rounded-xl text-xs font-extrabold shadow-lg shadow-cyan-500/20 active:scale-95 transition disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Build Report
               </button>
             </div>
           </div>

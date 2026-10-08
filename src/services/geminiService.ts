@@ -1329,26 +1329,24 @@ function assembleBatchResult(
   return { featureSummaries, overallSummary, matchedCount, uncoveredCount };
 }
 
+/** Everything needed to ask an AI for the batch report and to read its answer back. */
+interface BatchSummaryRequest {
+  labeledFeatures: LabeledFeature[];
+  formattedFeaturesList: string;
+  cleanFeaturesSummary: string;
+  prompt: string;
+  /** Fingerprint of exactly the bugs in the prompt - detects replies to an outdated prompt. */
+  reportId: string;
+  buildOfflineOverall: () => string;
+}
+
 /**
- * Dedicated subtask that extracts all bugs and their features, prompts Gemini with full context,
- * and returns high-quality, structured executive summaries for both overall session and per feature.
+ * Builds the batch-report prompt plus the context needed to map the AI's answer back.
+ * Shared by the Gemini API path and the "paste into any AI chat" path, so both send the same prompt.
  */
-export async function generateBatchExecutiveSummaryWithGemini(
-  features: FeaturePayload[],
-  allBugs: BugLog[] = []
-): Promise<ExecutiveQAResult> {
+function prepareBatchSummaryRequest(features: FeaturePayload[], allBugs: BugLog[]): BatchSummaryRequest {
   const healthyFeatures = features.filter(f => f.healthScorePct === 100 && (!f.bugs || f.bugs.length === 0));
   const featuresWithBugs = features.filter(f => f.bugs && f.bugs.length > 0);
-
-  if (featuresWithBugs.length === 0 && allBugs.length === 0) {
-    const cleanList = healthyFeatures.map(f => f.featureName);
-    return {
-      overallSummary: cleanList.length > 0
-        ? `Testing completed with 100% pass rate across active CUJ flows (${cleanList.slice(0, 3).join(', ')}). No functional regressions or blocking defects identified✅.`
-        : '',
-      featureSummaries: {}
-    };
-  }
 
   // Label every CUJ (F1, F2, ...) and number its bugs (#1, #2, ...) so the model reports
   // exactly which bugs each issue covers - that is how dropped issues are detected.
@@ -1392,28 +1390,7 @@ export async function generateBatchExecutiveSummaryWithGemini(
           : '');
   };
 
-  const userApiKey = getStoredGeminiApiKey();
-  const preferredModel = getStoredGeminiModel();
-  const failures: string[] = [];
-
-  // Instant return on an unchanged dataset - avoids a multi-second round trip entirely.
-  // PROMPT_STYLE_VERSION is part of the key so that changing the summary prompt/tone
-  // invalidates previously cached summaries instead of serving stale-style text.
-  const cacheKey = stableHash(
-    `${PROMPT_STYLE_VERSION}|${userApiKey}|${preferredModel}|${cleanFeaturesSummary}|${formattedFeaturesList}`
-  );
-  const cached = readBatchCache(cacheKey);
-  if (cached) {
-    return {
-      overallSummary: cached.overallSummary,
-      featureSummaries: cached.featureSummaries || {},
-      modelUsed: cached.modelUsed,
-      fromCache: true
-    };
-  }
-
-  if (userApiKey && labeledFeatures.length > 0) {
-    const prompt = `You are a senior QA lead writing today's CUJ (critical user journey) bug report for engineering leadership.
+  const prompt = `You are a senior QA lead writing today's CUJ (critical user journey) bug report for engineering leadership.
 
 Below are TODAY'S bug reports, grouped by CUJ. Each CUJ has an ID (F1, F2, ...) and its bugs are numbered #1, #2, ... (the numbering restarts in every CUJ). Testers type notes quickly, so expect typos, shorthand, internal acronyms, and stray times of day such as "10.48am" or "1.18" - ignore the times.
 
@@ -1456,6 +1433,61 @@ Output:
 
 Return ONLY the JSON object.`;
 
+  const reportId = `QA-${stableHash(`${PROMPT_STYLE_VERSION}|${cleanFeaturesSummary}|${formattedFeaturesList}`)}`;
+
+  return { labeledFeatures, formattedFeaturesList, cleanFeaturesSummary, prompt, reportId, buildOfflineOverall };
+}
+
+/**
+ * Dedicated subtask that extracts all bugs and their features, prompts Gemini with full context,
+ * and returns high-quality, structured executive summaries for both overall session and per feature.
+ */
+export async function generateBatchExecutiveSummaryWithGemini(
+  features: FeaturePayload[],
+  allBugs: BugLog[] = []
+): Promise<ExecutiveQAResult> {
+  const healthyFeatures = features.filter(f => f.healthScorePct === 100 && (!f.bugs || f.bugs.length === 0));
+  const featuresWithBugs = features.filter(f => f.bugs && f.bugs.length > 0);
+
+  if (featuresWithBugs.length === 0 && allBugs.length === 0) {
+    const cleanList = healthyFeatures.map(f => f.featureName);
+    return {
+      overallSummary: cleanList.length > 0
+        ? `Testing completed with 100% pass rate across active CUJ flows (${cleanList.slice(0, 3).join(', ')}). No functional regressions or blocking defects identified✅.`
+        : '',
+      featureSummaries: {}
+    };
+  }
+
+  const {
+    labeledFeatures,
+    formattedFeaturesList,
+    cleanFeaturesSummary,
+    prompt,
+    buildOfflineOverall
+  } = prepareBatchSummaryRequest(features, allBugs);
+
+  const userApiKey = getStoredGeminiApiKey();
+  const preferredModel = getStoredGeminiModel();
+  const failures: string[] = [];
+
+  // Instant return on an unchanged dataset - avoids a multi-second round trip entirely.
+  // PROMPT_STYLE_VERSION is part of the key so that changing the summary prompt/tone
+  // invalidates previously cached summaries instead of serving stale-style text.
+  const cacheKey = stableHash(
+    `${PROMPT_STYLE_VERSION}|${userApiKey}|${preferredModel}|${cleanFeaturesSummary}|${formattedFeaturesList}`
+  );
+  const cached = readBatchCache(cacheKey);
+  if (cached) {
+    return {
+      overallSummary: cached.overallSummary,
+      featureSummaries: cached.featureSummaries || {},
+      modelUsed: cached.modelUsed,
+      fromCache: true
+    };
+  }
+
+  if (userApiKey && labeledFeatures.length > 0) {
     const startedAt = Date.now();
     const remainingMs = () => BATCH_TOTAL_BUDGET_MS - (Date.now() - startedAt);
     const tried = new Set<string>();
@@ -1556,5 +1588,83 @@ Return ONLY the JSON object.`;
     overallSummary: buildOfflineOverall(),
     featureSummaries: fallbackFeatureMap,
     error: errorSummary || (!userApiKey ? 'No API Key configured' : undefined)
+  };
+}
+
+/** Shown as the "model" when the summary came from a pasted AI chat reply. */
+export const CHAT_REPLY_MODEL_LABEL = 'AI chat (pasted reply)';
+
+export interface ChatSummaryPrompt {
+  prompt: string;
+  reportId: string;
+  cujCount: number;
+  bugCount: number;
+}
+
+/**
+ * Prompt for any AI chat (Gemini app, a coding assistant, ...) - no API key needed.
+ * Read the reply back with applyChatSummaryReply. Returns null when there is nothing to summarize.
+ */
+export function buildChatSummaryPrompt(features: FeaturePayload[], allBugs: BugLog[] = []): ChatSummaryPrompt | null {
+  const request = prepareBatchSummaryRequest(features, allBugs);
+  if (request.labeledFeatures.length === 0) return null;
+
+  const prompt = `${request.prompt}
+
+REPORT ID: ${request.reportId}
+This request comes through a chat window, so:
+- Reply with ONLY the JSON object - no explanation before or after it. A single json code block is fine.
+- Add "reportId": "${request.reportId}" as the first field of the JSON object.`;
+
+  return {
+    prompt,
+    reportId: request.reportId,
+    cujCount: request.labeledFeatures.length,
+    bugCount: request.labeledFeatures.reduce((sum, f) => sum + f.bugs.length, 0)
+  };
+}
+
+/**
+ * Reads an AI chat reply to buildChatSummaryPrompt into the same result as the Gemini API
+ * path (every bug covered, duplicates merged with counts). Throws an Error with a
+ * user-facing message when the reply can't be used.
+ */
+export function applyChatSummaryReply(
+  features: FeaturePayload[],
+  allBugs: BugLog[],
+  replyText: string
+): ExecutiveQAResult {
+  const request = prepareBatchSummaryRequest(features, allBugs);
+  if (request.labeledFeatures.length === 0) {
+    throw new Error('There are no bug notes for this day, so there is nothing to summarize.');
+  }
+  if (!replyText || !replyText.trim()) {
+    throw new Error("Paste the AI's reply first.");
+  }
+
+  let parsed: any;
+  try {
+    parsed = parseJsonLoose(replyText);
+  } catch (e) {
+    throw new Error("Couldn't find the JSON in the pasted text. Copy the AI's whole reply and paste it again.");
+  }
+
+  const replyId = typeof parsed?.reportId === 'string' ? parsed.reportId.trim() : '';
+  if (replyId && replyId !== request.reportId) {
+    throw new Error('This reply is for an older prompt - bugs were added or edited since it was copied. Copy the prompt again and send it to the AI.');
+  }
+
+  const assembled = assembleBatchResult(parsed, request.labeledFeatures);
+  if (assembled.matchedCount === 0) {
+    throw new Error("The reply doesn't include summaries for these CUJs. Make sure you pasted the reply to the latest prompt.");
+  }
+  if (assembled.uncoveredCount > 0) {
+    console.warn(`AI chat reply skipped ${assembled.uncoveredCount} bug(s); they were added from the raw notes.`);
+  }
+
+  return {
+    overallSummary: assembled.overallSummary || request.buildOfflineOverall(),
+    featureSummaries: assembled.featureSummaries,
+    modelUsed: CHAT_REPLY_MODEL_LABEL
   };
 }
