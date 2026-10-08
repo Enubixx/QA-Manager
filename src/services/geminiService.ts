@@ -290,7 +290,14 @@ export function redactApiKeys(text: string, apiKey?: string): string {
 export function getGeminiKeyErrorHint(error?: string): string | null {
   if (!error) return null;
   if (/suspended/i.test(error)) {
-    return 'Google has suspended this API key or its Cloud project. Create a new key in a new project at aistudio.google.com/apikey.';
+    // Google names the suspended consumer: "api_key:…" (just this key) or "projects/…" (the whole project)
+    if (/api_key:/i.test(error)) {
+      return 'Google has suspended this API key. Create a new key at aistudio.google.com/apikey - choosing your existing project may work.';
+    }
+    if (/projects\//i.test(error)) {
+      return "Google has suspended this key's Cloud project, so none of its keys will work. Create a key in a different project at aistudio.google.com/apikey.";
+    }
+    return 'Google has suspended this API key or its Cloud project. Create a new key at aistudio.google.com/apikey.';
   }
   if (/leaked/i.test(error)) {
     return 'Google flagged this API key as leaked. Create a new key at aistudio.google.com/apikey and keep it private.';
@@ -1625,6 +1632,23 @@ This request comes through a chat window, so:
 }
 
 /**
+ * True when the text is the copied prompt itself rather than the AI's reply. The prompt
+ * contains a format-example JSON object that would otherwise parse as a "reply".
+ */
+export function isChatSummaryPrompt(text: string): boolean {
+  const t = text || '';
+  // Markers only the prompt has - a reply may still mention "REPORT ID: QA-..." in passing
+  return /FORMAT EXAMPLE \(a different product/.test(t)
+    || (/REPORT ID:\s*QA-/.test(t) && /This request comes through a chat window/.test(t));
+}
+
+/** The reportId an AI chat reply carries, or '' when it has none. */
+export function getChatReplyReportId(text: string): string {
+  const match = (text || '').match(/"reportId"\s*:\s*"([^"]{1,80})"/);
+  return match ? match[1].trim() : '';
+}
+
+/**
  * Reads an AI chat reply to buildChatSummaryPrompt into the same result as the Gemini API
  * path (every bug covered, duplicates merged with counts). Throws an Error with a
  * user-facing message when the reply can't be used.
@@ -1640,6 +1664,9 @@ export function applyChatSummaryReply(
   }
   if (!replyText || !replyText.trim()) {
     throw new Error("Paste the AI's reply first.");
+  }
+  if (isChatSummaryPrompt(replyText)) {
+    throw new Error("That's the prompt itself - send it to the AI, then copy the AI's reply.");
   }
 
   let parsed: any;
