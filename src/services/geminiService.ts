@@ -13,7 +13,7 @@ const BATCH_CACHE_MAX_ENTRIES = 12;
 
 // Bump whenever the executive summary prompt or tone rules change, so that
 // cached summaries generated under the previous style are not reused.
-const PROMPT_STYLE_VERSION = 'v4-structured-issue-coverage';
+const PROMPT_STYLE_VERSION = 'v5-plan-scoped';
 
 function stableHash(input: string): string {
   let h1 = 0xdeadbeef;
@@ -848,7 +848,9 @@ export function extractIntelligentDefectPattern(note: string, featureContext: st
 export function synthesizeExecutiveOverview(
   notes: string[],
   featureNames: string[] = [],
-  cleanFeatures: string[] = []
+  cleanFeatures: string[] = [],
+  // false when nothing in the report completed a step (bug-only CUJs): no "improvements" note
+  includeClosingNote: boolean = true
 ): string {
   if (!notes || notes.length === 0) {
     if (cleanFeatures.length > 0) {
@@ -942,6 +944,9 @@ export function synthesizeExecutiveOverview(
   }
 
   // 3. Constructive closing note
+  if (!includeClosingNote) {
+    return `${issuesSentence}${recurringSentence}`;
+  }
   const cleanNote = cleanFeatures.length > 0
     ? `Noticeable improvements observed across core tool callings, including clean execution in ${cleanFeatures.slice(0, 2).join(' and ')}\u2705.`
     : 'Noticeable improvements observed across core tool callings and active query flows\u2705.';
@@ -1161,6 +1166,20 @@ export interface FeaturePayload {
   bugs: BugLog[];
 }
 
+/**
+ * The report scope a summary is written for (a test plan or all plans, and a day or all days).
+ * `scopeKey` keeps cached summaries and chat report IDs apart per scope; `scopeLabel` is how
+ * the prompt names it, e.g. `the "Smoke Test" test plan (Oct 9, 2026)`.
+ */
+export interface SummaryScopeContext {
+  scopeKey: string;
+  scopeLabel: string;
+}
+
+/** A CUJ that passed every counted step with no bugs (it must have counted steps). */
+const isCleanFeature = (f: FeaturePayload): boolean =>
+  f.healthScorePct === 100 && (!f.bugs || f.bugs.length === 0) && f.totalStepsExecuted > 0;
+
 /** Time budgets for the batch report call (Gemini 3 models think before answering). */
 const BATCH_ATTEMPT_TIMEOUT_MS = 75000;
 const BATCH_TOTAL_BUDGET_MS = 150000;
@@ -1214,6 +1233,7 @@ interface LabeledFeature {
   id: string;
   featureName: string;
   healthScorePct: number;
+  totalStepsExecuted: number;
   bugs: LabeledBug[];
 }
 
@@ -1351,8 +1371,12 @@ interface BatchSummaryRequest {
  * Builds the batch-report prompt plus the context needed to map the AI's answer back.
  * Shared by the Gemini API path and the "paste into any AI chat" path, so both send the same prompt.
  */
-function prepareBatchSummaryRequest(features: FeaturePayload[], allBugs: BugLog[]): BatchSummaryRequest {
-  const healthyFeatures = features.filter(f => f.healthScorePct === 100 && (!f.bugs || f.bugs.length === 0));
+function prepareBatchSummaryRequest(
+  features: FeaturePayload[],
+  allBugs: BugLog[],
+  context?: SummaryScopeContext
+): BatchSummaryRequest {
+  const healthyFeatures = features.filter(isCleanFeature);
   const featuresWithBugs = features.filter(f => f.bugs && f.bugs.length > 0);
 
   // Label every CUJ (F1, F2, ...) and number its bugs (#1, #2, ...) so the model reports
@@ -1361,6 +1385,7 @@ function prepareBatchSummaryRequest(features: FeaturePayload[], allBugs: BugLog[
     .map(f => ({
       featureName: f.featureName,
       healthScorePct: f.healthScorePct,
+      totalStepsExecuted: f.totalStepsExecuted,
       notes: (f.bugs || [])
         .map(b => ({ note: cleanNoteForPrompt(b.note), step: (b.stepTitle || '').replace(/\s+/g, ' ').trim() }))
         .filter(b => b.note.length > 0)
@@ -1370,6 +1395,7 @@ function prepareBatchSummaryRequest(features: FeaturePayload[], allBugs: BugLog[
       id: `F${i + 1}`,
       featureName: f.featureName,
       healthScorePct: f.healthScorePct,
+      totalStepsExecuted: f.totalStepsExecuted,
       bugs: f.notes.map((b, j) => ({ n: j + 1, note: b.note, step: b.step }))
     }));
 
@@ -1379,7 +1405,10 @@ function prepareBatchSummaryRequest(features: FeaturePayload[], allBugs: BugLog[
       const step = b.step && b.step.toLowerCase() !== f.featureName.toLowerCase() ? `[Step: ${b.step}] ` : '';
       return `  #${b.n} ${step}${b.note}`;
     });
-    return `${f.id}: "${f.featureName}" (pass rate ${f.healthScorePct}%, ${f.bugs.length} bug${f.bugs.length === 1 ? '' : 's'})\n${bugLines.join('\n')}`;
+    const bugsLabel = `${f.bugs.length} bug${f.bugs.length === 1 ? '' : 's'}`;
+    // Bugs on a CUJ with no completed steps in this report: there is no pass rate to show
+    const stats = f.totalStepsExecuted > 0 ? `pass rate ${f.healthScorePct}%, ${bugsLabel}` : `no completed steps, ${bugsLabel}`;
+    return `${f.id}: "${f.featureName}" (${stats})\n${bugLines.join('\n')}`;
   }).join('\n\n');
 
   const cleanFeaturesSummary = healthyFeatures.length > 0
@@ -1391,17 +1420,18 @@ function prepareBatchSummaryRequest(features: FeaturePayload[], allBugs: BugLog[
     const featureNamesWithBugs = featuresWithBugs.map(f => f.featureName);
     const cleanFeatureNames = healthyFeatures.map(f => f.featureName);
     return allNotes.length > 0
-      ? synthesizeExecutiveOverview(allNotes, featureNamesWithBugs, cleanFeatureNames)
+      ? synthesizeExecutiveOverview(allNotes, featureNamesWithBugs, cleanFeatureNames, features.some(f => f.totalStepsExecuted > 0))
       : (cleanFeatureNames.length > 0
           ? `Testing completed with 100% pass rate across active CUJ flows (${cleanFeatureNames.slice(0, 3).join(', ')}). No functional regressions or blocking defects identified✅.`
           : '');
   };
 
-  const prompt = `You are a senior QA lead writing today's CUJ (critical user journey) bug report for engineering leadership.
+  const reportSubject = context?.scopeLabel ? ` for ${context.scopeLabel}` : '';
+  const prompt = `You are a senior QA lead writing the CUJ (critical user journey) bug report${reportSubject} for engineering leadership.
 
-Below are TODAY'S bug reports, grouped by CUJ. Each CUJ has an ID (F1, F2, ...) and its bugs are numbered #1, #2, ... (the numbering restarts in every CUJ). Testers type notes quickly, so expect typos, shorthand, internal acronyms, and stray times of day such as "10.48am" or "1.18" - ignore the times.
+Below are the bug reports in this report, grouped by CUJ. Each CUJ has an ID (F1, F2, ...) and its bugs are numbered #1, #2, ... (the numbering restarts in every CUJ). Testers type notes quickly, so expect typos, shorthand, internal acronyms, and stray times of day such as "10.48am" or "1.18" - ignore the times.
 
-CLEAN CUJs (passed with no bugs today): ${cleanFeaturesSummary}
+CLEAN CUJs (passed with no bugs): ${cleanFeaturesSummary}
 
 CUJs WITH BUGS (${labeledFeatures.length}):
 ${formattedFeaturesList}
@@ -1417,10 +1447,10 @@ TASK 1 - "features": a complete, de-duplicated issue list for EVERY CUJ above.
 - Within a CUJ, order issues by how many bugs report them, then by severity (crashes and wrong behaviour before minor annoyances).
 - Use the exact CUJ IDs (F1, F2, ...) as "featureId" and include every CUJ listed above exactly once.
 
-TASK 2 - "overallSummary": an executive overview of today's results (40 to 75 words, 2 to 3 sentences).
-- Sentence 1 (required): lead with the dominant cross-CUJ themes from today's bugs: "Some notable issues include [theme A], [theme B], and [theme C]." You may prepend one short clause about clean CUJs, but never push the issues past sentence two.
+TASK 2 - "overallSummary": an executive overview of these results (40 to 75 words, 2 to 3 sentences).
+- Sentence 1 (required): lead with the dominant cross-CUJ themes from these bugs: "Some notable issues include [theme A], [theme B], and [theme C]." You may prepend one short clause about clean CUJs, but never push the issues past sentence two.
 - Sentence 2 (include ONLY if a problem clearly repeats across several CUJs): "There are noticeable common occurrences of [behaviour] when [trigger], which [impact]."
-- Sentence 3 (required): a short positive closing note grounded in today's data, such as the CUJs that ran clean. A trailing checkmark is optional.
+- Sentence 3 (required): a short positive closing note grounded in this data, such as the CUJs that ran clean. A trailing checkmark is optional.
 - Concrete triggers and impacts beat abstract adjectives.
 
 STRICT GROUNDING:
@@ -1429,7 +1459,7 @@ STRICT GROUNDING:
 
 FORMAT EXAMPLE (a different product - copy the structure, never the content):
 Input:
-CLEAN CUJs (passed with no bugs today): Login
+CLEAN CUJs (passed with no bugs): Login
 F1: "Photo Upload" (pass rate 60%, 4 bugs)
   #1 took like 20 sec to upload a photo
   #2 Upload spinner never stopped, had to restart the app. also slow
@@ -1440,7 +1470,7 @@ Output:
 
 Return ONLY the JSON object.`;
 
-  const reportId = `QA-${stableHash(`${PROMPT_STYLE_VERSION}|${cleanFeaturesSummary}|${formattedFeaturesList}`)}`;
+  const reportId = `QA-${stableHash(`${PROMPT_STYLE_VERSION}|${context?.scopeKey ?? ''}|${cleanFeaturesSummary}|${formattedFeaturesList}`)}`;
 
   return { labeledFeatures, formattedFeaturesList, cleanFeaturesSummary, prompt, reportId, buildOfflineOverall };
 }
@@ -1451,9 +1481,10 @@ Return ONLY the JSON object.`;
  */
 export async function generateBatchExecutiveSummaryWithGemini(
   features: FeaturePayload[],
-  allBugs: BugLog[] = []
+  allBugs: BugLog[] = [],
+  context?: SummaryScopeContext
 ): Promise<ExecutiveQAResult> {
-  const healthyFeatures = features.filter(f => f.healthScorePct === 100 && (!f.bugs || f.bugs.length === 0));
+  const healthyFeatures = features.filter(isCleanFeature);
   const featuresWithBugs = features.filter(f => f.bugs && f.bugs.length > 0);
 
   if (featuresWithBugs.length === 0 && allBugs.length === 0) {
@@ -1472,7 +1503,7 @@ export async function generateBatchExecutiveSummaryWithGemini(
     cleanFeaturesSummary,
     prompt,
     buildOfflineOverall
-  } = prepareBatchSummaryRequest(features, allBugs);
+  } = prepareBatchSummaryRequest(features, allBugs, context);
 
   const userApiKey = getStoredGeminiApiKey();
   const preferredModel = getStoredGeminiModel();
@@ -1481,8 +1512,9 @@ export async function generateBatchExecutiveSummaryWithGemini(
   // Instant return on an unchanged dataset - avoids a multi-second round trip entirely.
   // PROMPT_STYLE_VERSION is part of the key so that changing the summary prompt/tone
   // invalidates previously cached summaries instead of serving stale-style text.
+  // The report scope (plan + day) is part of it too, so another scope never reuses it.
   const cacheKey = stableHash(
-    `${PROMPT_STYLE_VERSION}|${userApiKey}|${preferredModel}|${cleanFeaturesSummary}|${formattedFeaturesList}`
+    `${PROMPT_STYLE_VERSION}|${context?.scopeKey ?? ''}|${userApiKey}|${preferredModel}|${cleanFeaturesSummary}|${formattedFeaturesList}`
   );
   const cached = readBatchCache(cacheKey);
   if (cached) {
@@ -1612,8 +1644,12 @@ export interface ChatSummaryPrompt {
  * Prompt for any AI chat (Gemini app, a coding assistant, ...) - no API key needed.
  * Read the reply back with applyChatSummaryReply. Returns null when there is nothing to summarize.
  */
-export function buildChatSummaryPrompt(features: FeaturePayload[], allBugs: BugLog[] = []): ChatSummaryPrompt | null {
-  const request = prepareBatchSummaryRequest(features, allBugs);
+export function buildChatSummaryPrompt(
+  features: FeaturePayload[],
+  allBugs: BugLog[] = [],
+  context?: SummaryScopeContext
+): ChatSummaryPrompt | null {
+  const request = prepareBatchSummaryRequest(features, allBugs, context);
   if (request.labeledFeatures.length === 0) return null;
 
   const prompt = `${request.prompt}
@@ -1656,11 +1692,14 @@ export function getChatReplyReportId(text: string): string {
 export function applyChatSummaryReply(
   features: FeaturePayload[],
   allBugs: BugLog[],
-  replyText: string
+  replyText: string,
+  context?: SummaryScopeContext
 ): ExecutiveQAResult {
-  const request = prepareBatchSummaryRequest(features, allBugs);
+  const request = prepareBatchSummaryRequest(features, allBugs, context);
   if (request.labeledFeatures.length === 0) {
-    throw new Error('There are no bug notes for this day, so there is nothing to summarize.');
+    throw new Error(context?.scopeLabel
+      ? `There are no bug notes for ${context.scopeLabel}, so there is nothing to summarize.`
+      : 'There are no bug notes for this day, so there is nothing to summarize.');
   }
   if (!replyText || !replyText.trim()) {
     throw new Error("Paste the AI's reply first.");

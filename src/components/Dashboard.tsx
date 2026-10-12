@@ -3,15 +3,13 @@ import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota } from '../types';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers, FileSpreadsheet, ExternalLink, MessageSquareText, ClipboardPaste } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard, copySingleBugToClipboard } from '../utils/exportUtils';
-import { isRunFullyCompleted } from '../utils/runUtils';
+import { isRunFullyCompleted, buildStepFirstSeenIndex } from '../utils/runUtils';
+import { ALL_PLANS, ALL_DATES, mergeRunsById, getKnownCujNames, computeCujReport, listReportDates, buildTimelinePoints, getPlanPickerOptions, buildCujReportText, buildReportScopeKey, formatReportDateLabel } from '../utils/cujReportUtils';
+import type { CujMetric } from '../utils/cujReportUtils';
 import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel, discoverAvailableGeminiModels, rankModelsForSummaries, DEFAULT_GEMINI_MODEL, getGeminiKeyErrorHint, buildChatSummaryPrompt, applyChatSummaryReply, isChatSummaryPrompt, getChatReplyReportId } from '../services/geminiService';
-import type { ExecutiveQAResult } from '../services/geminiService';
+import type { ExecutiveQAResult, SummaryScopeContext } from '../services/geminiService';
 import { GOOGLE_APPS_SCRIPT_CODE } from '../googleAppsScriptCode';
 import { toBlob } from 'html-to-image';
-
-/** Escapes text (e.g. AI output) before it is embedded in the copied rich-text report. */
-const escapeHtml = (text: string): string =>
-  text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 /** Identifies an exact set of bugs, so a stored AI summary is only reused for the same bugs. */
 const makeBugsKey = (bugs: BugLog[]): string => bugs.map(b => String(b.id)).sort().join('|');
@@ -53,18 +51,6 @@ interface DashboardProps {
   onRunSubagentTest?: (planId?: string) => void;
   minAppVersion?: number;
   onUpdateMinAppVersion?: (versionCode: number) => void;
-}
-
-interface FeatureMetric {
-  featureName: string;
-  totalStepsExecuted: number;
-  greenCount: number;
-  yellowCount: number;
-  redCount: number;
-  bugCount: number;
-  healthScorePct: number;
-  status: 'healthy' | 'warning' | 'critical';
-  associatedBugs?: BugLog[];
 }
 
 const getLocalDateStr = (dateInput?: string | Date) => {
@@ -283,6 +269,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return map;
   }, [devices, testRuns, testPlans]);
 
+  // Archived + active runs, one per id (active copy wins), and when each plan step was first
+  // recorded - the history-aware "finished run" rule judges runs against the steps that existed then.
+  const mergedRuns = useMemo(() => mergeRunsById(archivedRuns, testRuns), [archivedRuns, testRuns]);
+  const stepFirstSeen = useMemo(() => buildStepFirstSeenIndex(mergedRuns), [mergedRuns]);
+
   // Calculate completed runs today per device ID and plan ID (deduplicated by run.id)
   const todayRunsMap = useMemo(() => {
     const todayStr = getLocalDateStr(new Date());
@@ -293,9 +284,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
     });
     
     runMap.forEach(run => {
-      // Only runs with every plan step recorded count toward quota - same rule as the
-      // logged-data views, so partial runs cut short by a restart can't inflate the counter.
-      if (!run.completedAt || !isRunFullyCompleted(run, testPlans)) return;
+      // Only runs that recorded every step that existed when they finished count toward quota
+      // (history-aware, see runUtils) - same rule as the logged-data views, so partial runs cut
+      // short by a restart can't inflate the counter.
+      if (!run.completedAt || !isRunFullyCompleted(run, testPlans, stepFirstSeen)) return;
 
       const runDate = getLocalDateStr(run.completedAt);
       if (runDate !== todayStr) return;
@@ -310,7 +302,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       }
     });
     return map;
-  }, [archivedRuns, testRuns, devices, testPlans]);
+  }, [archivedRuns, testRuns, devices, testPlans, stepFirstSeen]);
 
   const fleetProgress = useMemo(() => {
     let totalTarget = 0;
@@ -368,6 +360,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
     plainText: string;
     htmlText: string;
     generatedAt: number;
+    // Report scope (plan + day) the report was generated for - see buildReportScopeKey
+    scopeKey: string;
     modelUsed?: string;
     // Why the AI summary was unavailable (an offline summary was used instead)
     aiError?: string;
@@ -619,12 +613,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const map = new Map<string, TestRun>();
     const combined = [...archivedRuns, ...testRuns];
     combined.forEach(run => {
-      if (isRunFullyCompleted(run, testPlans)) {
+      if (isRunFullyCompleted(run, testPlans, stepFirstSeen)) {
         map.set(run.id, run);
       }
     });
     return Array.from(map.values());
-  }, [testRuns, archivedRuns, testPlans]);
+  }, [testRuns, archivedRuns, testPlans, stepFirstSeen]);
 
   // Unique devices populated across bug logs and completed test runs
   const uniqueDevices = Array.from(
@@ -643,56 +637,33 @@ export const Dashboard: React.FC<DashboardProps> = ({
     )
   ) as string[];
 
-  // Calculate Feature Health Metrics
-  const featureMetricsMap: Record<string, FeatureMetric> = {};
-
-  // Populate map with all populated features first
-  uniqueFeatures.forEach(fName => {
-    featureMetricsMap[fName] = {
-      featureName: fName,
-      totalStepsExecuted: 0,
-      greenCount: 0,
-      yellowCount: 0,
-      redCount: 0,
-      bugCount: 0,
-      healthScorePct: 100,
-      status: 'healthy'
-    };
-  });
-
-  // Gather steps from plans
-  testPlans.forEach(plan => {
-    plan.steps.forEach(step => {
-      const featureName = step.feature;
-      if (!featureName || featureName.toLowerCase() === 'general') return;
-      if (!featureMetricsMap[featureName]) {
-        featureMetricsMap[featureName] = {
-          featureName,
-          totalStepsExecuted: 0,
-          greenCount: 0,
-          yellowCount: 0,
-          redCount: 0,
-          bugCount: 0,
-          healthScorePct: 100,
-          status: 'healthy'
-        };
-      }
-    });
-  });
-
   // Today Local Date string (YYYY-MM-DD)
   const todayStr = useMemo(() => getLocalDateStr(new Date()), []);
 
   // Selected Daily QA Session Date (defaults to Today, or specific saved day YYYY-MM-DD, or 'all')
   const [selectedDailySessionDate, setSelectedDailySessionDate] = useState<string>(todayStr);
 
-  // List of Saved Historical Days with execution counts
+  // Test plan the CUJ report is scoped to (always opens on "All plans"; not persisted).
+  // Falls back to "All plans" when the selected plan no longer exists.
+  const [selectedReportPlanId, setSelectedReportPlanId] = useState<string>(ALL_PLANS);
+  const reportPlanId = selectedReportPlanId === ALL_PLANS || testPlans.some(p => p.id === selectedReportPlanId)
+    ? selectedReportPlanId
+    : ALL_PLANS;
+  useEffect(() => {
+    if (reportPlanId !== selectedReportPlanId) setSelectedReportPlanId(ALL_PLANS);
+  }, [reportPlanId, selectedReportPlanId]);
+
+  // Days with data (counted steps or bugs) for the selected plan, newest first
+  const reportDates = useMemo(
+    () => listReportDates({ plans: testPlans, runs: mergedRuns, bugs: bugLogs, planId: reportPlanId, firstSeen: stepFirstSeen }),
+    [testPlans, mergedRuns, bugLogs, reportPlanId, stepFirstSeen]
+  );
+  // Latest day with data for the selected plan ('' if none) - offered by the empty state
+  const latestReportDate = reportDates.length > 0 ? reportDates[0].dateStr : '';
+
+  // List of Saved Historical Days with execution counts: Today, then the selected plan's days
   const recordedDailySessions = useMemo(() => {
-    const datesMap: Record<string, { dateStr: string; label: string; stepCount: number; bugCount: number }> = {};
-    
-    // Always include Today
     const todayLabel = `Today (${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })})`;
-    datesMap[todayStr] = { dateStr: todayStr, label: todayLabel, stepCount: 0, bugCount: 0 };
 
     const formatDisplayLabel = (dStr: string) => {
       const [y, m, d] = dStr.split('-').map(Number);
@@ -702,189 +673,69 @@ export const Dashboard: React.FC<DashboardProps> = ({
       return dStr;
     };
 
-    completedRuns.forEach(run => {
-      Object.values(run.results || {}).forEach(res => {
-        if (!res.timestamp || res.status === 'pending') return;
-        const dStr = getLocalDateStr(res.timestamp);
-        if (!dStr) return;
-        if (!datesMap[dStr]) {
-          const label = dStr === todayStr ? todayLabel : formatDisplayLabel(dStr);
-          datesMap[dStr] = { dateStr: dStr, label, stepCount: 0, bugCount: 0 };
-        }
-        datesMap[dStr].stepCount += 1;
-      });
-    });
-
-    bugLogs.forEach(b => {
-      if (!b.timestamp) return;
-      const dStr = getLocalDateStr(b.timestamp);
-      if (!dStr) return;
-      if (!datesMap[dStr]) {
-        const label = dStr === todayStr ? todayLabel : formatDisplayLabel(dStr);
-        datesMap[dStr] = { dateStr: dStr, label, stepCount: 0, bugCount: 0 };
-      }
-      datesMap[dStr].bugCount += 1;
-    });
-
-    return Object.values(datesMap).sort((a, b) => b.dateStr.localeCompare(a.dateStr));
-  }, [completedRuns, bugLogs, todayStr]);
-
-  // Aggregate step results ONLY from 100% fully finished test runs for the selected Daily Session Date
-  // (In-progress runs NEVER touch or contaminate the Features page until the user finishes 100% of the test)
-  completedRuns.forEach(run => {
-    const plan = testPlans.find(p => p.id === run.planId);
-    if (!plan || plan.steps.length === 0) return;
-    // completedRuns is already filtered by isRunFullyCompleted (every step recorded,
-    // plus the dated one-time exceptions); steps without a result are skipped below.
-
-    plan.steps.forEach(step => {
-      const res = run.results[step.id];
-      if (!res || !res.status || res.status === 'pending') return;
-
-      // Filter by selected Daily QA Session Date (unless 'all' is selected)
-      if (selectedDailySessionDate !== 'all') {
-        const stepDate = res.timestamp ? getLocalDateStr(res.timestamp) : getLocalDateStr(run.startedAt || new Date());
-        if (stepDate && stepDate !== selectedDailySessionDate) return;
-      }
-
-      const featureName = step.feature;
-      if (!featureName || featureName.toLowerCase() === 'general') return;
-      if (!featureMetricsMap[featureName]) {
-        featureMetricsMap[featureName] = {
-          featureName,
-          totalStepsExecuted: 0,
-          greenCount: 0,
-          yellowCount: 0,
-          redCount: 0,
-          bugCount: 0,
-          healthScorePct: 100,
-          status: 'healthy',
-          associatedBugs: []
-        };
-      }
-
-      const metric = featureMetricsMap[featureName];
-      metric.totalStepsExecuted += 1;
-      if (res.status === 'green') metric.greenCount += 1;
-      if (res.status === 'yellow') metric.yellowCount += 1;
-      if (res.status === 'red') metric.redCount += 1;
-    });
-  });
-
-  // Aggregate bug counts for the selected Daily Session Date
-  // Defects only appear on Features page if their test run is 100% finished
-  bugLogs.forEach(bug => {
-    if (selectedDailySessionDate !== 'all') {
-      const bugDate = bug.timestamp ? getLocalDateStr(bug.timestamp) : '';
-      if (!bugDate || bugDate !== selectedDailySessionDate) return;
+    const todayEntry = reportDates.find(d => d.dateStr === todayStr);
+    const otherDays = reportDates
+      .filter(d => d.dateStr !== todayStr)
+      .map(d => ({ dateStr: d.dateStr, label: formatDisplayLabel(d.dateStr), stepCount: d.stepCount, bugCount: d.bugCount }));
+    // Keep the selected day listed even when the selected plan has no data on it
+    if (selectedDailySessionDate !== ALL_DATES && selectedDailySessionDate !== todayStr && !otherDays.some(d => d.dateStr === selectedDailySessionDate)) {
+      otherDays.push({ dateStr: selectedDailySessionDate, label: formatDisplayLabel(selectedDailySessionDate), stepCount: 0, bugCount: 0 });
+      otherDays.sort((a, b) => b.dateStr.localeCompare(a.dateStr));
     }
 
-    // Defect belongs to the selected session date (or all dates)
-    const featureName = bug.feature;
-    if (!featureName || featureName.toLowerCase() === 'general') return;
-    if (!featureMetricsMap[featureName]) {
-      featureMetricsMap[featureName] = {
-        featureName,
-        totalStepsExecuted: 0,
-        greenCount: 0,
-        yellowCount: 0,
-        redCount: 0,
-        bugCount: 0,
-        healthScorePct: 100,
-        status: 'healthy',
-        associatedBugs: []
-      };
-    }
-    featureMetricsMap[featureName].bugCount += 1;
-    if (!featureMetricsMap[featureName].associatedBugs) {
-      featureMetricsMap[featureName].associatedBugs = [];
-    }
-    featureMetricsMap[featureName].associatedBugs!.push(bug);
-  });
+    return [
+      { dateStr: todayStr, label: todayLabel, stepCount: todayEntry ? todayEntry.stepCount : 0, bugCount: todayEntry ? todayEntry.bugCount : 0 },
+      ...otherDays
+    ];
+  }, [reportDates, todayStr, selectedDailySessionDate]);
 
-  // Re-calculate health score & status per feature
-  Object.values(featureMetricsMap).forEach(metric => {
-    const total = metric.totalStepsExecuted;
-    if (total > 0) {
-      metric.healthScorePct = Math.round((metric.greenCount / total) * 100);
-    } else {
-      metric.healthScorePct = 100;
-    }
+  // Test Plan picker options for the selected day, most recently run plan first
+  const planPickerOptions = useMemo(
+    () => getPlanPickerOptions({ plans: testPlans, runs: mergedRuns, bugs: bugLogs, date: selectedDailySessionDate, firstSeen: stepFirstSeen }),
+    [testPlans, mergedRuns, bugLogs, selectedDailySessionDate, stepFirstSeen]
+  );
+  const allPlansRunCount = planPickerOptions.reduce((sum, o) => sum + o.runCount, 0);
 
-    if (metric.healthScorePct <= 59) {
-      metric.status = 'critical';
-    } else if (metric.healthScorePct <= 94) {
-      metric.status = 'warning';
-    } else {
-      metric.status = 'healthy';
-    }
-  });
+  // CUJ report for the selected plan + day: finished runs only, each result under the CUJ it was
+  // recorded as, and untested CUJs never reported (see cujReportUtils)
+  const reportScope = useMemo(() => ({ planId: reportPlanId, date: selectedDailySessionDate }), [reportPlanId, selectedDailySessionDate]);
+  const reportScopeKey = buildReportScopeKey(reportScope);
+  const knownCujNames = useMemo(() => getKnownCujNames(testPlans, bugLogs, populatedFeatures), [testPlans, bugLogs, populatedFeatures]);
+  const cujReport = useMemo(
+    () => computeCujReport({ plans: testPlans, runs: mergedRuns, bugs: bugLogs, scope: reportScope, knownCujNames, firstSeen: stepFirstSeen }),
+    [testPlans, mergedRuns, bugLogs, reportScope, knownCujNames, stepFirstSeen]
+  );
+  const reportPlanLabel = cujReport.planLabel;
+  // The copied report and the AI prompt name the real date; the on-screen card says "Today"
+  const reportDateLabel = formatReportDateLabel(selectedDailySessionDate);
+  const reportDayDisplayLabel = selectedDailySessionDate === todayStr ? 'Today' : reportDateLabel;
+  // "on Today" / "on Oct 9, 2026" / "across all days" - for the empty-state texts
+  const reportDayPhrase = selectedDailySessionDate === ALL_DATES ? 'across all days' : `on ${reportDayDisplayLabel}`;
+  const reportScopeContext: SummaryScopeContext = {
+    scopeKey: reportScopeKey,
+    scopeLabel: reportPlanId === ALL_PLANS ? `all test plans (${reportDateLabel})` : `the "${reportPlanLabel}" test plan (${reportDateLabel})`
+  };
 
-  // Historical Quality Evolution Timeline Points (Only fully finished runs)
-  const historicalTimelinePoints = useMemo(() => {
-    const pointsMap: Record<string, { dateStr: string; displayDate: string; totalSteps: number; green: number; yellow: number; red: number; bugs: number }> = {};
+  // A stored report belongs to one scope: switching plan or day clears it, so Copy Report can
+  // never copy another scope's report. The ref lets an in-flight generation detect a switch.
+  const reportScopeKeyRef = useRef(reportScopeKey);
+  reportScopeKeyRef.current = reportScopeKey;
+  useEffect(() => {
+    setGeneratedReport(null);
+  }, [reportScopeKey]);
+  const hasCurrentReport = !!generatedReport && generatedReport.scopeKey === reportScopeKey;
 
-    const formatDisplayLabel = (dStr: string) => {
-      const [y, m, d] = dStr.split('-').map(Number);
-      if (y && m && d) {
-        return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-      }
-      return dStr;
-    };
+  // Historical Quality Evolution Timeline Points (Only fully finished runs of the selected plan)
+  const historicalTimelinePoints = useMemo(
+    () => buildTimelinePoints({ plans: testPlans, runs: mergedRuns, bugs: bugLogs, planId: reportPlanId, firstSeen: stepFirstSeen }),
+    [testPlans, mergedRuns, bugLogs, reportPlanId, stepFirstSeen]
+  );
 
-    completedRuns.forEach(run => {
-      Object.values(run.results || {}).forEach(res => {
-        if (!res.timestamp || res.status === 'pending') return;
-        const dStr = getLocalDateStr(res.timestamp);
-        if (!dStr) return;
-        if (!pointsMap[dStr]) {
-          const displayDate = formatDisplayLabel(dStr);
-          pointsMap[dStr] = { dateStr: dStr, displayDate, totalSteps: 0, green: 0, yellow: 0, red: 0, bugs: 0 };
-        }
-        pointsMap[dStr].totalSteps += 1;
-        if (res.status === 'green') pointsMap[dStr].green += 1;
-        if (res.status === 'yellow') pointsMap[dStr].yellow += 1;
-        if (res.status === 'red') pointsMap[dStr].red += 1;
-      });
-    });
-
-    bugLogs.forEach(bug => {
-      if (!bug.timestamp) return;
-      const dStr = getLocalDateStr(bug.timestamp);
-      if (!dStr) return;
-      if (!pointsMap[dStr]) {
-        const displayDate = formatDisplayLabel(dStr);
-        pointsMap[dStr] = { dateStr: dStr, displayDate, totalSteps: 0, green: 0, yellow: 0, red: 0, bugs: 0 };
-      }
-      pointsMap[dStr].bugs += 1;
-    });
-
-    const sorted = Object.values(pointsMap).sort((a, b) => a.dateStr.localeCompare(b.dateStr));
-    return sorted.map(p => {
-      const scorePct = p.totalSteps > 0 ? Math.round((p.green / p.totalSteps) * 100) : 100;
-      return { ...p, scorePct };
-    });
-  }, [completedRuns, bugLogs]);
-
-  // Compute final health scores & statuses
-  const featureMetricsList = Object.values(featureMetricsMap).map(metric => {
-    const executed = metric.totalStepsExecuted;
-    if (executed > 0) {
-      metric.healthScorePct = Math.round((metric.greenCount / executed) * 100);
-    } else {
-      metric.healthScorePct = 100;
-    }
-
-    if (metric.healthScorePct <= 59) {
-      metric.status = 'critical';
-    } else if (metric.healthScorePct <= 94) {
-      metric.status = 'warning';
-    } else {
-      metric.status = 'healthy';
-    }
-
-    return metric;
-  });
+  // Tested CUJs in the selected scope (worst first), CUJs with bugs but no completed steps,
+  // and known CUJs not tested in this view (only listed so they can still be deleted)
+  const featureMetricsList = cujReport.testedMetrics;
+  const bugOnlyMetrics = cujReport.bugOnlyMetrics;
+  const untestedCujNames = cujReport.untestedCujNames;
 
   // Compute QA Status metrics for individual tester profiles & daily tracking
   const testerProfilesMap = useMemo(() => {
@@ -1049,125 +900,47 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [testers, testerProfilesMap]);
 
-  // Sort Feature Metrics: Critical (Red) first -> Warning (Yellow) -> Healthy (Green)
-  const statusPriority: Record<string, number> = { critical: 1, warning: 2, healthy: 3 };
-  featureMetricsList.sort((a, b) => {
-    const pA = statusPriority[a.status] || 4;
-    const pB = statusPriority[b.status] || 4;
-    if (pA !== pB) return pA - pB;
-    if (a.healthScorePct !== b.healthScorePct) return a.healthScorePct - b.healthScorePct;
-    return a.featureName.localeCompare(b.featureName);
-  });
+  // Executive Feature Health Visual Aggregates for the selected scope - tested CUJs only, already
+  // sorted Critical (Red) first -> Warning (Yellow) -> Healthy (Green) by the report module
+  const reportTotals = cujReport.totals;
+  const totalFeaturesCount = reportTotals.testedCujCount;
+  const criticalFeaturesCount = reportTotals.criticalCount;
+  const warningFeaturesCount = reportTotals.warningCount;
+  const healthyFeaturesCount = reportTotals.healthyCount;
 
-  // Calculate Executive Feature Health Visual Aggregates
-  const totalFeaturesCount = featureMetricsList.length;
-  const criticalFeaturesCount = featureMetricsList.filter(f => f.status === 'critical').length;
-  const warningFeaturesCount = featureMetricsList.filter(f => f.status === 'warning').length;
-  const healthyFeaturesCount = featureMetricsList.filter(f => f.status === 'healthy').length;
+  const criticalPct = reportTotals.criticalPct;
+  const warningPct = reportTotals.warningPct;
+  const healthyPct = reportTotals.healthyPct;
 
-  const criticalPct = totalFeaturesCount > 0 ? Math.round((criticalFeaturesCount / totalFeaturesCount) * 100) : 0;
-  const warningPct = totalFeaturesCount > 0 ? Math.round((warningFeaturesCount / totalFeaturesCount) * 100) : 0;
-  const healthyPct = totalFeaturesCount > 0 ? Math.max(0, 100 - criticalPct - warningPct) : 100;
+  // null when nothing was tested in this view (shown as "—")
+  const avgHealthScore = reportTotals.avgHealthScore;
 
-  const avgHealthScore = totalFeaturesCount > 0
-    ? Math.round(featureMetricsList.reduce((acc, f) => acc + f.healthScorePct, 0) / totalFeaturesCount)
-    : 100;
-
-  const totalStepsAcrossFeatures = featureMetricsList.reduce((acc, f) => acc + f.totalStepsExecuted, 0);
-  const totalBugsAcrossFeatures = featureMetricsList.reduce((acc, f) => acc + f.bugCount, 0);
-
-  // Filter completed runs corresponding to the selected Daily QA Session Date (or all historical)
-  const sessionCompletedRuns = useMemo(() => {
-    return completedRuns.filter(run => {
-      if (selectedDailySessionDate === 'all') return true;
-      const plan = testPlans.find(p => p.id === run.planId);
-      if (!plan) return false;
-
-      // 1. Check run completedAt / startedAt date
-      const runCompletedDate = run.completedAt ? getLocalDateStr(run.completedAt) : '';
-      const runStartedDate = run.startedAt ? getLocalDateStr(run.startedAt) : '';
-      if (runCompletedDate === selectedDailySessionDate || runStartedDate === selectedDailySessionDate) {
-        return true;
-      }
-
-      // 2. Check any executed step timestamp in this run
-      return plan.steps.some(step => {
-        const res = run.results?.[step.id];
-        if (!res || !res.timestamp) return false;
-        return getLocalDateStr(res.timestamp) === selectedDailySessionDate;
-      });
-    });
-  }, [completedRuns, selectedDailySessionDate, testPlans]);
+  const totalStepsAcrossFeatures = reportTotals.stepsExecuted;
+  // Bugs on tested CUJs plus bugs on CUJs without completed steps
+  const totalBugsAcrossFeatures = reportTotals.bugCount;
 
   // Evaluate Golden Runs:
   // "runs where every feature passed with a green, it is allowed 1 yellow but no more, and definitly no reds"
-  const goldenRunsAnalysis = useMemo(() => {
-    const evaluatedRuns = sessionCompletedRuns.map(run => {
-      const plan = testPlans.find(p => p.id === run.planId);
-      const steps = plan ? plan.steps : [];
-      const results = steps.map(s => run.results?.[s.id]).filter(Boolean);
-
-      const redCount = results.filter(r => r.status === 'red').length;
-      const yellowCount = results.filter(r => r.status === 'yellow').length;
-      const greenCount = results.filter(r => r.status === 'green').length;
-      const totalSteps = steps.length || results.length;
-
-      // Golden Run rule:
-      // - 100% completed execution (totalSteps > 0)
-      // - Zero reds: redCount === 0
-      // - At most 1 yellow: yellowCount <= 1
-      const isGolden = redCount === 0 && yellowCount <= 1 && totalSteps > 0 && results.length >= totalSteps;
-
-      return {
-        run,
-        plan,
-        isGolden,
-        redCount,
-        yellowCount,
-        greenCount,
-        totalSteps,
-        cleanPct: totalSteps > 0 ? Math.round((greenCount / totalSteps) * 100) : 0
-      };
-    });
-
-    const goldenCount = evaluatedRuns.filter(r => r.isGolden).length;
-    const totalCount = evaluatedRuns.length;
-    const goldenPct = totalCount > 0 ? Math.round((goldenCount / totalCount) * 100) : 0;
-
-    return {
-      runs: evaluatedRuns,
-      goldenCount,
-      totalCount,
-      goldenPct
-    };
-  }, [sessionCompletedRuns, testPlans]);
+  // Finished runs in the selected scope, judged on everything they recorded (see cujReportUtils).
+  const goldenRunsAnalysis = cujReport.golden;
 
   /**
-   * Current-day bugs per CUJ - the only data AI summaries may use. Shared by the Gemini
-   * path and the AI-chat path so the prompt and the pasted reply always match.
+   * Bugs per CUJ in the selected report scope (plan + day) - the only data AI summaries may use.
+   * Shared by the Gemini path and the AI-chat path so the prompt and the pasted reply always match.
    */
   const buildDailySummaryPayload = () => {
-    const targetSummaryDate = selectedDailySessionDate === 'all' ? todayStr : selectedDailySessionDate;
-    const isBugFromTargetDay = (b: BugLog) => {
-      if (!b.timestamp) return false;
-      return getLocalDateStr(b.timestamp) === targetSummaryDate;
-    };
-
-    const featuresPayload = featureMetricsList.map(m => {
-      const bugsForFeature = (m.associatedBugs || []).filter(isBugFromTargetDay);
-      return {
-        featureName: m.featureName,
-        status: m.status,
-        healthScorePct: m.healthScorePct,
-        greenCount: m.greenCount,
-        totalStepsExecuted: m.totalStepsExecuted,
-        bugCount: bugsForFeature.length,
-        bugs: bugsForFeature
-      };
-    });
+    const featuresPayload = [...cujReport.testedMetrics, ...cujReport.bugOnlyMetrics].map(m => ({
+      featureName: m.featureName,
+      status: m.status,
+      healthScorePct: m.healthScorePct,
+      greenCount: m.greenCount,
+      totalStepsExecuted: m.totalStepsExecuted,
+      bugCount: m.associatedBugs.length,
+      bugs: m.associatedBugs
+    }));
 
     const allBugs = featuresPayload.flatMap(f => f.bugs);
-    return { targetSummaryDate, isBugFromTargetDay, featuresPayload, allBugs };
+    return { featuresPayload, allBugs, scopeContext: reportScopeContext };
   };
 
   /**
@@ -1187,23 +960,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
     if (isGeneratingSummary) return null;
     setIsGeneratingSummary(true);
 
+    // The scope this report is for - if the user switches plan or day mid-generation, the result is discarded
+    const requestScopeKey = reportScopeKey;
+
     try {
-      const riskStatus = criticalFeaturesCount > 0 || avgHealthScore < 80
-        ? '🔴 High Risk'
-        : warningFeaturesCount > 0 || avgHealthScore < 95
-        ? '🟡 Moderate Risk'
-        : '🟢 System Healthy';
+      // Extract all features & bugs for the dedicated Gemini sub-task (strictly scoped to the selected plan and day)
+      const { featuresPayload, allBugs, scopeContext } = buildDailySummaryPayload();
 
-      const criticalList = featureMetricsList.filter(m => m.status === 'critical');
-      const warningList = featureMetricsList.filter(m => m.status === 'warning');
-      const healthyList = featureMetricsList.filter(m => m.status === 'healthy');
-
-      // Extract all features & bugs for the dedicated Gemini sub-task (strictly scoped to current day)
-      const { isBugFromTargetDay, featuresPayload, allBugs } = buildDailySummaryPayload();
-
-      // Spin up dedicated subtask prompt to Gemini using ONLY current-day bugs,
+      // Spin up dedicated subtask prompt to Gemini using ONLY the bugs in the selected scope,
       // unless the summary was already written by an AI chat and pasted back
-      const result = precomputedResult ?? await generateBatchExecutiveSummaryWithGemini(featuresPayload, allBugs);
+      const result = precomputedResult ?? await generateBatchExecutiveSummaryWithGemini(featuresPayload, allBugs, scopeContext);
+
+      // The plan or day changed while the summary was being written: it belongs to the old view
+      if (reportScopeKeyRef.current !== requestScopeKey) {
+        setSummaryToast({
+          type: 'warning',
+          message: '⚠️ The test plan or day changed while the summary was being generated, so it was discarded. Click "Generate Summary" again for the current view.'
+        });
+        setTimeout(() => setSummaryToast(null), 7000);
+        return null;
+      }
 
       // The saved key was rejected (suspended, invalid, leaked...): go straight to the AI chat
       // flow instead of an offline summary, so one click still gets an AI-written report
@@ -1218,9 +994,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
       const overallGeminiSummary = result.overallSummary;
       const featureSummaryMap = result.featureSummaries;
 
-      // Helper to cleanly retrieve or synthesize summary strictly from current-day bugs
-      const getFeatureSummary = (metric: FeatureMetric): string => {
-        const bugs = (metric.associatedBugs || []).filter(isBugFromTargetDay);
+      // Helper to cleanly retrieve or synthesize summary strictly from the bugs in the selected scope
+      const getFeatureSummary = (metric: CujMetric): string => {
+        const bugs = metric.associatedBugs;
         if (bugs.length === 0) {
           if (metric.redCount > 0 || metric.yellowCount > 0) {
             const count = metric.redCount + metric.yellowCount;
@@ -1246,129 +1022,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
         console.warn('Gemini executive summary notice:', result.error);
       }
 
-      // Plain text format
-      let plainText = `📊 CUJ Report (${new Date().toLocaleDateString()})\n`;
-      plainText += `• Coverage: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)\n`;
-      plainText += `• Status: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)\n`;
-      plainText += `• Golden Runs: 🏆 ${goldenRunsAnalysis.goldenCount} (${goldenRunsAnalysis.goldenCount === 1 ? '1 clean run' : `${goldenRunsAnalysis.goldenCount} clean runs`}, ≤1 yellow, 0 reds)\n`;
-      if (reportDisclaimer && reportDisclaimer.trim()) {
-        plainText += `Disclaimer: ${reportDisclaimer.trim()}\n`;
-      }
-      if (overallGeminiSummary) {
-        plainText += `Issue Summary: ${overallGeminiSummary}\n`;
-      }
-      plainText += `\n`;
-
-      if (criticalList.length > 0) {
-        plainText += `🔴 Critical CUJs:\n`;
-        criticalList.forEach(m => {
-          const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
-          const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-          const summary = getFeatureSummary(m);
-          plainText += `${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})\n`;
-          if (summary) {
-            plainText += `↳ Summary: ${summary}\n`;
-          }
-        });
-        plainText += `\n`;
-      }
-
-      if (warningList.length > 0) {
-        plainText += `🟡 Degraded CUJs:\n`;
-        warningList.forEach(m => {
-          const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
-          const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-          const summary = getFeatureSummary(m);
-          plainText += `${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})\n`;
-          if (summary) {
-            plainText += `↳ Summary: ${summary}\n`;
-          }
-        });
-        plainText += `\n`;
-      }
-
-      if (healthyList.length > 0) {
-        plainText += `🟢 Healthy CUJs:\n`;
-        healthyList.forEach(m => {
-          const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
-          const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-          const summary = getFeatureSummary(m);
-          plainText += `${m.featureName}: ${m.healthScorePct}% (${stepDetail}${bugText})\n`;
-          if (summary && (m.bugCount > 0 || m.healthScorePct < 100 || summary.toLowerCase().includes('false positive') || summary.toLowerCase().includes('false trigger') || summary.toLowerCase().includes('worked fine') || summary.toLowerCase().includes('observation') || summary.toLowerCase().includes('thwart'))) {
-            plainText += `↳ Summary: ${summary}\n`;
-          }
-        });
-      }
-
-      // Rich HTML format (for Slack, Teams, Google Docs, Word, Apple Notes, Email)
-      let htmlText = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5;">`;
-      htmlText += `<p style="margin: 0 0 6px 0;">📊 <b>CUJ Report</b> (${new Date().toLocaleDateString()})</p>`;
-      htmlText += `<p style="margin: 0 0 4px 0;">• <b>Coverage</b>: ${totalFeaturesCount} CUJs (${totalStepsAcrossFeatures} steps)</p>`;
-      htmlText += `<p style="margin: 0 0 4px 0;">• <b>Status</b>: 🟢 ${healthyFeaturesCount} Healthy | 🟡 ${warningFeaturesCount} Degraded | 🔴 ${criticalFeaturesCount} Critical (${totalBugsAcrossFeatures} Bugs)</p>`;
-      htmlText += `<p style="margin: 0 0 8px 0;">• <b>Golden Runs</b>: 🏆 <b>${goldenRunsAnalysis.goldenCount}</b> <span style="color: #64748b; font-size: 11px;">(≤1 yellow, 0 reds)</span></p>`;
-      if (reportDisclaimer && reportDisclaimer.trim()) {
-        htmlText += `<p style="margin: 0 0 8px 0; color: #475569;"><b>Disclaimer:</b> ${reportDisclaimer.trim()}</p>`;
-      }
-      if (overallGeminiSummary) {
-        htmlText += `<div style="background-color: #f8fafc; border-left: 3px solid #6366f1; padding: 8px 12px; margin: 8px 0 12px 0; border-radius: 6px; font-size: 12.5px; color: #1e293b; line-height: 1.55;"><b>Issue Summary:</b> ${escapeHtml(overallGeminiSummary)}</div>`;
-      }
-
-      if (criticalList.length > 0) {
-        htmlText += `<p style="margin: 8px 0 4px 0; color: #dc2626; font-weight: 700;">🔴 Critical CUJs:</p>`;
-        htmlText += `<div style="margin: 0 0 8px 0;">`;
-        criticalList.forEach(m => {
-          const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
-          const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-          const summary = getFeatureSummary(m);
-          const summaryHtml = summary
-            ? `<div style="color: #475569; font-size: 12px; margin-top: 1px; margin-left: 12px;">↳ <i>Summary: ${escapeHtml(summary)}</i></div>`
-            : '';
-          htmlText += `<div style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</div>`;
-        });
-        htmlText += `</div>`;
-      }
-
-      if (warningList.length > 0) {
-        htmlText += `<p style="margin: 8px 0 4px 0; color: #d97706; font-weight: 700;">🟡 Degraded CUJs:</p>`;
-        htmlText += `<div style="margin: 0 0 8px 0;">`;
-        warningList.forEach(m => {
-          const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
-          const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-          const summary = getFeatureSummary(m);
-          const summaryHtml = summary
-            ? `<div style="color: #475569; font-size: 12px; margin-top: 1px; margin-left: 12px;">↳ <i>Summary: ${escapeHtml(summary)}</i></div>`
-            : '';
-          htmlText += `<div style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</div>`;
-        });
-        htmlText += `</div>`;
-      }
-
-      if (healthyList.length > 0) {
-        htmlText += `<p style="margin: 8px 0 4px 0; color: #16a34a; font-weight: 700;">🟢 Healthy CUJs:</p>`;
-        htmlText += `<div style="margin: 0 0 4px 0;">`;
-        healthyList.forEach(m => {
-          const bugText = m.bugCount > 0 ? `, ${m.bugCount} ${m.bugCount === 1 ? 'bug' : 'bugs'}` : '';
-          const stepDetail = m.totalStepsExecuted > 0 ? `${m.greenCount}/${m.totalStepsExecuted} passed` : '0 steps';
-          const summary = getFeatureSummary(m);
-          const shouldShowSummary = summary && (m.bugCount > 0 || m.healthScorePct < 100 || summary.toLowerCase().includes('false positive') || summary.toLowerCase().includes('false trigger') || summary.toLowerCase().includes('worked fine') || summary.toLowerCase().includes('observation') || summary.toLowerCase().includes('thwart'));
-          const summaryHtml = shouldShowSummary
-            ? `<div style="color: #475569; font-size: 12px; margin-top: 1px; margin-left: 12px;">↳ <i>Summary: ${escapeHtml(summary)}</i></div>`
-            : '';
-          htmlText += `<div style="margin-bottom: 6px;"><b>${m.featureName}</b>: ${m.healthScorePct}% (${stepDetail}${bugText})${summaryHtml}</div>`;
-        });
-        htmlText += `</div>`;
-      }
-
-      htmlText += `</div>`;
+      // Plain text + rich HTML (for Slack, Teams, Google Docs, Word, Apple Notes, Email)
+      const { plainText, htmlText } = buildCujReportText(cujReport, {
+        dateLabel: reportDateLabel,
+        disclaimer: reportDisclaimer,
+        overallSummary: overallGeminiSummary,
+        getSummary: getFeatureSummary
+      });
 
       // Keep the AI summaries so the Feature Health table shows the same text,
       // tagged with the exact bugs they cover (the table falls back if bugs change).
       const aiFeatureSummaries: Record<string, { summary: string; bugsKey: string }> = {};
       if (result.modelUsed) {
-        featureMetricsList.forEach(m => {
-          const bugsForDay = (m.associatedBugs || []).filter(isBugFromTargetDay);
-          const summary = bugsForDay.length > 0 ? getFeatureSummary(m) : '';
-          if (summary) aiFeatureSummaries[m.featureName] = { summary, bugsKey: makeBugsKey(bugsForDay) };
+        [...cujReport.testedMetrics, ...cujReport.bugOnlyMetrics].forEach(m => {
+          const summary = m.associatedBugs.length > 0 ? getFeatureSummary(m) : '';
+          if (summary) aiFeatureSummaries[m.featureName] = { summary, bugsKey: makeBugsKey(m.associatedBugs) };
         });
       }
 
@@ -1379,6 +1047,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         plainText,
         htmlText,
         generatedAt: Date.now(),
+        scopeKey: requestScopeKey,
         modelUsed: result.modelUsed,
         aiError: result.modelUsed ? undefined : result.error,
         featureSummaries: aiFeatureSummaries
@@ -1482,16 +1151,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   /** Copies the same prompt the Gemini API would receive. Returns whether it was copied. */
   const handleCopyChatPrompt = async (): Promise<boolean> => {
-    const { targetSummaryDate, featuresPayload, allBugs } = buildDailySummaryPayload();
-    const built = buildChatSummaryPrompt(featuresPayload, allBugs);
+    const { featuresPayload, allBugs, scopeContext } = buildDailySummaryPayload();
+    const built = buildChatSummaryPrompt(featuresPayload, allBugs, scopeContext);
     if (!built) {
-      setChatStatus({ type: 'error', message: `No bug notes were logged on ${targetSummaryDate}, so there is nothing for the AI to summarize.` });
+      setChatStatus({ type: 'error', message: `No bug notes were logged for ${scopeContext.scopeLabel}, so there is nothing for the AI to summarize.` });
       return false;
     }
     const copied = await copyPlainText(built.prompt);
     setChatPromptCopied(copied);
     setChatStatus(copied
-      ? { type: 'success', message: `Prompt copied - ${built.bugCount} bug${built.bugCount === 1 ? '' : 's'} across ${built.cujCount} CUJ${built.cujCount === 1 ? '' : 's'} from ${targetSummaryDate}. Paste it into Gemini or Antigravity and send it.` }
+      ? { type: 'success', message: `Prompt copied - ${built.bugCount} bug${built.bugCount === 1 ? '' : 's'} across ${built.cujCount} CUJ${built.cujCount === 1 ? '' : 's'} from ${scopeContext.scopeLabel}. Paste it into Gemini or Antigravity and send it.` }
       : { type: 'error', message: 'Your browser blocked the copy. Click "Copy prompt" again.' });
     return copied;
   };
@@ -1518,7 +1187,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
    */
   const handleChatReplyText = async (text: string, source: 'auto' | 'paste') => {
     if (!text || !text.trim()) return;
-    const { featuresPayload, allBugs } = buildDailySummaryPayload();
+    const { featuresPayload, allBugs, scopeContext } = buildDailySummaryPayload();
 
     if (source === 'auto') {
       if (text === lastAutoCheckedReplyRef.current) return;
@@ -1526,17 +1195,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
       if (isChatSummaryPrompt(text)) return; // still the prompt - the AI hasn't answered yet
       const replyId = getChatReplyReportId(text);
       if (!replyId) return; // not a reply to our prompt (a reply without an ID can still be pasted)
-      const current = buildChatSummaryPrompt(featuresPayload, allBugs);
+      const current = buildChatSummaryPrompt(featuresPayload, allBugs, scopeContext);
       if (!current) return;
       if (replyId !== current.reportId) {
-        setChatStatus({ type: 'error', message: 'The reply on your clipboard is for an older prompt - bugs changed since it was copied. Copy the prompt again (step 1) and send the new one to the AI.' });
+        setChatStatus({ type: 'error', message: 'The reply on your clipboard is for an older prompt - the test plan, day or bugs changed since it was copied. Copy the prompt again (step 1) and send the new one to the AI.' });
         return;
       }
     }
 
     let result: ExecutiveQAResult;
     try {
-      result = applyChatSummaryReply(featuresPayload, allBugs, text);
+      result = applyChatSummaryReply(featuresPayload, allBugs, text, scopeContext);
     } catch (e: any) {
       // Automatic pickups only get here when the reply is for the current prompt, so say what's wrong
       setChatStatus({ type: 'error', message: e?.message || "Couldn't read the AI's reply." });
@@ -1630,7 +1299,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
    * No API calls, no regeneration - safe to run any time after generating.
    */
   const handleCopyGeneratedReport = async () => {
-    if (!generatedReport) {
+    if (!generatedReport || generatedReport.scopeKey !== reportScopeKey) {
       handleGenerateSummary();
       return;
     }
@@ -3116,13 +2785,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
             <div className="flex flex-wrap items-center gap-2.5">
               {/* Day Selector Dropdown */}
-              <div className="flex items-center gap-2 liquid-glass-input px-3.5 h-9 rounded-2xl text-xs shadow-inner">
+              <div className="flex items-center gap-2 liquid-glass-input px-3.5 h-9 rounded-2xl text-xs shadow-inner w-full sm:w-auto min-w-0">
                 <Calendar className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
                 <span className="text-slate-300 font-semibold text-[11px] whitespace-nowrap">Session Day:</span>
                 <select
                   value={selectedDailySessionDate}
                   onChange={e => setSelectedDailySessionDate(e.target.value)}
-                  className="bg-transparent text-purple-200 font-extrabold focus:outline-none cursor-pointer text-xs h-full flex items-center"
+                  className="bg-transparent text-purple-200 font-extrabold focus:outline-none cursor-pointer text-xs h-full flex items-center min-w-0 flex-1 sm:flex-none"
                 >
                   {recordedDailySessions.map(session => (
                     <option key={session.dateStr} value={session.dateStr} className="bg-slate-900 text-slate-200">
@@ -3132,6 +2801,28 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   <option value="all" className="bg-slate-900 text-purple-300 font-bold">
                     🌐 All Historical Days Combined
                   </option>
+                </select>
+              </div>
+
+              {/* Test Plan Selector Dropdown - scopes the whole CUJ report (always opens on All plans) */}
+              <div className="flex items-center gap-2 liquid-glass-input px-3.5 h-9 rounded-2xl text-xs shadow-inner w-full sm:w-auto min-w-0">
+                <ListChecks className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
+                <span className="text-slate-300 font-semibold text-[11px] whitespace-nowrap">Test Plan:</span>
+                <select
+                  value={reportPlanId}
+                  onChange={e => setSelectedReportPlanId(e.target.value)}
+                  title={`Test plan: ${reportPlanLabel}`}
+                  aria-label="Test plan"
+                  className="bg-transparent text-purple-200 font-extrabold focus:outline-none cursor-pointer text-xs h-full flex items-center min-w-0 flex-1 sm:flex-none sm:max-w-[16rem] truncate"
+                >
+                  <option value={ALL_PLANS} className="bg-slate-900 text-slate-200">
+                    All plans ({allPlansRunCount} {allPlansRunCount === 1 ? 'run' : 'runs'})
+                  </option>
+                  {planPickerOptions.map(option => (
+                    <option key={option.planId} value={option.planId} className="bg-slate-900 text-slate-200">
+                      {option.planName} ({option.runCount} {option.runCount === 1 ? 'run' : 'runs'})
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -3153,7 +2844,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         ? 'bg-rose-500/20 text-rose-300 hover:bg-rose-500/30 border-rose-400/40 shadow-md cursor-pointer hover:scale-[1.02] active:scale-[0.98]'
                         : 'bg-slate-900/40 text-slate-500 border-slate-800 opacity-40 cursor-not-allowed'
                     }`}
-                    title={isTodayActive ? "Reset test step results & bugs for Today" : "Reset is only available when viewing Today's active session."}
+                    title={isTodayActive ? "Reset test step results & bugs for Today (all plans)" : "Reset is only available when viewing Today's active session."}
                   >
                     <RefreshCw className={`w-3.5 h-3.5 flex-shrink-0 ${isTodayActive ? 'text-rose-400' : 'text-slate-600'}`} />
                     <span className="leading-none">Reset Active Day</span>
@@ -3205,17 +2896,23 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
 
           {/* Feature Quality & Risk Profile Card */}
-          {totalFeaturesCount > 0 && (
+          {(featureMetricsList.length > 0 || bugOnlyMetrics.length > 0) && (
             <div ref={visualCardRef} data-visual-card="true" className="liquid-glass-panel rounded-3xl p-6 pb-10 shadow-2xl space-y-6 bg-gradient-to-br from-slate-950/90 via-slate-900/70 to-purple-950/40 border-white/15">
               
               {/* Header */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-400 font-mono">Live Snapshot • {new Date().toLocaleDateString()}</span>
+                    <span className="text-xs text-slate-400 font-mono">{reportDayDisplayLabel}</span>
                   </div>
-                  <h3 className="text-xl font-extrabold text-white mt-1 flex items-center gap-2 tracking-tight">
+                  <h3 className="text-xl font-extrabold text-white mt-1 flex flex-wrap items-center gap-2 tracking-tight">
                     CUJ Quality Report
+                    <span
+                      className="text-[11px] font-bold text-purple-200 bg-purple-500/15 border border-purple-400/30 px-2.5 py-0.5 rounded-full max-w-[16rem] truncate"
+                      title={`Test plan: ${reportPlanLabel}`}
+                    >
+                      {reportPlanLabel}
+                    </span>
                   </h3>
                 </div>
 
@@ -3237,7 +2934,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         <Sparkles className="w-3.5 h-3.5 text-purple-300 animate-spin flex-shrink-0" />
                         <span className="leading-none text-purple-200">AI Summarizing...</span>
                       </>
-                    ) : generatedReport ? (
+                    ) : hasCurrentReport ? (
                       <>
                         <RefreshCw className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
                         <span className="leading-none">Regenerate</span>
@@ -3253,17 +2950,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   {/* Copy Report Button - instant, reads the stored result with zero regeneration */}
                   <button
                     type="button"
-                    disabled={!generatedReport || isGeneratingSummary}
+                    disabled={!hasCurrentReport || isGeneratingSummary}
                     onClick={handleCopyGeneratedReport}
                     className={`no-capture px-3.5 h-9 rounded-2xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all shadow-md border ${
-                      !generatedReport || isGeneratingSummary
+                      !hasCurrentReport || isGeneratingSummary
                         ? 'bg-slate-900/50 text-slate-500 border-white/5 cursor-not-allowed'
                         : copiedReport
                         ? 'bg-emerald-500/20 text-emerald-200 border-emerald-400/50'
                         : 'bg-gradient-to-r from-indigo-500/20 to-cyan-500/20 hover:from-indigo-500/30 hover:to-cyan-500/30 text-indigo-200 border-indigo-400/40 hover:scale-[1.02] active:scale-[0.98]'
                     }`}
                     title={
-                      generatedReport
+                      hasCurrentReport
                         ? 'Copy the generated report to your clipboard (rich text + plain text)'
                         : 'Generate a summary first, then copy it here'
                     }
@@ -3282,7 +2979,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </button>
 
                   {/* Ready-to-copy indicator - shows whether the AI or the offline fallback wrote the summary */}
-                  {generatedReport && !isGeneratingSummary && (
+                  {hasCurrentReport && generatedReport && !isGeneratingSummary && (
                     generatedReport.modelUsed ? (
                       <span
                         className="no-capture text-[10px] font-bold text-emerald-300/90 bg-emerald-500/10 border border-emerald-400/30 px-2 py-1 rounded-full flex items-center gap-1 whitespace-nowrap"
@@ -3352,7 +3049,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                   <div className="flex items-center gap-2 bg-slate-950/80 px-3.5 h-9 rounded-2xl border border-white/10 shadow-inner whitespace-nowrap flex-shrink-0">
                     <span className="text-[11px] text-slate-400 font-medium whitespace-nowrap flex-shrink-0">Overall Quality:</span>
-                    <span className="text-sm font-black font-mono text-white flex-shrink-0">{avgHealthScore}%</span>
+                    <span className="text-sm font-black font-mono text-white flex-shrink-0">{avgHealthScore === null ? '—' : `${avgHealthScore}%`}</span>
+                    {avgHealthScore !== null && (
                     <span className={`text-[10px] px-2.5 py-1 rounded-full font-extrabold uppercase whitespace-nowrap flex-shrink-0 inline-flex items-center gap-1 leading-none ${
                       criticalFeaturesCount > 0 || avgHealthScore < 80
                         ? 'bg-rose-950/80 text-rose-300 border border-rose-800/80'
@@ -3366,6 +3064,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         ? '🟡 Moderate Risk'
                         : '🟢 System Healthy'}
                     </span>
+                    )}
                   </div>
 
                   {/* Golden Runs Header Badge */}
@@ -3499,7 +3198,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       <div className="flex items-center justify-between">
                         <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
                           <Tag className="w-3.5 h-3.5 text-purple-400" />
-                          Feature Health Breakdown Report ({featureMetricsList.length} Features)
+                          Feature Health Breakdown Report ({featureMetricsList.length + bugOnlyMetrics.length} Features)
                         </h4>
                         <span className="text-[10px] font-mono text-slate-400">Live Snapshot Table</span>
                       </div>
@@ -3520,7 +3219,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-800/60 text-slate-100 font-medium">
-                            {featureMetricsList.map(metric => {
+                            {[...featureMetricsList, ...bugOnlyMetrics].map(metric => {
                               // Reuse the AI summary only if it was written for exactly these bugs
                               const aiRowSummary = generatedReport?.featureSummaries?.[metric.featureName];
                               const rowBugsKey = makeBugsKey(metric.associatedBugs || []);
@@ -3532,6 +3231,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 <tr key={metric.featureName} className="hover:bg-slate-900/50 transition">
                                   <td className="py-2.5 px-4 font-bold text-white whitespace-nowrap">{metric.featureName}</td>
                                   <td className="py-2.5 px-4 whitespace-nowrap">
+                                    {metric.status === 'no_steps' ? (
+                                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase border bg-slate-500/15 text-slate-300 border-slate-500/30">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+                                        No completed steps
+                                      </span>
+                                    ) : (
                                     <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase border ${
                                       metric.status === 'healthy'
                                         ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
@@ -3544,8 +3249,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                       }`}></span>
                                       {metric.status === 'healthy' ? 'Healthy' : metric.status === 'warning' ? 'Degraded' : 'Critical'}
                                     </span>
+                                    )}
                                   </td>
-                                  <td className="py-2.5 px-4 font-bold text-purple-300 font-mono whitespace-nowrap">{metric.healthScorePct}%</td>
+                                  <td className="py-2.5 px-4 font-bold text-purple-300 font-mono whitespace-nowrap">{metric.status === 'no_steps' ? '—' : `${metric.healthScorePct}%`}</td>
                                   <td className="py-2.5 px-4 font-mono font-semibold whitespace-nowrap">{metric.totalStepsExecuted}</td>
                                   <td className="py-2.5 px-4 text-emerald-400 font-bold font-mono whitespace-nowrap">{metric.greenCount}</td>
                                   <td className="py-2.5 px-4 text-amber-400 font-bold font-mono whitespace-nowrap">{metric.yellowCount}</td>
@@ -3583,7 +3289,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                       {goldenRunsAnalysis.runs.length === 0 ? (
                         <div className="p-4 rounded-xl border border-slate-800 bg-slate-950/60 text-center text-xs text-slate-400 font-medium">
-                          No completed test runs recorded for {selectedDailySessionDate === todayStr ? 'Today' : selectedDailySessionDate}.
+                          No completed test runs recorded for {reportPlanLabel} {reportDayPhrase}.
                         </div>
                       ) : (
                         <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/90 shadow-inner">
@@ -3705,17 +3411,29 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </div>
           )}
 
-          {featureMetricsList.length === 0 ? (
+          {featureMetricsList.length === 0 && bugOnlyMetrics.length === 0 ? (
             <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-10 text-center space-y-4 shadow-xl">
               <div className="p-3 bg-purple-950/60 rounded-full border border-purple-800/40 text-purple-400 w-fit mx-auto">
                 <Tag className="w-6 h-6" />
               </div>
               <div>
-                <h4 className="text-base font-bold text-white">No Features Tracked For {selectedDailySessionDate === todayStr ? 'Today' : selectedDailySessionDate}</h4>
+                <h4 className="text-base font-bold text-white">No completed runs for {reportPlanLabel} {reportDayPhrase}</h4>
                 <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
                   Execute test runs or click below to have the autonomous QA subagent test a flow and populate live feature data for today.
                 </p>
               </div>
+              {latestReportDate && latestReportDate !== selectedDailySessionDate && (
+                <div className="pt-1 flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDailySessionDate(latestReportDate)}
+                    className="px-4 py-2 bg-purple-500/15 hover:bg-purple-500/25 border border-purple-400/40 text-purple-200 font-extrabold text-xs rounded-2xl shadow-md flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+                  >
+                    <Calendar className="w-3.5 h-3.5 text-purple-300 flex-shrink-0" />
+                    <span>Jump to {formatReportDateLabel(latestReportDate)} (latest day with data)</span>
+                  </button>
+                </div>
+              )}
               {onRunSubagentTest && (
                 <div className="pt-2 flex justify-center">
                   <button
@@ -3737,7 +3455,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-              {featureMetricsList.map(metric => (
+              {[...featureMetricsList, ...bugOnlyMetrics].map(metric => (
                 <div
                   key={metric.featureName}
                   className={`liquid-glass-card rounded-3xl p-4 flex flex-col justify-between space-y-3 relative group ${
@@ -3745,6 +3463,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       ? 'border-rose-500/40 bg-rose-950/20'
                       : metric.status === 'warning'
                       ? 'border-amber-500/40 bg-amber-950/20'
+                      : metric.status === 'no_steps'
+                      ? 'border-violet-500/30 bg-violet-950/10'
                       : ''
                   }`}
                 >
@@ -3760,6 +3480,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     </div>
 
                     <div className="flex items-center gap-1.5 shrink-0">
+                      {metric.status === 'no_steps' ? (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border bg-slate-900 text-slate-300 border-slate-700" title="Bugs were logged, but no completed test steps were recorded in this view">
+                          🐛 No completed steps
+                        </span>
+                      ) : (
                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${
                         metric.status === 'healthy'
                           ? 'bg-emerald-950 text-emerald-400 border-emerald-800'
@@ -3769,6 +3494,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       }`}>
                         {metric.status === 'healthy' ? '🟢 Healthy' : metric.status === 'warning' ? '🟡 Degraded' : '🔴 Critical'}
                       </span>
+                      )}
 
                       {onDeleteFeature && metric.featureName.toLowerCase() !== 'general' && (
                         <button
@@ -3787,6 +3513,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </div>
 
                   {/* Progress Bar & Health Score */}
+                  {metric.status !== 'no_steps' && (
                   <div className="space-y-1">
                     <div className="flex justify-between text-[11px] font-medium">
                       <span className="text-slate-400">Health Score</span>
@@ -3805,6 +3532,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       ></div>
                     </div>
                   </div>
+                  )}
 
                   {/* Inline Execution Stats & Bugs pill */}
                   <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-800/80 font-mono">
@@ -3818,10 +3546,40 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         ? 'bg-rose-950/80 text-rose-300 border-rose-800/60'
                         : 'bg-slate-950 text-slate-400 border-slate-800'
                     }`}>
-                      🐛 {metric.bugCount} bugs
+                      🐛 {metric.bugCount} {metric.bugCount === 1 ? 'bug' : 'bugs'}
                     </span>
                   </div>
                 </div>
+              ))}
+            </div>
+          )}
+
+          {/* Known CUJs with no data in this view: kept out of every report, listed so they can still be deleted */}
+          {untestedCujNames.length > 0 && (
+            <div className="liquid-glass-card rounded-2xl px-4 py-3 flex flex-wrap items-center gap-2">
+              <span className="text-[11px] font-bold text-slate-400 whitespace-nowrap">Not tested in this view ({untestedCujNames.length}):</span>
+              {untestedCujNames.map(name => (
+                <span
+                  key={name}
+                  className={`inline-flex items-center gap-1 pl-2.5 ${onDeleteFeature ? 'pr-1' : 'pr-2.5'} py-0.5 rounded-full text-[11px] font-semibold text-slate-300 bg-slate-900/70 border border-slate-700/80 max-w-full`}
+                >
+                  <span className="truncate max-w-[14rem]" title={name}>{name}</span>
+                  {onDeleteFeature && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (confirm(`Delete feature "${name}"? Linked steps will be assigned to General.`)) {
+                          onDeleteFeature(name);
+                        }
+                      }}
+                      className="p-0.5 text-slate-500 hover:text-rose-400 hover:bg-slate-800 rounded-full transition flex-shrink-0"
+                      title={`Delete feature "${name}"`}
+                      aria-label={`Delete feature "${name}"`}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  )}
+                </span>
               ))}
             </div>
           )}
@@ -4701,7 +4459,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             )}
 
             <div className="space-y-1.5">
-              <p className="text-[11px] font-bold text-slate-300">1. The prompt is already on your clipboard (the day's bugs plus instructions)</p>
+              <p className="text-[11px] font-bold text-slate-300">1. The prompt is already on your clipboard (the bugs in this report plus instructions)</p>
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
