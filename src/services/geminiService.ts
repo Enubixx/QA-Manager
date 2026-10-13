@@ -2,6 +2,26 @@ import { GoogleGenAI } from '@google/genai';
 import { BugLog } from '../types';
 
 const summaryCache = new Map<string, string>();
+const SUMMARY_CACHE_MAX_ENTRIES = 500;
+
+function getSummaryCacheEntry(key: string): string | undefined {
+  if (!summaryCache.has(key)) return undefined;
+  const val = summaryCache.get(key)!;
+  // Refresh LRU order
+  summaryCache.delete(key);
+  summaryCache.set(key, val);
+  return val;
+}
+
+function setSummaryCacheEntry(key: string, value: string): void {
+  if (summaryCache.has(key)) {
+    summaryCache.delete(key);
+  } else if (summaryCache.size >= SUMMARY_CACHE_MAX_ENTRIES) {
+    const oldestKey = summaryCache.keys().next().value;
+    if (oldestKey !== undefined) summaryCache.delete(oldestKey);
+  }
+  summaryCache.set(key, value);
+}
 
 /**
  * Persistent cross-session cache for expensive batch executive summaries.
@@ -34,7 +54,14 @@ function readBatchCache(key: string): any | null {
     if (!raw) return null;
     const store = JSON.parse(raw);
     const hit = store?.[key];
-    if (hit && hit.overallSummary !== undefined) return hit;
+    if (hit && hit.overallSummary !== undefined) {
+      // Refresh LRU timestamp on cache hit
+      try {
+        hit.cachedAt = Date.now();
+        localStorage.setItem(BATCH_CACHE_KEY, JSON.stringify(store));
+      } catch (e) {}
+      return hit;
+    }
   } catch (e) {}
   return null;
 }
@@ -53,14 +80,22 @@ function writeBatchCache(key: string, value: any): void {
         .slice(0, keys.length - BATCH_CACHE_MAX_ENTRIES)
         .forEach(k => delete store[k]);
     }
-    localStorage.setItem(BATCH_CACHE_KEY, JSON.stringify(store));
+    try {
+      localStorage.setItem(BATCH_CACHE_KEY, JSON.stringify(store));
+    } catch (quotaErr) {
+      // On QuotaExceededError, evict older entries and keep only the newest entry
+      const singleStore = { [key]: store[key] };
+      localStorage.setItem(BATCH_CACHE_KEY, JSON.stringify(singleStore));
+    }
   } catch (e) {}
 }
 
 export function clearGeminiSummaryCaches(): void {
   summaryCache.clear();
+  resolvedEndpointCache.clear();
   try {
     localStorage.removeItem(BATCH_CACHE_KEY);
+    localStorage.removeItem('qa_gemini_resolved_endpoints');
   } catch (e) {}
 }
 
@@ -137,7 +172,7 @@ const NON_TEXT_MODEL_PATTERN = /(?:tts|live|audio|image|imagen|veo|embed|aqa|tra
 
 export function isSuitableSummaryModel(model: string): boolean {
   const id = normalizeModelId(model);
-  return !!id && !isRetiredGeminiModel(id) && !NON_TEXT_MODEL_PATTERN.test(id);
+  return !!id && /^gemini-/i.test(id) && !isRetiredGeminiModel(id) && !NON_TEXT_MODEL_PATTERN.test(id);
 }
 
 /**
@@ -464,13 +499,16 @@ export async function discoverAvailableGeminiModels(
   let lastError = '';
 
   for (const url of endpoints) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
     try {
       const response = await fetch(url, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
           'x-goog-api-key': key
-        }
+        },
+        signal: controller.signal
       });
 
       if (response.ok) {
@@ -490,7 +528,13 @@ export async function discoverAvailableGeminiModels(
         if (isKeyLevelError(response.status, lastError)) break;
       }
     } catch (err: any) {
-      lastError = redactApiKeys(err?.message || String(err), key);
+      if (err?.name === 'AbortError') {
+        lastError = 'Model discovery timed out after 15s';
+      } else {
+        lastError = redactApiKeys(err?.message || String(err), key);
+      }
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -498,25 +542,33 @@ export async function discoverAvailableGeminiModels(
 }
 
 /**
- * Cleans leading timestamps, bullet markers, and conversational clutter from raw note text.
+ * Cleans leading timestamps, bullet markers, and conversational clutter from raw note text
+ * without stripping decimal durations ("2.50 seconds"), HTTP status codes ("404: Not Found"), or version numbers.
  */
 export function cleanRawNote(raw: string): string {
   let text = (raw || '').trim();
   // Strip timestamps like "[10:15 AM]", "1.38 pm.", "at 2:00 PM,", "14:30 -"
-  text = text.replace(/^(?:\[?\d{1,2}[:.]\d{2}\s*(?:am|pm)?\]?[:.-]?\s*|at\s+\d{1,2}[:.]\d{2}\s*(?:am|pm)?[:,-]?\s*)/i, '');
-  // Strip list markers like "0.", "1.", "0: ", "- ", "* ", "• "
-  text = text.replace(/^(?:\d+[:.]|\*|-|•)\s*/g, '');
+  // Do NOT strip decimal numbers followed by units (e.g. "2.50 seconds", "1.25s", "3.5GB")
+  text = text.replace(
+    /^(?:\[?\d{1,2}:\d{2}\s*(?:am|pm)?\]?[:.-]?\s*|\d{1,2}\.\d{2}\s*(?:am|pm)\b[:.-]?\s*|at\s+\d{1,2}[:.]\d{2}\s*(?:am|pm)?[:,-]?\s*)/i,
+    ''
+  );
+  // Strip 1-2 digit list markers like "1.", "2) ", "- ", "* ", "• " (preserve 3-digit HTTP codes like "404:" and decimals like "2.5")
+  text = text.replace(/^(?:\d{1,2}[.)](?!\d)|\*\s+|-\s+|•\s*)\s*/, '');
   // Strip prefixes like "bug:", "issue:", "defect:", "note:", "encountered:", "found:"
   text = text.replace(/^(?:bug|issue|defect|error|problem|note|encountered|found|description):\s*/i, '');
   return text.trim();
 }
 
 /**
- * Removes times of day that testers type into notes, e.g. "11.16 After I asked...",
- * "...from a visual query. 10.48am" or "...the camera 1.18". They are noise in summaries.
+ * Removes times of day that testers type into notes, e.g. "11:16 After I asked...",
+ * "...from a visual query. 10.48am" or "...the camera at 1:18".
+ * Avoids stripping version/build numbers ("build 12.34", "v1.18") or decimal durations ("2.50 seconds").
  */
-const LEADING_TYPED_TIME = /^(?:\[?\d{1,2}[:.][0-5]\d\s*(?:am|pm)?\]?[:.-]?\s+|at\s+\d{1,2}[:.][0-5]\d\s*(?:am|pm)?[:,-]?\s*)/i;
-const TRAILING_TYPED_TIME = /[\s,;:-]*(?:\bat\s+)?\(?\b\d{1,2}[:.][0-5]\d\s*(?:am|pm)?\)?\.?\s*$/i;
+const LEADING_TYPED_TIME =
+  /^(?:\[?\d{1,2}:[0-5]\d\s*(?:am|pm)?\]?[:.-]?\s+|\d{1,2}\.[0-5]\d\s*(?:am|pm)\b[:.-]?\s+|\d{1,2}\.[0-5]\d\s+(?!(?:s|sec|secs|second|seconds|ms|min|mins|minute|minutes|hr|hrs|gb|mb|kb|fps|hz)\b)|at\s+\d{1,2}[:.][0-5]\d\s*(?:am|pm)?[:,-]?\s*)/i;
+const TRAILING_TYPED_TIME =
+  /(?<![\w/.-])(?<!\b(?:v|version|build|release|code|os|ios|android)\s)[\s,;:-]*(?:\bat\s+\(?\b\d{1,2}[:.][0-5]\d\s*(?:am|pm)?\)?|\(?\b\d{1,2}:[0-5]\d\s*(?:am|pm)?\)?|\(?\b\d{1,2}\.[0-5]\d\s*(?:am|pm)\)?)\.?\s*$/i;
 
 export function stripTypedTimestamps(raw: string): string {
   const original = (raw || '').trim();
@@ -553,8 +605,13 @@ function countWords(text: string): number {
 }
 
 function dedupeKey(phrase: string): string {
-  return phrase.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const normalized = (phrase || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  return normalized || (phrase || '').trim().toLowerCase();
 }
+
+const MAX_RAW_NOTE_CHARS = 600;
+const MAX_CONDENSED_PHRASE_CHARS = 220;
+const MAX_JOINED_DISTINCT_PHRASES = 8;
 
 /**
  * Shortens text to at most `maxWords`, preferring a clause boundary (comma,
@@ -562,16 +619,27 @@ function dedupeKey(phrase: string): string {
  */
 function truncateAtClauseBoundary(text: string, maxWords: number): string {
   const words = text.split(/\s+/).filter(Boolean);
-  if (words.length <= maxWords) return text;
+  if (words.length <= maxWords) {
+    if (text.length > MAX_CONDENSED_PHRASE_CHARS) {
+      return `${text.slice(0, MAX_CONDENSED_PHRASE_CHARS).trim()}…`;
+    }
+    return text;
+  }
   const minKeep = Math.max(4, Math.ceil(maxWords * 0.5));
   for (let i = maxWords; i >= minKeep; i--) {
     const last = words[i - 1];
     const next = (words[i] || '').toLowerCase().replace(/[^a-z]/g, '');
     if (/[,;:]$/.test(last) || CLAUSE_STARTERS.has(next)) {
-      return words.slice(0, i).join(' ').replace(/[,;:]+$/, '');
+      const candidate = words.slice(0, i).join(' ').replace(/[,;:]+$/, '');
+      return candidate.length > MAX_CONDENSED_PHRASE_CHARS
+        ? `${candidate.slice(0, MAX_CONDENSED_PHRASE_CHARS).trim()}…`
+        : candidate;
     }
   }
-  return `${words.slice(0, maxWords).join(' ').replace(/[,;:.]+$/, '')}…`;
+  const joined = `${words.slice(0, maxWords).join(' ').replace(/[,;:.]+$/, '')}…`;
+  return joined.length > MAX_CONDENSED_PHRASE_CHARS
+    ? `${joined.slice(0, MAX_CONDENSED_PHRASE_CHARS).trim()}…`
+    : joined;
 }
 
 /**
@@ -580,7 +648,8 @@ function truncateAtClauseBoundary(text: string, maxWords: number): string {
  * in `maxWords`, and only shortens extremely long notes (at a clause boundary).
  */
 export function condenseNoteFaithfully(raw: string, maxWords: number = 24): string {
-  let text = stripTypedTimestamps(cleanRawNote(raw).replace(/\s+/g, ' ').trim());
+  const cappedRaw = typeof raw === 'string' && raw.length > MAX_RAW_NOTE_CHARS ? raw.slice(0, MAX_RAW_NOTE_CHARS) : (raw || '');
+  let text = stripTypedTimestamps(cleanRawNote(cappedRaw).replace(/\s+/g, ' ').trim());
   if (!text) return '';
   text = text
     .replace(/^(?:so|also|and|then)\s+/i, '')
@@ -967,8 +1036,8 @@ const OFFLINE_PHRASE_MAX_WORDS = 40;
 export function nlpCleanReword(notes: string[], featureName: string): string {
   if (!notes || notes.length === 0) return '';
 
-  if (featureName.toLowerCase() === 'overall') {
-    return synthesizeExecutiveOverview(notes, []);
+  if ((featureName || '').toLowerCase() === 'overall') {
+    return synthesizeExecutiveOverview([...notes], []);
   }
 
   const tally = new Map<string, { phrase: string; count: number; order: number }>();
@@ -976,6 +1045,7 @@ export function nlpCleanReword(notes: string[], featureName: string): string {
     const phrase = condenseNoteFaithfully(note, OFFLINE_PHRASE_MAX_WORDS);
     if (!phrase) continue;
     const key = dedupeKey(phrase);
+    if (!key) continue;
     const existing = tally.get(key);
     if (existing) {
       existing.count += 1;
@@ -985,7 +1055,24 @@ export function nlpCleanReword(notes: string[], featureName: string): string {
   }
 
   const ranked = Array.from(tally.values()).sort((a, b) => b.count - a.count || a.order - b.order);
-  return joinIssuePhrases(ranked.map(({ phrase, count }) => (count > 1 ? `${phrase} (${count}x)` : phrase)));
+  if (ranked.length === 0) return '';
+  const visible = ranked.slice(0, MAX_JOINED_DISTINCT_PHRASES);
+  const overflowCount = ranked.length - visible.length;
+  const joined = joinIssuePhrases(
+    visible.map(({ phrase, count }) => (count > 1 ? `${phrase} (${count}x)` : phrase))
+  );
+  if (overflowCount > 0) {
+    return `${joined.replace(/\.$/, '')} (+${overflowCount} more).`;
+  }
+  return joined;
+}
+
+function buildFeatureSummaryCacheKey(apiKey: string, model: string, featureName: string, bugs: BugLog[]): string {
+  const parts = (bugs || [])
+    .map(b => `${(b?.stepTitle || '').trim()}:${(b?.note || '').trim()}`)
+    .filter(s => s !== ':')
+    .sort();
+  return `feat:${apiKey}:${model}:${featureName}:${parts.join('||')}`;
 }
 
 /**
@@ -997,27 +1084,33 @@ export async function summarizeFeatureBugsWithGemini(
   yellowCount: number = 0,
   redCount: number = 0
 ): Promise<string> {
-  const bugDetailsList = bugs.map(b => {
-    let notePart = (b.note || '').trim();
-    notePart = notePart.replace(/^(?:\[?\d{1,2}[:.]\d{2}\s*(?:am|pm)?\]?[:.-]?\s*|at\s+\d{1,2}[:.]\d{2}\s*(?:am|pm)?[:,-]?\s*)/i, '');
-    notePart = notePart.replace(/^(?:\d+[:.]|\*|-|•)\s*/g, '');
-    const titlePart = b.stepTitle ? `${b.stepTitle}: ` : '';
-    return `- ${titlePart}${notePart}`;
-  });
-
-  if (bugDetailsList.length === 0) {
+  const stepFailureFallback = () => {
     if (redCount > 0 || yellowCount > 0) {
       const count = redCount + yellowCount;
       return `${count} step failure${count > 1 ? 's' : ''}`;
     }
     return '';
+  };
+
+  const bugDetailsList = (bugs || [])
+    .map(b => {
+      let notePart = cleanRawNote(b?.note || '');
+      if (!notePart) return '';
+      const titlePart = b?.stepTitle ? `${b.stepTitle}: ` : '';
+      return `- ${titlePart}${notePart}`;
+    })
+    .filter(Boolean);
+
+  if (bugDetailsList.length === 0) {
+    return stepFailureFallback();
   }
 
   const userApiKey = getStoredGeminiApiKey();
   const selectedModel = getStoredGeminiModel();
-  const cacheKey = `${userApiKey}:${selectedModel}:${featureName}:${bugDetailsList.sort().join('||')}`;
-  if (summaryCache.has(cacheKey)) {
-    return summaryCache.get(cacheKey)!;
+  const cacheKey = buildFeatureSummaryCacheKey(userApiKey, selectedModel, featureName, bugs);
+  const cached = getSummaryCacheEntry(cacheKey);
+  if (cached !== undefined) {
+    return cached;
   }
 
   if (userApiKey) {
@@ -1043,26 +1136,24 @@ CRITICAL REQUIREMENTS:
       const responseText = await callGeminiRestApi(userApiKey, selectedModel, prompt, { maxOutputTokens: 8192 });
       const text = (responseText || '').trim().replace(/^["']|["']$/g, '');
       if (text) {
-        summaryCache.set(cacheKey, text);
+        setSummaryCacheEntry(cacheKey, text);
         return text;
       }
     } catch (err) {
       console.warn(`Gemini API call failed with model ${selectedModel}:`, err);
+      // Do not poison cacheKey on transient API failure
+      const transientFallback = nlpCleanReword((bugs || []).map(b => b?.note || ''), featureName) || stepFailureFallback();
+      return transientFallback;
     }
   }
 
-  const fallback = nlpCleanReword(bugs.map(b => b.note), featureName);
-  summaryCache.set(cacheKey, fallback);
+  const fallback = nlpCleanReword((bugs || []).map(b => b?.note || ''), featureName) || stepFailureFallback();
+  setSummaryCacheEntry(cacheKey, fallback);
   return fallback;
 }
 
 /**
  * Synchronous reworded summary for instant UI rendering.
- *
- * PERF: This runs inside the render loop for every feature row. It must stay
- * 100% local - previously it fired a background Gemini request per feature on
- * every re-render, which saturated the API rate limit and starved the main
- * executive summary request. Identical output text, zero network cost.
  */
 export function getBriefIssueSummarySync(
   featureName: string,
@@ -1070,25 +1161,42 @@ export function getBriefIssueSummarySync(
   yellowCount: number = 0,
   redCount: number = 0
 ): string {
-  const notes = bugs
-    .map(b => b.note?.trim())
-    .filter((n): n is string => !!n && n.length > 0);
-
-  if (notes.length === 0) {
+  const stepFailureFallback = () => {
     if (redCount > 0 || yellowCount > 0) {
       const count = redCount + yellowCount;
       return `${count} step failure${count > 1 ? 's' : ''}`;
     }
     return '';
+  };
+
+  const notes = (bugs || [])
+    .map(b => b?.note?.trim())
+    .filter((n): n is string => !!n && n.length > 0);
+
+  if (notes.length === 0) {
+    return stepFailureFallback();
   }
 
   const userApiKey = getStoredGeminiApiKey();
-  const cacheKey = `${userApiKey}:${featureName}:${notes.sort().join('||')}`;
-  if (summaryCache.has(cacheKey)) {
-    return summaryCache.get(cacheKey)!;
+  const selectedModel = getStoredGeminiModel();
+  const unifiedKey = buildFeatureSummaryCacheKey(userApiKey, selectedModel, featureName, bugs);
+  const cachedUnified = getSummaryCacheEntry(unifiedKey);
+  if (cachedUnified !== undefined) {
+    return cachedUnified;
   }
 
-  return nlpCleanReword(notes, featureName);
+  const sortedNotes = [...notes].sort();
+  const localKey = `local:${featureName}:${sortedNotes.join('||')}`;
+  const cachedLocal = getSummaryCacheEntry(localKey);
+  if (cachedLocal !== undefined) {
+    return cachedLocal;
+  }
+
+  const computed = nlpCleanReword(notes, featureName) || stepFailureFallback();
+  if (computed) {
+    setSummaryCacheEntry(localKey, computed);
+  }
+  return computed;
 }
 
 /**
@@ -1106,9 +1214,11 @@ export async function summarizeOverallBugsWithGemini(bugs: BugLog[] = []): Promi
 
   const userApiKey = getStoredGeminiApiKey();
   const selectedModel = getStoredGeminiModel();
-  const cacheKey = `overall:${userApiKey}:${selectedModel}:${bugLines.sort().join('||')}`;
-  if (summaryCache.has(cacheKey)) {
-    return summaryCache.get(cacheKey)!;
+  const sortedBugLines = [...bugLines].sort();
+  const cacheKey = `overall:${userApiKey}:${selectedModel}:${sortedBugLines.join('||')}`;
+  const cached = getSummaryCacheEntry(cacheKey);
+  if (cached !== undefined) {
+    return cached;
   }
 
   if (userApiKey) {
@@ -1133,18 +1243,21 @@ CRITICAL REQUIREMENTS:
       const responseText = await callGeminiRestApi(userApiKey, selectedModel, prompt, { maxOutputTokens: 8192 });
       const text = (responseText || '').trim().replace(/^["']|["']$/g, '');
       if (text) {
-        summaryCache.set(cacheKey, text);
+        setSummaryCacheEntry(cacheKey, text);
         return text;
       }
     } catch (err) {
       console.warn(`Gemini overall summary API call failed with model ${selectedModel}:`, err);
+      const notes = bugs.map(b => b.note).filter(Boolean);
+      const featureNames = Array.from(new Set(bugs.map(b => b.feature).filter(Boolean))) as string[];
+      return notes.length > 0 ? synthesizeExecutiveOverview(notes, featureNames) : '';
     }
   }
 
   const notes = bugs.map(b => b.note).filter(Boolean);
   const featureNames = Array.from(new Set(bugs.map(b => b.feature).filter(Boolean))) as string[];
   const fallback = notes.length > 0 ? synthesizeExecutiveOverview(notes, featureNames) : '';
-  summaryCache.set(cacheKey, fallback);
+  setSummaryCacheEntry(cacheKey, fallback);
   return fallback;
 }
 
@@ -1244,7 +1357,26 @@ function cleanNoteForPrompt(note: string): string {
 
 /** Parses model JSON, tolerating code fences or stray text around the object. */
 function parseJsonLoose(text: string): any {
-  const trimmed = (text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  const raw = (text || '').trim();
+  // 1. Prefer fenced ```json ... ``` or ``` ... ``` block anywhere in the reply
+  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenceMatch && fenceMatch[1]) {
+    const fenced = fenceMatch[1].trim();
+    try {
+      return JSON.parse(fenced);
+    } catch (e) {
+      const fStart = fenced.indexOf('{');
+      const fEnd = fenced.lastIndexOf('}');
+      if (fStart >= 0 && fEnd > fStart) {
+        try {
+          return JSON.parse(fenced.slice(fStart, fEnd + 1));
+        } catch (inner) {}
+      }
+    }
+  }
+
+  // 2. Direct parse or brace extraction on the full string
+  const trimmed = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   try {
     return JSON.parse(trimmed);
   } catch (e) {

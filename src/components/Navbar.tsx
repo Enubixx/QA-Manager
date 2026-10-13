@@ -32,7 +32,19 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate }) => {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         
         {/* Brand & System Title */}
-        <div className="flex items-center gap-3 cursor-pointer group" onClick={() => onNavigate('dashboard')}>
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label="Go to QA Manager Dashboard"
+          onClick={() => onNavigate('dashboard')}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onNavigate('dashboard');
+            }
+          }}
+          className="flex items-center gap-3 cursor-pointer group focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-2xl"
+        >
           <div className="p-2.5 bg-blue-600 rounded-2xl text-white shadow-sm border border-blue-500/40 transition-transform duration-200 group-hover:scale-105">
             <ShieldCheck className="w-5 h-5" />
           </div>

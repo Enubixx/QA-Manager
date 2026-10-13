@@ -112,12 +112,26 @@ const parseLocalDate = (dateStr: string): Date | null => {
 /** Epoch ms of a timestamp, or NaN when it is missing or invalid. */
 const toEpochMs = (value: unknown): number => {
   if (value === null || value === undefined || value === '') return NaN;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return NaN;
+    const localDay = parseLocalDate(trimmed);
+    if (localDay) return localDay.getTime();
+  }
   const ms = (value instanceof Date ? value : new Date(value as string)).getTime();
   return Number.isFinite(ms) ? ms : NaN;
 };
 
 /** Local calendar day ('YYYY-MM-DD') of a timestamp; '' when it is missing or invalid. */
 export function localDateStr(input?: string | number | Date | null): string {
+  if (input === null || input === undefined) return '';
+  if (typeof input === 'string') {
+    const trimmed = input.trim();
+    if (!trimmed) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      return parseLocalDate(trimmed) ? trimmed : '';
+    }
+  }
   const ms = toEpochMs(input);
   if (Number.isNaN(ms)) return '';
   const d = new Date(ms);
@@ -165,29 +179,35 @@ export function getRecordedResults(run: TestRun): Array<[string, StepResult]> {
   return recorded;
 }
 
-/** Archived + active runs, one per id; the active copy wins on a collision. */
-export function mergeRunsById(archivedRuns: TestRun[], activeRuns: TestRun[]): TestRun[] {
+/** Archived + active runs, one per id; active copy wins unless an existing entry is already completed and the incoming copy is not. */
+export function mergeRunsById(archivedRuns: TestRun[], activeRuns: TestRun[] = []): TestRun[] {
   const map = new Map<string, TestRun>();
-  (archivedRuns || []).forEach(r => {
-    if (r && r.id) map.set(r.id, r);
-  });
-  (activeRuns || []).forEach(r => {
-    if (r && r.id) map.set(r.id, r);
-  });
+  const upsert = (r: TestRun | undefined | null) => {
+    if (!r || !r.id) return;
+    const existing = map.get(r.id);
+    if (existing && existing.status === 'completed' && r.status !== 'completed') {
+      return;
+    }
+    map.set(r.id, r);
+  };
+  (archivedRuns || []).forEach(upsert);
+  (activeRuns || []).forEach(upsert);
   return Array.from(map.values());
 }
 
-/** Every CUJ name the app knows: the features list, every current plan step and every bug (trimmed, deduped). */
+/** Every CUJ name the app knows: the features list, every current plan step and every bug (trimmed, case-insensitively deduped). */
 export function getKnownCujNames(plans: TestPlan[], bugs: BugLog[], populatedFeatures: string[]): string[] {
-  const names = new Set<string>();
+  const namesByKey = new Map<string, string>();
   const add = (value: unknown) => {
     const name = trimName(value);
-    if (isCujName(name)) names.add(name);
+    if (!isCujName(name)) return;
+    const key = name.toLowerCase();
+    if (!namesByKey.has(key)) namesByKey.set(key, name);
   };
   (populatedFeatures || []).forEach(add);
   (plans || []).forEach(p => (p?.steps || []).forEach(s => add(s?.feature)));
   (bugs || []).forEach(b => add(b?.feature));
-  return Array.from(names);
+  return Array.from(namesByKey.values());
 }
 
 // ---------------------------------------------------------------------------
@@ -199,6 +219,8 @@ interface CountingContext {
   planById: Map<string, TestPlan>;
   /** planId -> stepId -> trimmed current step feature */
   stepFeatures: Map<string, Map<string, string>>;
+  /** stepId -> first matching planId */
+  stepToPlanId: Map<string, string>;
   /** run id -> plan id, over the full run set (any status) */
   runPlanIds: Map<string, string>;
   finishedRuns: TestRun[];
@@ -211,12 +233,16 @@ const buildContext = (plans: TestPlan[], runs: TestRun[], firstSeen?: StepFirstS
   const index = firstSeen ?? buildStepFirstSeenIndex(safeRuns);
   const planById = new Map<string, TestPlan>();
   const stepFeatures = new Map<string, Map<string, string>>();
+  const stepToPlanId = new Map<string, string>();
   safePlans.forEach(p => {
     if (!planById.has(p.id)) planById.set(p.id, p);
     if (!stepFeatures.has(p.id)) {
       const steps = new Map<string, string>();
       (p.steps || []).forEach(s => {
-        if (s && !steps.has(s.id)) steps.set(s.id, trimName(s.feature));
+        if (s && !steps.has(s.id)) {
+          steps.set(s.id, trimName(s.feature));
+          if (!stepToPlanId.has(s.id)) stepToPlanId.set(s.id, p.id);
+        }
       });
       stepFeatures.set(p.id, steps);
     }
@@ -229,6 +255,7 @@ const buildContext = (plans: TestPlan[], runs: TestRun[], firstSeen?: StepFirstS
     plans: safePlans,
     planById,
     stepFeatures,
+    stepToPlanId,
     runPlanIds,
     finishedRuns: safeRuns.filter(r => isRunFullyCompleted(r, safePlans, index)),
     firstSeen: index
@@ -241,8 +268,9 @@ const stepFeatureOf = (ctx: CountingContext, planId: string, stepId: string): st
 const runsInPlanScope = (ctx: CountingContext, planId: string): TestRun[] =>
   planId === ALL_PLANS ? ctx.finishedRuns : ctx.finishedRuns.filter(r => r.planId === planId);
 
-/** S5: the result's local day, else the run's start day; '' = only counted under All days. */
-const resultDateOf = (res: StepResult, run: TestRun): string => localDateStr(res.timestamp) || localDateStr(run.startedAt);
+/** S5: the result's local day, else the run's completed day, else the run's start day; '' = only counted under All days. */
+const resultDateOf = (res: StepResult, run: TestRun): string =>
+  localDateStr(res?.timestamp) || localDateStr(run?.completedAt) || localDateStr(run?.startedAt);
 
 /** S6: the CUJ the result was recorded as, else the current step's feature (trimmed). */
 const resultCujOf = (ctx: CountingContext, run: TestRun, stepId: string, res: StepResult): string =>
@@ -275,7 +303,14 @@ const collectScopedBugs = (ctx: CountingContext, bugs: BugLog[], planId: string)
       if (seenIds.has(bug.id)) return;
       seenIds.add(bug.id);
     }
-    const bugPlan = bug.planId || (bug.testRunId ? ctx.runPlanIds.get(bug.testRunId) : undefined) || '';
+    const inferredPlan =
+      bug.planId ||
+      (bug.testRunId ? ctx.runPlanIds.get(bug.testRunId) : undefined) ||
+      (bug.stepId ? ctx.stepToPlanId.get(bug.stepId) : undefined) ||
+      '';
+    const stepMatchesSelectedPlan =
+      planId !== ALL_PLANS && !!bug.stepId && !!ctx.stepFeatures.get(planId)?.has(bug.stepId);
+    const bugPlan = stepMatchesSelectedPlan ? planId : inferredPlan;
     if (planId !== ALL_PLANS && bugPlan !== planId) return;
     const cuj = trimName(bug.feature) || (bug.stepId ? stepFeatureOf(ctx, bugPlan, bug.stepId) : '');
     if (!isCujName(cuj)) return;
@@ -422,12 +457,29 @@ export function computeCujReport(input: {
   const isAllPlans = scope.planId === ALL_PLANS;
   const scopedRuns = runsInPlanScope(ctx, scope.planId);
 
-  const metricsByName = new Map<string, CujMetric>();
-  const metricFor = (name: string): CujMetric => {
-    let metric = metricsByName.get(name);
+  const knownNames = input.knownCujNames ?? getKnownCujNames(ctx.plans, input.bugs || [], []);
+  const canonicalDisplayByKey = new Map<string, string>();
+  const registerCanonical = (raw: string) => {
+    const trimmed = trimName(raw);
+    if (!isCujName(trimmed)) return '';
+    const key = trimmed.toLowerCase();
+    if (!canonicalDisplayByKey.has(key)) {
+      canonicalDisplayByKey.set(key, trimmed);
+    }
+    return canonicalDisplayByKey.get(key)!;
+  };
+  (knownNames || []).forEach(registerCanonical);
+  ctx.plans.forEach(p => (p?.steps || []).forEach(s => registerCanonical(s?.feature || '')));
+  (input.bugs || []).forEach(b => registerCanonical(b?.feature || ''));
+
+  const metricsByKey = new Map<string, CujMetric>();
+  const metricFor = (rawName: string): CujMetric => {
+    const displayName = registerCanonical(rawName) || trimName(rawName);
+    const key = displayName.toLowerCase();
+    let metric = metricsByKey.get(key);
     if (!metric) {
       metric = {
-        featureName: name,
+        featureName: displayName,
         totalStepsExecuted: 0,
         greenCount: 0,
         yellowCount: 0,
@@ -437,7 +489,7 @@ export function computeCujReport(input: {
         status: 'no_steps',
         associatedBugs: []
       };
-      metricsByName.set(name, metric);
+      metricsByKey.set(key, metric);
     }
     return metric;
   };
@@ -471,10 +523,18 @@ export function computeCujReport(input: {
   // S9 / S10 classification and health
   const testedMetrics: CujMetric[] = [];
   const bugOnlyMetrics: CujMetric[] = [];
-  metricsByName.forEach(metric => {
+  metricsByKey.forEach(metric => {
     if (metric.totalStepsExecuted >= 1) {
       metric.healthScorePct = Math.round((100 * metric.greenCount) / metric.totalStepsExecuted);
-      metric.status = metric.healthScorePct <= 59 ? 'critical' : metric.healthScorePct <= 94 ? 'warning' : 'healthy';
+      let status: CujStatus =
+        metric.healthScorePct <= 59 ? 'critical' : metric.healthScorePct <= 94 ? 'warning' : 'healthy';
+      if (metric.bugCount > 0 && status === 'healthy') {
+        const hasCriticalBug = metric.associatedBugs.some(
+          b => b.severity === 'critical' || b.priority === 'P0' || b.priority === '0'
+        );
+        status = hasCriticalBug ? 'critical' : 'warning';
+      }
+      metric.status = status;
       testedMetrics.push(metric);
     } else if (metric.bugCount >= 1) {
       metric.healthScorePct = 0;
@@ -491,13 +551,16 @@ export function computeCujReport(input: {
   );
   bugOnlyMetrics.sort((a, b) => a.featureName.localeCompare(b.featureName));
 
-  const knownNames = input.knownCujNames ?? getKnownCujNames(ctx.plans, input.bugs || [], []);
-  const untestedSet = new Set<string>();
+  const untestedByKey = new Map<string, string>();
   (knownNames || []).forEach(n => {
     const name = trimName(n);
-    if (isCujName(name) && !metricsByName.has(name)) untestedSet.add(name);
+    if (!isCujName(name)) return;
+    const key = name.toLowerCase();
+    if (!metricsByKey.has(key) && !untestedByKey.has(key)) {
+      untestedByKey.set(key, canonicalDisplayByKey.get(key) || name);
+    }
   });
-  const untestedCujNames = Array.from(untestedSet).sort((a, b) => a.localeCompare(b));
+  const untestedCujNames = Array.from(untestedByKey.values()).sort((a, b) => a.localeCompare(b));
 
   // S11 totals
   const testedCujCount = testedMetrics.length;
@@ -506,6 +569,7 @@ export function computeCujReport(input: {
   const healthyCount = testedMetrics.filter(m => m.status === 'healthy').length;
   const criticalPct = pct(criticalCount, testedCujCount);
   const warningPct = pct(warningCount, testedCujCount);
+  const healthyPct = pct(healthyCount, testedCujCount);
   const totals: CujReportTotals = {
     testedCujCount,
     stepsExecuted: testedMetrics.reduce((sum, m) => sum + m.totalStepsExecuted, 0),
@@ -514,7 +578,7 @@ export function computeCujReport(input: {
     criticalCount,
     criticalPct,
     warningPct,
-    healthyPct: testedCujCount > 0 ? Math.max(0, 100 - criticalPct - warningPct) : 0,
+    healthyPct,
     avgHealthScore: testedCujCount > 0
       ? Math.round(testedMetrics.reduce((sum, m) => sum + m.healthScorePct, 0) / testedCujCount)
       : null,
@@ -524,11 +588,13 @@ export function computeCujReport(input: {
   // S12 golden runs: session runs judged on everything they recorded
   const sessionRuns = scope.date === ALL_DATES
     ? scopedRuns
-    : scopedRuns.filter(run =>
-        localDateStr(run.completedAt) === scope.date ||
-        localDateStr(run.startedAt) === scope.date ||
-        getRecordedResults(run).some(([, res]) => localDateStr(res.timestamp) === scope.date)
-      );
+    : scopedRuns.filter(run => {
+        const recorded = getRecordedResults(run);
+        if (recorded.length > 0) {
+          return recorded.some(([, res]) => resultDateOf(res, run) === scope.date);
+        }
+        return (localDateStr(run.completedAt) || localDateStr(run.startedAt)) === scope.date;
+      });
   const goldenRows: GoldenRunRow[] = sessionRuns.map(run => {
     const recorded = getRecordedResults(run);
     let greenCount = 0;
@@ -642,7 +708,7 @@ export function buildTimelinePoints(input: { plans: TestPlan[]; runs: TestRun[];
         yellow: d.yellow,
         red: d.red,
         bugs: d.bugCount,
-        scorePct: d.stepCount > 0 ? Math.round((100 * d.green) / d.stepCount) : 100
+        scorePct: d.stepCount > 0 ? Math.round((100 * d.green) / d.stepCount) : d.bugCount > 0 ? 0 : 100
       };
     });
 }
@@ -825,7 +891,7 @@ export function buildCujReportText(data: CujReportData, opts: {
   htmlText += `<p style="margin: 0 0 4px 0;">• <b>Status</b>: 🟢 ${totals.healthyCount} Healthy | 🟡 ${totals.warningCount} Degraded | 🔴 ${totals.criticalCount} Critical (${totals.bugCount} Bugs)</p>`;
   htmlText += `<p style="margin: 0;">• <b>Golden Runs</b>: 🏆 <b>${goldenCount}</b> <span style="color: #64748b; font-size: 11px;">(≤1 orange, 0 reds)</span></p>`;
   if (disclaimer && disclaimer.trim()) {
-    htmlText += `<p style="margin: 4px 0 0 0; color: #475569;"><b>Disclaimer:</b> ${disclaimer.trim()}</p>`;
+    htmlText += `<p style="margin: 4px 0 0 0; color: #475569;"><b>Disclaimer:</b> ${escapeHtml(disclaimer.trim())}</p>`;
   }
   if (overallSummary) {
     htmlText += `<br>`;

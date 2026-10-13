@@ -17,8 +17,8 @@ export type HapticFeedbackType =
  */
 export const triggerHaptic = (type: HapticFeedbackType = 'light') => {
   // 1. Native Capacitor Haptics (uses Android's native KEYBOARD_TAP / EFFECT_CLICK)
-  if (Capacitor.isNativePlatform()) {
-    try {
+  try {
+    if (Capacitor.isNativePlatform()) {
       if (type === 'soft' || type === 'selection' || type === 'light' || type === 'medium') {
         // Exact Android keyboard keypress click
         Haptics.impact({ style: ImpactStyle.Light }).catch(() => {});
@@ -32,8 +32,8 @@ export const triggerHaptic = (type: HapticFeedbackType = 'light') => {
         Haptics.notification({ type: NotificationType.Error }).catch(() => {});
       }
       return;
-    } catch (e) {}
-  }
+    }
+  } catch (e) {}
 
   // 2. HTML5 Navigator Vibrate fallback with ultra-tight keyboard-tick durations
   try {

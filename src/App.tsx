@@ -32,7 +32,8 @@ import {
 } from './services/supabaseService';
 import { isSupabaseConfigured } from './lib/supabase';
 import { getLocalDateStr } from './utils/dateUtils';
-import { isRunFullyCompleted } from './utils/runUtils';
+import { isRunFullyCompleted, buildStepFirstSeenIndex } from './utils/runUtils';
+import { mergeRunsById } from './utils/cujReportUtils';
 import {
   drainOfflineQueue,
   safeSyncTestRun,
@@ -42,6 +43,80 @@ import {
   safeSyncDevices
 } from './services/offlineSyncQueue';
 import { APP_VERSION_CODE, CONFIG_MIN_APP_VERSION, CONFIG_DAILY_RESET_DATE } from './constants';
+
+const safeSetStorageItem = (key: string, value: string, fallbackFn?: () => string) => {
+  try {
+    localStorage.setItem(key, value);
+  } catch (err) {
+    if (fallbackFn) {
+      try {
+        localStorage.setItem(key, fallbackFn());
+      } catch (innerErr) {
+        console.error(`Critical quota error saving ${key}:`, innerErr);
+      }
+    } else {
+      console.warn(`localStorage error saving ${key}:`, err);
+    }
+  }
+};
+
+const normalizePlans = (raw: unknown): TestPlan[] => {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((p: any) => p && typeof p === 'object' && typeof p.id === 'string' && p.id.trim() !== '')
+    .map((p: any) => ({
+      ...p,
+      name: typeof p.name === 'string' ? p.name : 'Untitled Plan',
+      description: typeof p.description === 'string' ? p.description : '',
+      createdAt: typeof p.createdAt === 'string' ? p.createdAt : new Date().toISOString(),
+      steps: Array.isArray(p.steps)
+        ? p.steps.filter((s: any) => s && typeof s === 'object' && typeof s.id === 'string')
+        : []
+    }));
+};
+
+const normalizeRuns = (raw: unknown): TestRun[] => {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((r: any) => r && typeof r === 'object' && typeof r.id === 'string' && r.id.trim() !== '')
+    .map((r: any) => ({
+      ...r,
+      planId: typeof r.planId === 'string' ? r.planId : '',
+      planName: typeof r.planName === 'string' ? r.planName : 'Test Plan',
+      testerName: typeof r.testerName === 'string' ? r.testerName : '',
+      deviceName: typeof r.deviceName === 'string' ? r.deviceName : '',
+      status: r.status || 'not_started',
+      currentStepIndex: typeof r.currentStepIndex === 'number' && !isNaN(r.currentStepIndex) ? r.currentStepIndex : 0,
+      results: r.results && typeof r.results === 'object' && !Array.isArray(r.results) ? r.results : {},
+      bugLogs: Array.isArray(r.bugLogs)
+        ? r.bugLogs.filter((b: any) => b && typeof b === 'object' && typeof b.id === 'string')
+        : [],
+      startedAt: typeof r.startedAt === 'string' ? r.startedAt : new Date().toISOString()
+    }));
+};
+
+const normalizeBugs = (raw: unknown): BugLog[] => {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((b: any) => b && typeof b === 'object' && typeof b.id === 'string' && b.id.trim() !== '');
+};
+
+const normalizeDevices = (raw: unknown): DeviceProfile[] => {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((d: any) => d && typeof d === 'object' && typeof d.id === 'string' && d.id.trim() !== '' && typeof d.name === 'string')
+    .map((d: any) => ({
+      ...d,
+      isReady: typeof d.isReady === 'boolean' ? d.isReady : true,
+      quotas: Array.isArray(d.quotas)
+        ? d.quotas.filter((q: any) => q && typeof q === 'object' && typeof q.planId === 'string')
+        : []
+    }));
+};
+
+const normalizeTesters = (raw: unknown): TesterProfile[] => {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((t: any) => t && typeof t === 'object' && typeof t.id === 'string' && t.id.trim() !== '' && typeof t.name === 'string');
+};
 
 export function App() {
   const [currentView, setCurrentView] = useState<'dashboard' | 'mobile' | 'plan-builder'>(() => {
@@ -70,7 +145,7 @@ export function App() {
   const [testPlans, setTestPlans] = useState<TestPlan[]>(() => {
     try {
       const saved = localStorage.getItem('qa_test_plans');
-      if (saved) return JSON.parse(saved);
+      if (saved) return normalizePlans(JSON.parse(saved));
     } catch (e) {}
     return [];
   });
@@ -79,7 +154,7 @@ export function App() {
     try {
       const saved = localStorage.getItem('qa_test_runs');
       if (saved) {
-        const parsed: TestRun[] = JSON.parse(saved);
+        const parsed = normalizeRuns(JSON.parse(saved));
         const todayStr = getLocalDateStr();
         return parsed.filter(r => {
           if (r.status === 'in_progress') {
@@ -97,15 +172,13 @@ export function App() {
     try {
       const saved = localStorage.getItem('qa_archived_runs');
       if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed.filter((r: TestRun) => {
-            const stepEntries = Object.entries(r.results || {}).filter(
-              ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
-            );
-            return stepEntries.length > 0 || (r.bugLogs && r.bugLogs.length > 0);
-          });
-        }
+        const parsed = normalizeRuns(JSON.parse(saved));
+        return parsed.filter((r: TestRun) => {
+          const stepEntries = Object.entries(r.results || {}).filter(
+            ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
+          );
+          return stepEntries.length > 0 || (r.bugLogs && r.bugLogs.length > 0);
+        });
       }
     } catch (e) {}
     return [];
@@ -114,7 +187,7 @@ export function App() {
   const [bugLogs, setBugLogs] = useState<BugLog[]>(() => {
     try {
       const saved = localStorage.getItem('qa_bug_logs');
-      if (saved) return JSON.parse(saved);
+      if (saved) return normalizeBugs(JSON.parse(saved));
     } catch (e) {}
     return [];
   });
@@ -123,7 +196,7 @@ export function App() {
   const [devices, setDevices] = useState<DeviceProfile[]>(() => {
     try {
       const saved = localStorage.getItem('qa_devices_list');
-      if (saved) return JSON.parse(saved);
+      if (saved) return normalizeDevices(JSON.parse(saved));
     } catch (e) {}
     return [];
   });
@@ -132,31 +205,43 @@ export function App() {
   const [testers, setTesters] = useState<TesterProfile[]>(() => {
     try {
       const saved = localStorage.getItem('qa_testers_list');
-      if (saved) return JSON.parse(saved);
+      if (saved) return normalizeTesters(JSON.parse(saved));
     } catch (e) {}
     return [];
   });
 
   // User-populated devices list
   const [populatedDevices, setPopulatedDevices] = useState<string[]>(() => {
-    const saved = localStorage.getItem('qa_populated_devices');
-    if (saved) return JSON.parse(saved);
+    try {
+      const saved = localStorage.getItem('qa_populated_devices');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((d): d is string => typeof d === 'string' && d.trim() !== '');
+        }
+      }
+    } catch (e) {}
     const existing = Array.from(new Set(testRuns.map((r: TestRun) => r.deviceName).filter(Boolean))) as string[];
     return existing;
   });
 
   // User-populated feature identifiers list
   const [populatedFeatures, setPopulatedFeatures] = useState<string[]>(() => {
-    const saved = localStorage.getItem('qa_populated_features');
     let list: string[] = [];
-    if (saved) {
-      list = JSON.parse(saved);
-    } else {
-      const existingFromPlans = testPlans.flatMap(p => p.steps.map(s => s.feature || '')).filter(Boolean);
-      const existingFromBugs = bugLogs.map(b => b.feature || '').filter(Boolean);
-      list = Array.from(new Set([...existingFromPlans, ...existingFromBugs]));
-    }
-    return list.filter(f => f && f.trim() !== '' && f.toLowerCase() !== 'general');
+    try {
+      const saved = localStorage.getItem('qa_populated_features');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          list = parsed.filter((f): f is string => typeof f === 'string');
+        }
+      } else {
+        const existingFromPlans = testPlans.flatMap(p => (p.steps || []).map(s => s.feature || '')).filter(Boolean);
+        const existingFromBugs = bugLogs.map(b => b.feature || '').filter(Boolean);
+        list = Array.from(new Set([...existingFromPlans, ...existingFromBugs]));
+      }
+    } catch (e) {}
+    return list.filter(f => typeof f === 'string' && f.trim() !== '' && f.toLowerCase() !== 'general');
   });
 
   const testPlansRef = useRef(testPlans);
@@ -184,6 +269,13 @@ export function App() {
   const testersRef = useRef(testers);
   useEffect(() => { testersRef.current = testers; }, [testers]);
 
+  // Sequence counter & mutation grace window so stale polls never overwrite fresh local mutations
+  const pollSeqRef = useRef<number>(0);
+  const lastUserMutationRef = useRef<number>(0);
+  const markUserMutation = () => {
+    lastUserMutationRef.current = Date.now();
+  };
+
   // Reads the most recent __DAILY_QUOTA_RESET_DATE__ marker recorded in the cloud.
   // Historically several of these rows accumulated (one per day), so take the max.
   const getCloudResetDate = (cloudFeatures?: string[]): string => {
@@ -200,36 +292,32 @@ export function App() {
   };
 
   // Daily Quota Reset check (auto resets devices to no plan assigned on date rollover).
-  //
-  // The rollover marker is CLOUD-AUTHORITATIVE. It used to be gated purely on the
-  // per-browser localStorage key 'qa_last_quota_reset_date', which meant *any* client
-  // that woke up with a stale stamp - a phone backgrounded since yesterday, a dashboard
-  // tab left open overnight, a device in another timezone - would re-run the wipe and
-  // push empty quotas to every device for the whole team, blowing away quotas that had
-  // just been assigned. Gating on the shared cloud date ensures the rollover happens
-  // exactly once per day no matter how many clients are connected.
+  // Gated on the shared cloud date so rollover happens at most once per day across timezones.
   const checkDailyQuotaReset = (devList: DeviceProfile[], cloudFeatures?: string[]) => {
     const todayStr = getLocalDateStr();
     const cloudResetDate = getCloudResetDate(cloudFeatures);
 
-    // Someone already rolled over today - never wipe again, just catch the local stamp up.
-    if (cloudResetDate === todayStr) {
+    // Someone already rolled over today (or a client in an earlier timezone already rolled over to >= todayStr).
+    if (cloudResetDate && cloudResetDate >= todayStr) {
       if (localStorage.getItem('qa_last_quota_reset_date') !== todayStr) {
-        localStorage.setItem('qa_last_quota_reset_date', todayStr);
+        safeSetStorageItem('qa_last_quota_reset_date', todayStr);
       }
       return devList;
     }
 
-    // No cloud marker at all (fresh project, or the cloud read failed / returned nothing).
-    // Fail closed: record today locally and leave quotas untouched rather than risk a wipe.
+    // No cloud marker at all (fresh project, or the cloud read returned no markers).
+    // Fail closed: record today locally and anchor the initial marker in the cloud rather than wiping quotas.
     if (!cloudResetDate) {
       if (localStorage.getItem('qa_last_quota_reset_date') !== todayStr) {
-        localStorage.setItem('qa_last_quota_reset_date', todayStr);
+        safeSetStorageItem('qa_last_quota_reset_date', todayStr);
+      }
+      if (Array.isArray(cloudFeatures)) {
+        syncPopulatedFeatureToSupabase(`${CONFIG_DAILY_RESET_DATE}:${todayStr}`);
       }
       return devList;
     }
 
-    // Cloud marker exists and predates today -> this is a genuine date rollover.
+    // Cloud marker exists and strictly predates today -> genuine date rollover.
     const resetList = devList.map(d => ({
       ...d,
       quotas: [],
@@ -237,33 +325,46 @@ export function App() {
       activeRunId: undefined,
       activeTesterName: undefined
     }));
-    localStorage.setItem('qa_last_quota_reset_date', todayStr);
-    localStorage.setItem('qa_devices_list', JSON.stringify(resetList));
+    safeSetStorageItem('qa_last_quota_reset_date', todayStr);
+    safeSetStorageItem('qa_devices_list', JSON.stringify(resetList));
     safeSyncDevices(resetList);
-    syncPopulatedFeatureToSupabase(`${CONFIG_DAILY_RESET_DATE}:${todayStr}`);
-    // Drop the superseded marker so these rows stop accumulating one per day.
-    if (cloudResetDate !== todayStr) {
-      deletePopulatedFeatureFromSupabase(`${CONFIG_DAILY_RESET_DATE}:${cloudResetDate}`);
-    }
+    const newMarker = `${CONFIG_DAILY_RESET_DATE}:${todayStr}`;
+    syncPopulatedFeatureToSupabase(newMarker);
+    // Drop all superseded daily reset markers so rows never accumulate.
+    (cloudFeatures || []).forEach(f => {
+      if (typeof f === 'string' && f.startsWith(`${CONFIG_DAILY_RESET_DATE}:`) && f !== newMarker) {
+        deletePopulatedFeatureFromSupabase(f);
+      }
+    });
     return resetList;
   };
 
   // Supabase Initial Fetch & Real-Time Sync Subscription
   const loadCloudData = async () => {
     if (!isSupabaseConfigured) return;
+    const mySeq = ++pollSeqRef.current;
+    const fetchStartedAt = Date.now();
     await drainOfflineQueue();
     const cloudData = await fetchAllSupabaseData();
+    // Discard stale out-of-order responses or responses racing a recent local user mutation
+    if (mySeq !== pollSeqRef.current) return;
+    if (lastUserMutationRef.current >= fetchStartedAt || Date.now() - lastUserMutationRef.current < 2500) {
+      return;
+    }
     if (cloudData) {
-      if (cloudData.testPlans && JSON.stringify(cloudData.testPlans) !== JSON.stringify(testPlansRef.current)) {
-        setTestPlans(cloudData.testPlans);
-        if (cloudData.testPlans.length > 0 && (!selectedPlanId || !cloudData.testPlans.some(p => p.id === selectedPlanId))) {
-          setSelectedPlanId(cloudData.testPlans[0].id);
+      if (cloudData.testPlans) {
+        const normalizedPlans = normalizePlans(cloudData.testPlans);
+        if (JSON.stringify(normalizedPlans) !== JSON.stringify(testPlansRef.current)) {
+          setTestPlans(normalizedPlans);
+          if (normalizedPlans.length > 0 && (!selectedPlanId || !normalizedPlans.some(p => p.id === selectedPlanId))) {
+            setSelectedPlanId(normalizedPlans[0].id);
+          }
         }
       }
-      // Filter out empty ghost runs (0 recorded steps and 0 bugs)
-      const validTestRuns = (cloudData.testRuns || []).filter(r => {
+      // Filter out empty ghost runs (0 recorded non-pending steps and 0 bugs)
+      const validTestRuns = normalizeRuns(cloudData.testRuns || []).filter(r => {
         const stepEntries = Object.entries(r.results || {}).filter(
-          ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+          ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
         );
         return r.testerName || r.status !== 'not_started' || stepEntries.length > 0 || (r.bugLogs && r.bugLogs.length > 0);
       });
@@ -271,9 +372,9 @@ export function App() {
         setTestRuns(validTestRuns);
       }
 
-      const validArchivedRuns = (cloudData.archivedRuns || []).filter(r => {
+      const validArchivedRuns = normalizeRuns(cloudData.archivedRuns || []).filter(r => {
         const stepEntries = Object.entries(r.results || {}).filter(
-          ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+          ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
         );
         const hasBugs = r.bugLogs && r.bugLogs.length > 0;
         return stepEntries.length > 0 || hasBugs;
@@ -284,7 +385,7 @@ export function App() {
       if (cloudData.bugLogs) {
         let cloudWipedAt = 0;
         (cloudData.populatedFeatures || []).forEach(f => {
-          if (f && f.startsWith('__GLOBAL_BUGS_WIPED_AT__:')) {
+          if (typeof f === 'string' && f.startsWith('__GLOBAL_BUGS_WIPED_AT__:')) {
             const ts = parseInt(f.replace('__GLOBAL_BUGS_WIPED_AT__:', ''), 10);
             if (!isNaN(ts) && ts > cloudWipedAt) cloudWipedAt = ts;
           }
@@ -294,7 +395,7 @@ export function App() {
         const effectiveWipedAt = Math.max(cloudWipedAt, localWipedAt);
 
         // Filter out any bugs recorded before the wipe timestamp
-        const validCloudBugs = cloudData.bugLogs.filter(b => {
+        const validCloudBugs = normalizeBugs(cloudData.bugLogs).filter(b => {
           if (effectiveWipedAt > 0) {
             const bTs = b.timestamp ? new Date(b.timestamp).getTime() : 0;
             if (bTs > 0 && bTs <= effectiveWipedAt) return false;
@@ -307,22 +408,26 @@ export function App() {
           bugLogsRef.current = validCloudBugs;
         }
 
-        try {
-          localStorage.setItem('qa_bug_logs', JSON.stringify(validCloudBugs));
-          if (effectiveWipedAt > 0) {
-            localStorage.setItem('qa_bugs_wiped_at', String(effectiveWipedAt));
-          }
-        } catch (e) {}
+        safeSetStorageItem(
+          'qa_bug_logs',
+          JSON.stringify(validCloudBugs),
+          () => JSON.stringify(validCloudBugs.map((b, idx) => (idx >= 5 && b?.imageUrl?.startsWith('data:')) ? { ...b, imageUrl: undefined } : b))
+        );
+        if (effectiveWipedAt > 0) {
+          safeSetStorageItem('qa_bugs_wiped_at', String(effectiveWipedAt));
+        }
       }
       if (cloudData.populatedFeatures && cloudData.populatedFeatures.length > 0) {
-        if (JSON.stringify(cloudData.populatedFeatures) !== JSON.stringify(populatedFeaturesRef.current)) {
-          setPopulatedFeatures(cloudData.populatedFeatures);
+        const cleanFeatures = cloudData.populatedFeatures.filter(
+          (f): f is string => typeof f === 'string' && f.trim() !== '' && f.toLowerCase() !== 'general'
+        );
+        if (JSON.stringify(cleanFeatures) !== JSON.stringify(populatedFeaturesRef.current)) {
+          setPopulatedFeatures(cleanFeatures);
         }
       }
       if (cloudData.devices && (cloudData.devices.length > 0 || devicesRef.current.length === 0)) {
         const deletedDevIds = getDeletedDeviceIds();
-        const filteredCloudDevices = cloudData.devices.filter(cd => !deletedDevIds.has(cd.id));
-        // If user recently made local device edits, use optimistic local state to avoid in-flight stale cloud responses reverting user clicks
+        const filteredCloudDevices = normalizeDevices(cloudData.devices).filter(cd => !deletedDevIds.has(cd.id));
         const isRecentUserEdit = Date.now() - lastDeviceEditTimeRef.current < 4000;
         const baseDevices = isRecentUserEdit
           ? devicesRef.current
@@ -331,27 +436,28 @@ export function App() {
         const currentDevices = checkDailyQuotaReset(baseDevices, cloudData.populatedFeatures);
 
         const inProgressRuns = validTestRuns.filter(r => r.status === 'in_progress');
-        const allCompletedRuns = [
+        const allCompletedRuns = mergeRunsById([
           ...validArchivedRuns,
           ...validTestRuns.filter(r => {
             if (r.status !== 'completed') return false;
             const stepEntries = Object.entries(r.results || {}).filter(
-              ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+              ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
             );
             return stepEntries.length > 0;
           })
-        ];
+        ]);
         const todayStr = getLocalDateStr();
 
-        // Calculate today's completed runs per device and plan for quota automation (every plan step must be recorded)
-        const plansForQuota = cloudData.testPlans || testPlansRef.current;
+        // Calculate today's completed runs per device and plan for quota automation
+        const plansForQuota = cloudData.testPlans ? normalizePlans(cloudData.testPlans) : testPlansRef.current;
+        const stepFirstSeen = buildStepFirstSeenIndex(allCompletedRuns);
         const runsTodayPerDevice: Record<string, Record<string, number>> = {};
         allCompletedRuns.forEach(r => {
-          if (!r.completedAt || !isRunFullyCompleted(r, plansForQuota)) return;
+          if (!r.completedAt || !isRunFullyCompleted(r, plansForQuota, stepFirstSeen)) return;
           const rDate = getLocalDateStr(r.completedAt);
           if (rDate !== todayStr) return;
           const targetDev = currentDevices.find(d =>
-            (r.deviceId && (d.id === r.deviceId || d.id.toLowerCase() === r.deviceId.toLowerCase())) ||
+            (r.deviceId && d.id.toLowerCase().trim() === r.deviceId.toLowerCase().trim()) ||
             (r.deviceName && d.name && d.name.toLowerCase().trim() === r.deviceName.toLowerCase().trim())
           );
           if (targetDev) {
@@ -364,10 +470,10 @@ export function App() {
         const syncedDevices = currentDevices.map(d => {
           const dev = { ...d };
 
-          // 1. Align active run lock
+          // 1. Align active run lock using exact matching
           const matchingRun = inProgressRuns.find(r =>
             (d.activeRunId && r.id === d.activeRunId) ||
-            (r.deviceId === d.id) ||
+            (r.deviceId && r.deviceId.toLowerCase().trim() === d.id.toLowerCase().trim()) ||
             (r.deviceName && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim())
           );
 
@@ -386,7 +492,6 @@ export function App() {
               dev.activeRunId = undefined;
               dev.activeTesterName = undefined;
             }
-            // If the tester is simply swiped out/backgrounded, DO NOT WIPE!
           }
 
           return dev;
@@ -396,23 +501,28 @@ export function App() {
           setDevices(syncedDevices);
         }
         if (needsSync) {
-          localStorage.setItem('qa_devices_list', JSON.stringify(syncedDevices));
+          safeSetStorageItem('qa_devices_list', JSON.stringify(syncedDevices));
           safeSyncDevices(syncedDevices);
         }
       }
-      if (cloudData.testers && JSON.stringify(cloudData.testers) !== JSON.stringify(testersRef.current)) {
-        setTesters(cloudData.testers);
+      if (cloudData.testers) {
+        const deletedTesterIds = getDeletedTesterIds();
+        const filteredCloudTesters = normalizeTesters(cloudData.testers).filter(ct => !deletedTesterIds.has(ct.id));
+        if (JSON.stringify(filteredCloudTesters) !== JSON.stringify(testersRef.current)) {
+          setTesters(filteredCloudTesters);
+        }
       }
     }
   };
 
   useEffect(() => {
+    let disposed = false;
     loadCloudData();
     let debounceTimer: any = null;
     const unsubscribe = subscribeToSupabaseRealtime(() => {
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
-        loadCloudData();
+        if (!disposed) loadCloudData();
       }, 250);
     });
 
@@ -420,11 +530,18 @@ export function App() {
     let capSub: any = null;
     import('@capacitor/app')
       .then(({ App: CapApp }) => {
+        if (disposed) return;
         CapApp.addListener('appStateChange', (state) => {
-          if (state.isActive) {
+          if (!disposed && state.isActive) {
             loadCloudData();
           }
-        }).then(sub => { capSub = sub; });
+        }).then(sub => {
+          if (disposed) {
+            if (sub && typeof sub.remove === 'function') sub.remove();
+          } else {
+            capSub = sub;
+          }
+        });
       })
       .catch(() => {});
 
@@ -442,15 +559,16 @@ export function App() {
     window.addEventListener('online', handleOnline);
 
     const unsubCmds = subscribeToSystemCommands((signal) => {
-      setLastBootSignal(signal);
+      if (!disposed) setLastBootSignal(signal);
     });
 
     // Polling fallback ensures continuous background sync without thrashing UI state
     const pollTimer = setInterval(() => {
-      loadCloudData();
+      if (!disposed) loadCloudData();
     }, 4000);
 
     return () => {
+      disposed = true;
       unsubscribe();
       unsubCmds();
       clearInterval(pollTimer);
@@ -468,72 +586,69 @@ export function App() {
       const isValid = testPlans.some(p => p.id === selectedPlanId);
       if (!selectedPlanId || !isValid) {
         setSelectedPlanId(testPlans[0].id);
-        try {
-          localStorage.setItem('qa_selected_plan_id', testPlans[0].id);
-        } catch (e) {}
+        safeSetStorageItem('qa_selected_plan_id', testPlans[0].id);
       } else {
-        try {
-          localStorage.setItem('qa_selected_plan_id', selectedPlanId);
-        } catch (e) {}
+        safeSetStorageItem('qa_selected_plan_id', selectedPlanId);
       }
     }
   }, [testPlans, selectedPlanId]);
 
-  // Save to localStorage
+  // Save to localStorage with QuotaExceededError fallbacks
   useEffect(() => {
-    localStorage.setItem('qa_test_plans', JSON.stringify(testPlans));
+    safeSetStorageItem('qa_test_plans', JSON.stringify(testPlans));
   }, [testPlans]);
 
   useEffect(() => {
-    localStorage.setItem('qa_test_runs', JSON.stringify(testRuns));
+    safeSetStorageItem(
+      'qa_test_runs',
+      JSON.stringify(testRuns),
+      () => JSON.stringify(testRuns.map(r => ({
+        ...r,
+        bugLogs: (r.bugLogs || []).map(b => (b?.imageUrl && b.imageUrl.startsWith('data:')) ? { ...b, imageUrl: undefined } : b)
+      })))
+    );
   }, [testRuns]);
 
   useEffect(() => {
-    localStorage.setItem('qa_archived_runs', JSON.stringify(archivedRuns));
+    safeSetStorageItem(
+      'qa_archived_runs',
+      JSON.stringify(archivedRuns),
+      () => JSON.stringify(archivedRuns.map(r => ({
+        ...r,
+        bugLogs: (r.bugLogs || []).map(b => (b?.imageUrl && b.imageUrl.startsWith('data:')) ? { ...b, imageUrl: undefined } : b)
+      })))
+    );
   }, [archivedRuns]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('qa_bug_logs', JSON.stringify(bugLogs));
-    } catch (err) {
-      console.warn('localStorage quota exceeded for qa_bug_logs, stripping older screenshot payloads:', err);
-      try {
-        // Keep images for the 5 most recent bugs, strip data URLs from older ones
-        const trimmedBugs = bugLogs.map((b, idx) => {
-          if (idx >= 5 && b.imageUrl && b.imageUrl.startsWith('data:')) {
-            return { ...b, imageUrl: undefined };
-          }
-          return b;
-        });
-        localStorage.setItem('qa_bug_logs', JSON.stringify(trimmedBugs));
-      } catch (innerErr) {
-        console.error('Critical quota error saving bug logs:', innerErr);
-      }
-    }
+    safeSetStorageItem(
+      'qa_bug_logs',
+      JSON.stringify(bugLogs),
+      () => JSON.stringify(bugLogs.map((b, idx) => (idx >= 5 && b?.imageUrl && b.imageUrl.startsWith('data:')) ? { ...b, imageUrl: undefined } : b))
+    );
   }, [bugLogs]);
 
   useEffect(() => {
-    localStorage.setItem('qa_populated_devices', JSON.stringify(populatedDevices));
+    safeSetStorageItem('qa_populated_devices', JSON.stringify(populatedDevices));
   }, [populatedDevices]);
 
-
-
   useEffect(() => {
-    localStorage.setItem('qa_populated_features', JSON.stringify(populatedFeatures));
+    safeSetStorageItem('qa_populated_features', JSON.stringify(populatedFeatures));
   }, [populatedFeatures]);
 
   useEffect(() => {
-    localStorage.setItem('qa_devices_list', JSON.stringify(devices));
+    safeSetStorageItem('qa_devices_list', JSON.stringify(devices));
   }, [devices]);
 
   useEffect(() => {
-    localStorage.setItem('qa_testers_list', JSON.stringify(testers));
+    safeSetStorageItem('qa_testers_list', JSON.stringify(testers));
   }, [testers]);
 
   // Add device name to populated list if not present
   const handleAddPopulatedDevice = (deviceName: string) => {
-    const trimmed = deviceName.trim();
+    const trimmed = (deviceName || '').trim();
     if (!trimmed) return;
+    markUserMutation();
     setPopulatedDevices(prev => {
       if (prev.some(d => d.toLowerCase() === trimmed.toLowerCase())) return prev;
       return [...prev, trimmed];
@@ -542,8 +657,9 @@ export function App() {
 
   // Add feature name to populated list if not present
   const handleAddPopulatedFeature = (featureName: string) => {
-    const trimmed = featureName.trim();
-    if (!trimmed) return;
+    const trimmed = (featureName || '').trim();
+    if (!trimmed || trimmed.toLowerCase() === 'general' || trimmed.startsWith('__')) return;
+    markUserMutation();
     setPopulatedFeatures(prev => {
       if (prev.some(f => f.toLowerCase() === trimmed.toLowerCase())) return prev;
       return [...prev, trimmed];
@@ -565,11 +681,27 @@ export function App() {
   };
 
   const handleSavePlan = (savedPlan: TestPlan) => {
-    const existingIndex = testPlans.findIndex(p => p.id === savedPlan.id);
+    markUserMutation();
+    const existingIndex = testPlansRef.current.findIndex(p => p.id === savedPlan.id);
 
     if (existingIndex >= 0) {
       setTestPlans(prev => prev.map(p => p.id === savedPlan.id ? savedPlan : p));
-      setTestRuns(prev => prev.map(r => r.planId === savedPlan.id ? { ...r, planName: savedPlan.name } : r));
+      setTestRuns(prev => prev.map(r => {
+        if (r.planId === savedPlan.id && r.planName !== savedPlan.name) {
+          const updated = { ...r, planName: savedPlan.name };
+          syncTestRunToSupabase(updated);
+          return updated;
+        }
+        return r;
+      }));
+      setArchivedRuns(prev => prev.map(r => {
+        if (r.planId === savedPlan.id && r.planName !== savedPlan.name) {
+          const updated = { ...r, planName: savedPlan.name };
+          syncArchivedRunToSupabase(updated);
+          return updated;
+        }
+        return r;
+      }));
     } else {
       setTestPlans(prev => [savedPlan, ...prev]);
 
@@ -592,7 +724,7 @@ export function App() {
     setSelectedPlanId(savedPlan.id);
     syncTestPlanToSupabase(savedPlan);
 
-    savedPlan.steps.forEach(step => {
+    (savedPlan.steps || []).forEach(step => {
       if (step.feature) {
         handleAddPopulatedFeature(step.feature);
       }
@@ -603,18 +735,20 @@ export function App() {
   };
 
   const handleClonePlan = (planId: string) => {
-    const target = testPlans.find(p => p.id === planId);
+    markUserMutation();
+    const target = testPlansRef.current.find(p => p.id === planId);
     if (!target) return;
 
-    const clonedId = 'plan-' + Date.now();
+    const nowMs = Date.now();
+    const clonedId = `plan-${nowMs}-${Math.random().toString(36).slice(2, 6)}`;
     const clonedPlan: TestPlan = {
       ...target,
       id: clonedId,
       name: `${target.name} (Copy)`,
       createdAt: new Date().toISOString(),
-      steps: target.steps.map((s, idx) => ({
+      steps: (target.steps || []).map((s, idx) => ({
         ...s,
-        id: `step-${Date.now()}-${idx + 1}`
+        id: `step-${nowMs}-${idx + 1}`
       }))
     };
 
@@ -639,6 +773,7 @@ export function App() {
   };
 
   const handleLoadSampleData = () => {
+    markUserMutation();
     setTestPlans(SAMPLE_PLANS);
     setTestRuns(SAMPLE_RUNS);
     setArchivedRuns([]);
@@ -649,7 +784,8 @@ export function App() {
   };
 
   const handleRunSubagentAutomatedTest = (planId?: string) => {
-    let targetPlan = (planId ? testPlans.find(p => p.id === planId) : null) || testPlans[0];
+    markUserMutation();
+    let targetPlan = (planId ? testPlansRef.current.find(p => p.id === planId) : null) || testPlansRef.current[0];
     
     // If no plans exist yet, initialize sample plans first
     if (!targetPlan) {
@@ -676,7 +812,7 @@ export function App() {
     const createdBugs: BugLog[] = [];
 
     // Execute every step from Step 1 through to the Final Step!
-    targetPlan.steps.forEach((step, idx) => {
+    (targetPlan.steps || []).forEach((step, idx) => {
       const status: 'green' | 'yellow' = (idx === 1 && targetPlan.steps.length > 2) ? 'yellow' : 'green';
       results[step.id] = {
         stepId: step.id,
@@ -730,68 +866,135 @@ export function App() {
   };
 
   const handleClearAllData = () => {
+    markUserMutation();
     setTestPlans([]);
     setTestRuns([]);
     setArchivedRuns([]);
     setBugLogs([]);
     setSelectedPlanId('');
-    localStorage.removeItem('qa_test_plans');
-    localStorage.removeItem('qa_test_runs');
-    localStorage.removeItem('qa_archived_runs');
-    localStorage.removeItem('qa_bug_logs');
+    try {
+      localStorage.removeItem('qa_test_plans');
+      localStorage.removeItem('qa_test_runs');
+      localStorage.removeItem('qa_archived_runs');
+      localStorage.removeItem('qa_bug_logs');
+    } catch (e) {}
   };
 
   const handleImportJSONData = (data: { testPlans?: TestPlan[]; testRuns?: TestRun[]; bugLogs?: BugLog[]; archivedRuns?: TestRun[] }) => {
+    if (!data || typeof data !== 'object') return;
+    markUserMutation();
     if (data.testPlans && Array.isArray(data.testPlans)) {
-      setTestPlans(data.testPlans);
-      data.testPlans.forEach(syncTestPlanToSupabase);
-      if (data.testPlans.length > 0) setSelectedPlanId(data.testPlans[0].id);
+      const validPlans = normalizePlans(data.testPlans);
+      setTestPlans(validPlans);
+      validPlans.forEach(syncTestPlanToSupabase);
+      if (validPlans.length > 0) setSelectedPlanId(validPlans[0].id);
     }
     if (data.testRuns && Array.isArray(data.testRuns)) {
-      setTestRuns(data.testRuns);
-      data.testRuns.forEach(syncTestRunToSupabase);
+      const validRuns = normalizeRuns(data.testRuns);
+      setTestRuns(validRuns);
+      validRuns.forEach(syncTestRunToSupabase);
     }
     if (data.archivedRuns && Array.isArray(data.archivedRuns)) {
-      setArchivedRuns(data.archivedRuns);
-      data.archivedRuns.forEach(syncArchivedRunToSupabase);
+      const validArchived = normalizeRuns(data.archivedRuns);
+      setArchivedRuns(validArchived);
+      validArchived.forEach(syncArchivedRunToSupabase);
     }
     if (data.bugLogs && Array.isArray(data.bugLogs)) {
-      setBugLogs(data.bugLogs);
-      data.bugLogs.forEach(syncBugLogToSupabase);
+      const validBugs = normalizeBugs(data.bugLogs);
+      setBugLogs(validBugs);
+      validBugs.forEach(syncBugLogToSupabase);
     }
   };
 
   const handleDeletePlan = (planId: string) => {
-    const filtered = testPlans.filter(p => p.id !== planId);
-    setTestPlans(filtered);
+    markUserMutation();
+    lastDeviceEditTimeRef.current = Date.now();
+
+    const runsToRemove = testRunsRef.current.filter(r => r.planId === planId);
+    const removedRunIds = new Set(runsToRemove.map(r => r.id));
+    runsToRemove.forEach(r => deleteTestRunFromSupabase(r.id));
+
+    let nextPlansSnapshot: TestPlan[] = [];
+    setTestPlans(prev => {
+      const filtered = prev.filter(p => p.id !== planId);
+      nextPlansSnapshot = filtered;
+      return filtered;
+    });
     setTestRuns(prev => prev.filter(r => r.planId !== planId));
     deleteTestPlanFromSupabase(planId);
+
+    try {
+      localStorage.removeItem(`qa_in_progress_run_${planId}`);
+    } catch (e) {}
+
+    // Strip deleted planId from device quotas and release any device locked by a run of this plan
+    setDevices(prev => {
+      let changed = false;
+      const next = prev.map(d => {
+        const hadQuota = (d.quotas || []).some(q => q.planId === planId);
+        const hadRunLock = Boolean(d.activeRunId && removedRunIds.has(d.activeRunId));
+        if (hadQuota || hadRunLock) {
+          changed = true;
+          const updatedDev: DeviceProfile = {
+            ...d,
+            quotas: (d.quotas || []).filter(q => q.planId !== planId),
+            activeRunId: hadRunLock ? undefined : d.activeRunId,
+            activeTesterName: hadRunLock ? undefined : d.activeTesterName
+          };
+          syncDeviceToSupabase(updatedDev);
+          return updatedDev;
+        }
+        return d;
+      });
+      if (changed) {
+        safeSetStorageItem('qa_devices_list', JSON.stringify(next));
+        syncDevicesListToCloud(next);
+      }
+      return next;
+    });
     
-    if (currentView === 'mobile' && (selectedPlanId === planId || filtered.length === 0)) {
+    const remainingPlans = nextPlansSnapshot.length > 0 ? nextPlansSnapshot : testPlansRef.current.filter(p => p.id !== planId);
+    if (currentView === 'mobile' && (selectedPlanId === planId || remainingPlans.length === 0)) {
       setCurrentView('dashboard');
     }
 
     if (selectedPlanId === planId) {
-      setSelectedPlanId(filtered[0]?.id || '');
+      setSelectedPlanId(remainingPlans[0]?.id || '');
     }
   };
 
   const handleDeleteTestRun = (runId: string) => {
+    markUserMutation();
+    lastDeviceEditTimeRef.current = Date.now();
+    const deletedRun = [...testRunsRef.current, ...archivedRunsRef.current].find(r => r.id === runId);
+
     setTestRuns(prev => prev.filter(r => r.id !== runId));
     setArchivedRuns(prev => prev.filter(r => r.id !== runId));
 
     deleteTestRunFromSupabase(runId);
     deleteArchivedRunFromSupabase(runId);
 
+    // Cascade delete associated bug logs from state and Supabase
+    const embeddedBugIds = new Set((deletedRun?.bugLogs || []).map(b => b.id).filter(Boolean));
+    setBugLogs(prev => {
+      const toDelete = prev.filter(b => b.testRunId === runId || embeddedBugIds.has(b.id));
+      toDelete.forEach(b => deleteBugLogFromSupabase(b.id));
+      return prev.filter(b => b.testRunId !== runId && !embeddedBugIds.has(b.id));
+    });
+
     // Release device if locked by this deleted run
-    const deletedRun = [...testRuns, ...archivedRuns].find(r => r.id === runId);
     setDevices(prev => {
       let changed = false;
       const next = prev.map(d => {
         const matchesRunId = d.activeRunId === runId;
-        const matchesTesterAndDev = deletedRun && (
-          (deletedRun.testerName && d.activeTesterName && d.activeTesterName.toLowerCase().trim() === deletedRun.testerName.toLowerCase().trim()) &&
-          (deletedRun.deviceName && d.name && d.name.toLowerCase().trim() === deletedRun.deviceName.toLowerCase().trim())
+        const matchesTesterAndDev = Boolean(
+          deletedRun &&
+          deletedRun.testerName &&
+          d.activeTesterName &&
+          d.activeTesterName.toLowerCase().trim() === deletedRun.testerName.toLowerCase().trim() &&
+          deletedRun.deviceName &&
+          d.name &&
+          d.name.toLowerCase().trim() === deletedRun.deviceName.toLowerCase().trim()
         );
         if (matchesRunId || matchesTesterAndDev) {
           changed = true;
@@ -802,29 +1005,37 @@ export function App() {
         return d;
       });
       if (changed) {
-        localStorage.setItem('qa_devices_list', JSON.stringify(next));
+        safeSetStorageItem('qa_devices_list', JSON.stringify(next));
         syncDevicesListToCloud(next);
       }
       return next;
     });
   };
 
-  // Minimum required app version configured by admin
+  // Minimum required app version configured by admin (takes latest marker)
   const minAppVersion = React.useMemo(() => {
-    const configItem = populatedFeatures.find(f => f.startsWith(CONFIG_MIN_APP_VERSION + ':'));
-    if (configItem) {
-      const val = parseInt(configItem.split(':')[1], 10);
-      if (!isNaN(val)) return val;
+    const matching = populatedFeatures.filter(
+      f => typeof f === 'string' && f.startsWith(CONFIG_MIN_APP_VERSION + ':')
+    );
+    for (let i = matching.length - 1; i >= 0; i--) {
+      const val = parseInt(matching[i].split(':')[1], 10);
+      if (!isNaN(val) && val > 0) return val;
     }
     return APP_VERSION_CODE;
   }, [populatedFeatures]);
 
   const handleUpdateMinAppVersion = (versionCode: number) => {
+    markUserMutation();
     const configKey = `${CONFIG_MIN_APP_VERSION}:${versionCode}`;
+    const superseded = populatedFeaturesRef.current.filter(
+      f => typeof f === 'string' && f.startsWith(CONFIG_MIN_APP_VERSION + ':') && f !== configKey
+    );
+    superseded.forEach(oldKey => deletePopulatedFeatureFromSupabase(oldKey));
+
     setPopulatedFeatures(prev => {
-      const filtered = prev.filter(f => !f.startsWith(CONFIG_MIN_APP_VERSION + ':'));
+      const filtered = prev.filter(f => typeof f === 'string' && !f.startsWith(CONFIG_MIN_APP_VERSION + ':'));
       const next = [...filtered, configKey];
-      localStorage.setItem('qa_populated_features', JSON.stringify(next));
+      safeSetStorageItem('qa_populated_features', JSON.stringify(next));
       return next;
     });
     syncPopulatedFeatureToSupabase(configKey);
@@ -832,7 +1043,25 @@ export function App() {
 
   // Daily Quota Reset: Clear all assigned test plans on devices to fresh slate
   const handleResetDailyQuotas = () => {
+    markUserMutation();
+    lastDeviceEditTimeRef.current = Date.now();
     const todayStr = getLocalDateStr();
+
+    // Terminate any active in-progress runs so they don't re-lock devices on the next poll
+    setTestRuns(prev => prev.map(r => {
+      if (r.status === 'in_progress') {
+        const terminated = { ...r, status: 'terminated' as any };
+        safeSyncTestRun(terminated);
+        return terminated;
+      }
+      return r;
+    }));
+    try {
+      Object.keys(localStorage).forEach(k => {
+        if (k.startsWith('qa_in_progress_run_')) localStorage.removeItem(k);
+      });
+    } catch (e) {}
+
     setDevices(prev => {
       const next = prev.map(d => ({
         ...d,
@@ -841,17 +1070,25 @@ export function App() {
         activeRunId: undefined,
         activeTesterName: undefined
       }));
-      localStorage.setItem('qa_devices_list', JSON.stringify(next));
-      localStorage.setItem('qa_last_quota_reset_date', todayStr);
+      safeSetStorageItem('qa_devices_list', JSON.stringify(next));
+      safeSetStorageItem('qa_last_quota_reset_date', todayStr);
       syncDevicesListToCloud(next);
       return next;
     });
+
     const configKey = `${CONFIG_DAILY_RESET_DATE}:${todayStr}`;
+    populatedFeaturesRef.current.forEach(f => {
+      if (typeof f === 'string' && f.startsWith(`${CONFIG_DAILY_RESET_DATE}:`) && f !== configKey) {
+        deletePopulatedFeatureFromSupabase(f);
+      }
+    });
     syncPopulatedFeatureToSupabase(configKey);
   };
 
-  // Remote Boot Tester: kicks active user on phone, wipes ONLY active in-progress cache, frees device to Maintenance
+  // Remote Boot Tester: kicks active user on phone, wipes ONLY active in-progress cache, frees device lock
   const handleBootTester = (runId: string, deviceId?: string, testerName?: string, deviceName?: string) => {
+    markUserMutation();
+    lastDeviceEditTimeRef.current = Date.now();
     const trimmedTester = (testerName || '').trim();
     const trimmedDevName = (deviceName || '').trim();
     const trimmedDevId = (deviceId || '').trim();
@@ -868,9 +1105,11 @@ export function App() {
     setLastBootSignal(bootSignal);
 
     // 2. Redundant persistent boot trigger in Supabase populated_features (auto-pruned after 10s)
-    const bootFeatureKey = `__BOOT__:${trimmedTester.toLowerCase()}:${trimmedDevId.toLowerCase()}:${runId || ''}:${trimmedDevName.toLowerCase()}:${Date.now()}`;
+    // Strip colons inside fields so split(':') in MobileTester never shifts field positions
+    const safeField = (s: string) => s.replace(/:/g, ' ').toLowerCase().trim();
+    const bootFeatureKey = `__BOOT__:${safeField(trimmedTester)}:${safeField(trimmedDevId)}:${(runId || '').replace(/:/g, '')}:${safeField(trimmedDevName)}:${Date.now()}`;
     syncPopulatedFeatureToSupabase(bootFeatureKey);
-    setPopulatedFeatures(prev => [...prev.filter(f => !f.startsWith('__BOOT__')), bootFeatureKey]);
+    setPopulatedFeatures(prev => [...prev.filter(f => typeof f === 'string' && !f.startsWith('__BOOT__')), bootFeatureKey]);
     setTimeout(async () => {
       try {
         await deletePopulatedFeatureFromSupabase(bootFeatureKey);
@@ -878,14 +1117,15 @@ export function App() {
       } catch (e) {}
     }, 10000);
 
-    // 3. Mark all matching runs as 'terminated' in state & Supabase (DO NOT DELETE THEM so phone detector stays triggered)
+    // 3. Mark matching non-completed runs as 'terminated' in state & Supabase using exact matching
     setTestRuns(prev => {
       let matchedAny = false;
       const next = prev.map(r => {
-        const matchesRun = runId && r.id === runId;
-        const matchesTester = trimmedTester && r.testerName && r.testerName.toLowerCase().trim() === trimmedTester.toLowerCase();
-        const matchesDev = trimmedDevName && r.deviceName && r.deviceName.toLowerCase().trim() === trimmedDevName.toLowerCase();
-        const matchesId = trimmedDevId && (r.deviceId === trimmedDevId || (r.deviceId && trimmedDevId.includes(r.deviceId)) || (r.deviceId && r.deviceId.includes(trimmedDevId)));
+        if (r.status === 'completed') return r;
+        const matchesRun = Boolean(runId && r.id === runId);
+        const matchesTester = Boolean(trimmedTester && r.testerName && r.testerName.toLowerCase().trim() === trimmedTester.toLowerCase());
+        const matchesDev = Boolean(trimmedDevName && r.deviceName && r.deviceName.toLowerCase().trim() === trimmedDevName.toLowerCase());
+        const matchesId = Boolean(trimmedDevId && r.deviceId && r.deviceId.toLowerCase().trim() === trimmedDevId.toLowerCase());
         if (matchesRun || matchesTester || matchesDev || matchesId) {
           matchedAny = true;
           const terminatedRun = { ...r, status: 'terminated' as any };
@@ -916,26 +1156,28 @@ export function App() {
       return next;
     });
 
-    // 4. Free device lock and release device (keep readiness intact, do NOT force maintenance)
+    // 4. Free device lock using exact matching (keep readiness intact)
     setDevices(prev => {
       let changed = false;
       const next = prev.map(d => {
-        const matchesDevId = trimmedDevId && (d.id === trimmedDevId || trimmedDevId.includes(d.id) || d.id.includes(trimmedDevId));
-        const matchesDevName = trimmedDevName && d.name.toLowerCase().trim() === trimmedDevName.toLowerCase();
-        const matchesRunId = runId && d.activeRunId === runId;
-        const matchesTester = trimmedTester && d.activeTesterName && d.activeTesterName.toLowerCase().trim() === trimmedTester.toLowerCase();
+        const matchesDevId = Boolean(trimmedDevId && d.id.toLowerCase().trim() === trimmedDevId.toLowerCase());
+        const matchesDevName = Boolean(trimmedDevName && d.name.toLowerCase().trim() === trimmedDevName.toLowerCase());
+        const matchesRunId = Boolean(runId && d.activeRunId === runId);
+        const matchesTester = Boolean(trimmedTester && d.activeTesterName && d.activeTesterName.toLowerCase().trim() === trimmedTester.toLowerCase());
         if (matchesDevId || matchesDevName || matchesRunId || matchesTester) {
           changed = true;
-          return {
+          const released = {
             ...d,
             activeRunId: undefined,
             activeTesterName: undefined,
           };
+          syncDeviceToSupabase(released);
+          return released;
         }
         return d;
       });
       if (changed) {
-        localStorage.setItem('qa_devices_list', JSON.stringify(next));
+        safeSetStorageItem('qa_devices_list', JSON.stringify(next));
         syncDevicesListToCloud(next);
       }
       return next;
@@ -943,8 +1185,11 @@ export function App() {
   };
 
   const handleDeleteTester = (testerName: string) => {
-    const runsToDelete = [...testRuns, ...archivedRuns].filter(
-      r => (r.testerName?.trim() || 'Unassigned Tester').toLowerCase() === testerName.toLowerCase().trim()
+    markUserMutation();
+    lastDeviceEditTimeRef.current = Date.now();
+    const normTarget = (testerName || '').toLowerCase().trim();
+    const runsToDelete = [...testRunsRef.current, ...archivedRunsRef.current].filter(
+      r => (r.testerName?.trim() || 'Unassigned Tester').toLowerCase() === normTarget
     );
 
     const idsToDelete = new Set(runsToDelete.map(r => r.id));
@@ -956,10 +1201,57 @@ export function App() {
       deleteTestRunFromSupabase(r.id);
       deleteArchivedRunFromSupabase(r.id);
     });
+
+    // Also delete matching tester profile(s) from testers list & Supabase
+    setTesters(prev => {
+      const matchingProfiles = prev.filter(t => t.name.toLowerCase().trim() === normTarget);
+      if (matchingProfiles.length === 0) return prev;
+      matchingProfiles.forEach(t => deleteTesterFromSupabase(t.id));
+      const next = prev.filter(t => t.name.toLowerCase().trim() !== normTarget);
+      safeSetStorageItem('qa_testers_list', JSON.stringify(next));
+      syncTestersListToCloud(next);
+      return next;
+    });
+
+    // Also delete bugs belonging to those deleted runs or tester
+    setBugLogs(prev => {
+      const toDelete = prev.filter(
+        b => (b.testRunId && idsToDelete.has(b.testRunId)) || (b.testerName && b.testerName.toLowerCase().trim() === normTarget)
+      );
+      toDelete.forEach(b => deleteBugLogFromSupabase(b.id));
+      return prev.filter(
+        b => !(b.testRunId && idsToDelete.has(b.testRunId)) && !(b.testerName && b.testerName.toLowerCase().trim() === normTarget)
+      );
+    });
+
+    // Release any device locks held by this tester or their runs
+    setDevices(prev => {
+      let changed = false;
+      const next = prev.map(d => {
+        const matchesRun = Boolean(d.activeRunId && idsToDelete.has(d.activeRunId));
+        const matchesTester = Boolean(d.activeTesterName && d.activeTesterName.toLowerCase().trim() === normTarget);
+        if (matchesRun || matchesTester) {
+          changed = true;
+          const released = { ...d, activeRunId: undefined, activeTesterName: undefined };
+          syncDeviceToSupabase(released);
+          return released;
+        }
+        return d;
+      });
+      if (changed) {
+        safeSetStorageItem('qa_devices_list', JSON.stringify(next));
+        syncDevicesListToCloud(next);
+      }
+      return next;
+    });
   };
 
   const handleResetActiveDay = (dateStr: string) => {
-    // 1. Reset matching testRuns
+    markUserMutation();
+    lastDeviceEditTimeRef.current = Date.now();
+    const resetRunIds = new Set<string>();
+
+    // 1. Reset matching testRuns (only delete steps whose own timestamp is on dateStr, or fallback to runDate if step has no timestamp)
     setTestRuns(prevRuns =>
       prevRuns.map(run => {
         const runDate = run.completedAt
@@ -969,15 +1261,16 @@ export function App() {
         const updatedResults = { ...run.results };
         let modified = false;
         (Object.entries(updatedResults) as [string, any][]).forEach(([stepId, res]) => {
-          const stepDate = res && res.timestamp ? getLocalDateStr(res.timestamp) : '';
-          if (stepDate === dateStr || runDate === dateStr) {
+          if (stepId === '_meta') return;
+          const stepDate = res && res.timestamp ? getLocalDateStr(res.timestamp) : runDate;
+          if (stepDate === dateStr) {
             delete updatedResults[stepId];
             modified = true;
           }
         });
 
         const updatedBugs = (run.bugLogs || []).filter(b => {
-          const bugDate = b.timestamp ? getLocalDateStr(b.timestamp) : '';
+          const bugDate = b.timestamp ? getLocalDateStr(b.timestamp) : runDate;
           return bugDate !== dateStr;
         });
         if ((run.bugLogs || []).length !== updatedBugs.length) {
@@ -985,7 +1278,8 @@ export function App() {
         }
 
         if (modified || runDate === dateStr) {
-          const remainingKeys = Object.keys(updatedResults).length;
+          resetRunIds.add(run.id);
+          const remainingKeys = Object.keys(updatedResults).filter(k => k !== '_meta').length;
           const updated: TestRun = {
             ...run,
             results: updatedResults,
@@ -1012,24 +1306,26 @@ export function App() {
         const updatedResults = { ...run.results };
         let modified = false;
         (Object.entries(updatedResults) as [string, any][]).forEach(([stepId, res]) => {
-          const stepDate = res && res.timestamp ? getLocalDateStr(res.timestamp) : '';
-          if (stepDate === dateStr || runDate === dateStr) {
+          if (stepId === '_meta') return;
+          const stepDate = res && res.timestamp ? getLocalDateStr(res.timestamp) : runDate;
+          if (stepDate === dateStr) {
             delete updatedResults[stepId];
             modified = true;
           }
         });
 
         const updatedBugs = (run.bugLogs || []).filter(b => {
-          const bugDate = b.timestamp ? getLocalDateStr(b.timestamp) : '';
+          const bugDate = b.timestamp ? getLocalDateStr(b.timestamp) : runDate;
           return bugDate !== dateStr;
         });
         if ((run.bugLogs || []).length !== updatedBugs.length) {
           modified = true;
         }
 
-        const remainingKeys = Object.keys(updatedResults).length;
-        // If the entire archived run was from this day or has zero steps and zero bugs left, delete it completely
-        if (runDate === dateStr || (remainingKeys === 0 && updatedBugs.length === 0)) {
+        const remainingKeys = Object.keys(updatedResults).filter(k => k !== '_meta').length;
+        // If no steps and no bugs remain, delete the archived run completely
+        if (remainingKeys === 0 && updatedBugs.length === 0) {
+          resetRunIds.add(run.id);
           deleteArchivedRunFromSupabase(run.id);
         } else if (modified) {
           const updated: TestRun = {
@@ -1062,35 +1358,100 @@ export function App() {
       toDelete.forEach(b => deleteBugLogFromSupabase(b.id));
       return toKeep;
     });
+
+    // 4. If resetting today, clear local in-progress cache and unlock affected devices
+    if (dateStr === getLocalDateStr()) {
+      try {
+        Object.keys(localStorage).forEach(k => {
+          if (k.startsWith('qa_in_progress_run_')) localStorage.removeItem(k);
+        });
+      } catch (e) {}
+
+      setDevices(prev => {
+        let changed = false;
+        const next = prev.map(d => {
+          if (d.activeRunId || d.activeTesterName) {
+            changed = true;
+            const released = { ...d, activeRunId: undefined, activeTesterName: undefined };
+            syncDeviceToSupabase(released);
+            return released;
+          }
+          return d;
+        });
+        if (changed) {
+          safeSetStorageItem('qa_devices_list', JSON.stringify(next));
+          syncDevicesListToCloud(next);
+        }
+        return next;
+      });
+    }
   };
 
   const handleDeleteBug = (bugId: string) => {
+    markUserMutation();
     setBugLogs(prev => prev.filter(b => b.id !== bugId));
     deleteBugLogFromSupabase(bugId);
 
     setTestRuns(prev => prev.map(r => {
-      const hasBug = r.bugLogs.some(b => b.id === bugId);
-      const updated = { ...r, bugLogs: r.bugLogs.filter(b => b.id !== bugId) };
+      const hasBug = (r.bugLogs || []).some(b => b.id === bugId);
+      const updated = { ...r, bugLogs: (r.bugLogs || []).filter(b => b.id !== bugId) };
       if (hasBug) syncTestRunToSupabase(updated);
       return updated;
     }));
 
     setArchivedRuns(prev => prev.map(r => {
-      const hasBug = r.bugLogs.some(b => b.id === bugId);
-      const updated = { ...r, bugLogs: r.bugLogs.filter(b => b.id !== bugId) };
+      const hasBug = (r.bugLogs || []).some(b => b.id === bugId);
+      const updated = { ...r, bugLogs: (r.bugLogs || []).filter(b => b.id !== bugId) };
       if (hasBug) syncArchivedRunToSupabase(updated);
       return updated;
     }));
   };
 
+  const handleUpdateBugLog = (updatedBugsInput: BugLog | BugLog[]) => {
+    markUserMutation();
+    const updates = Array.isArray(updatedBugsInput) ? updatedBugsInput : [updatedBugsInput];
+    if (updates.length === 0) return;
+    const updateMap = new Map<string, BugLog>();
+    updates.forEach(b => {
+      if (b && b.id) updateMap.set(b.id, b);
+    });
+
+    setBugLogs(prev => {
+      const next = prev.map(b => updateMap.get(b.id) || b);
+      safeSetStorageItem(
+        'qa_bug_logs',
+        JSON.stringify(next),
+        () => JSON.stringify(next.map((b, idx) => (idx >= 5 && b?.imageUrl?.startsWith('data:')) ? { ...b, imageUrl: undefined } : b))
+      );
+      return next;
+    });
+
+    setTestRuns(prev => prev.map(r => {
+      if (!(r.bugLogs || []).some(b => updateMap.has(b.id))) return r;
+      const updated = { ...r, bugLogs: (r.bugLogs || []).map(b => updateMap.get(b.id) || b) };
+      syncTestRunToSupabase(updated);
+      return updated;
+    }));
+
+    setArchivedRuns(prev => prev.map(r => {
+      if (!(r.bugLogs || []).some(b => updateMap.has(b.id))) return r;
+      const updated = { ...r, bugLogs: (r.bugLogs || []).map(b => updateMap.get(b.id) || b) };
+      syncArchivedRunToSupabase(updated);
+      return updated;
+    }));
+
+    updates.forEach(b => {
+      if (b && b.id) safeSyncBugLog(b);
+    });
+  };
+
   const handleWipeAllBugs = () => {
+    markUserMutation();
     const wipedAt = Date.now();
     setBugLogs([]);
     bugLogsRef.current = [];
-    try {
-      localStorage.setItem('qa_bug_logs', '[]');
-      localStorage.setItem('qa_bugs_wiped_at', String(wipedAt));
-    } catch (e) {}
+    safeSetStorageItem('qa_bug_logs', '[]');
+    safeSetStorageItem('qa_bugs_wiped_at', String(wipedAt));
 
     wipeAllBugsFromSupabase();
 
@@ -1110,42 +1471,43 @@ export function App() {
   };
 
   const handleUpdateRun = (updatedRun: TestRun) => {
+    markUserMutation();
     if (updatedRun.deviceName) {
       handleAddPopulatedDevice(updatedRun.deviceName);
     }
 
-    setTestRuns(prev => {
-      const exists = prev.some(r => r.id === updatedRun.id);
-      if (exists) {
-        return prev.map(r => r.id === updatedRun.id ? updatedRun : r);
-      }
-      return [updatedRun, ...prev];
-    });
-
-    safeSyncTestRun(updatedRun);
-
-    const plan = testPlans.find(p => p.id === updatedRun.planId);
-    const totalSteps = plan?.steps.length || 0;
-    // Filter out non-step entries like _meta to get accurate completed step count
+    // Filter out non-step entries like _meta or pending placeholders to get accurate completed step count
     const stepResultsEntries = Object.entries(updatedRun.results || {}).filter(
-      ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in v
+      ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
     );
     // Run is only done when explicitly marked 'completed' at the final step and has actual step data recorded
     const isDone = updatedRun.status === 'completed' && stepResultsEntries.length > 0;
 
+    // Respect global bug wipe timestamp so stale phone bug arrays don't resurrect wiped bugs
+    const localWipedAtStr = localStorage.getItem('qa_bugs_wiped_at');
+    const localWipedAt = localWipedAtStr ? parseInt(localWipedAtStr, 10) : 0;
+    const isBugValidAfterWipe = (b: BugLog) => {
+      if (!b || !b.id) return false;
+      if (localWipedAt > 0 && b.timestamp) {
+        const bTs = new Date(b.timestamp).getTime();
+        if (bTs > 0 && bTs <= localWipedAt) return false;
+      }
+      return true;
+    };
+
     // Collect all bugs known for this run ID from bugLogs state and localStorage
-    const existingRunBugs = (bugLogsRef.current || []).filter(b => b.testRunId === updatedRun.id);
+    const existingRunBugs = (bugLogsRef.current || []).filter(b => b.testRunId === updatedRun.id && isBugValidAfterWipe(b));
     let storedBugs: BugLog[] = [];
     try {
       const raw = localStorage.getItem('qa_bug_logs');
-      if (raw) storedBugs = JSON.parse(raw);
+      if (raw) storedBugs = normalizeBugs(JSON.parse(raw));
     } catch (e) {}
-    const storedRunBugs = storedBugs.filter(b => b.testRunId === updatedRun.id);
+    const storedRunBugs = storedBugs.filter(b => b.testRunId === updatedRun.id && isBugValidAfterWipe(b));
 
     const bugMap = new Map<string, BugLog>();
-    (updatedRun.bugLogs || []).forEach(b => { if (b && b.id) bugMap.set(b.id, b); });
-    existingRunBugs.forEach(b => { if (b && b.id) bugMap.set(b.id, b); });
-    storedRunBugs.forEach(b => { if (b && b.id) bugMap.set(b.id, b); });
+    (updatedRun.bugLogs || []).filter(isBugValidAfterWipe).forEach(b => bugMap.set(b.id, b));
+    existingRunBugs.forEach(b => bugMap.set(b.id, b));
+    storedRunBugs.forEach(b => bugMap.set(b.id, b));
     const fullBugLogs = Array.from(bugMap.values());
 
     if (fullBugLogs.length > 0) {
@@ -1153,7 +1515,11 @@ export function App() {
         const m = new Map(prev.map(b => [b.id, b]));
         fullBugLogs.forEach(b => m.set(b.id, b));
         const combined = Array.from(m.values());
-        try { localStorage.setItem('qa_bug_logs', JSON.stringify(combined)); } catch (e) {}
+        safeSetStorageItem(
+          'qa_bug_logs',
+          JSON.stringify(combined),
+          () => JSON.stringify(combined.map((b, idx) => (idx >= 5 && b?.imageUrl?.startsWith('data:')) ? { ...b, imageUrl: undefined } : b))
+        );
         return combined;
       });
       fullBugLogs.forEach(b => safeSyncBugLog(b));
@@ -1193,12 +1559,12 @@ export function App() {
       safeDeleteTestRun(completedRun.id);
       safeSyncArchivedRun(completedRun);
 
-      // Release device lock: if test is finished, device is no longer in use
+      // Release device lock using exact matching: if test is finished, device is no longer in use
       setDevices(prev => {
         let changed = false;
         const next = prev.map(d => {
-          const matchesId = d.activeRunId === completedRun.id || (completedRun.deviceId && (d.id === completedRun.deviceId || completedRun.deviceId.includes(d.id)));
-          const matchesName = completedRun.deviceName && d.name.toLowerCase().trim() === completedRun.deviceName.toLowerCase().trim();
+          const matchesId = d.activeRunId === completedRun.id || Boolean(completedRun.deviceId && d.id.toLowerCase().trim() === completedRun.deviceId.toLowerCase().trim());
+          const matchesName = Boolean(completedRun.deviceName && d.name.toLowerCase().trim() === completedRun.deviceName.toLowerCase().trim());
           if (matchesId || matchesName) {
             changed = true;
             const released = { ...d, activeRunId: undefined, activeTesterName: undefined };
@@ -1208,7 +1574,7 @@ export function App() {
           return d;
         });
         if (changed) {
-          localStorage.setItem('qa_devices_list', JSON.stringify(next));
+          safeSetStorageItem('qa_devices_list', JSON.stringify(next));
           safeSyncDevices(next);
         }
         return next;
@@ -1232,6 +1598,7 @@ export function App() {
   };
 
   const handleLogBug = (newBug: BugLog) => {
+    markUserMutation();
     if (newBug.deviceName) {
       handleAddPopulatedDevice(newBug.deviceName);
     }
@@ -1241,9 +1608,11 @@ export function App() {
     setBugLogs(prev => {
       const exists = prev.some(b => b.id === newBug.id);
       const updated = exists ? prev.map(b => b.id === newBug.id ? newBug : b) : [newBug, ...prev];
-      try {
-        localStorage.setItem('qa_bug_logs', JSON.stringify(updated));
-      } catch (e) {}
+      safeSetStorageItem(
+        'qa_bug_logs',
+        JSON.stringify(updated),
+        () => JSON.stringify(updated.map((b, idx) => (idx >= 5 && b?.imageUrl?.startsWith('data:')) ? { ...b, imageUrl: undefined } : b))
+      );
       return updated;
     });
 
@@ -1254,7 +1623,7 @@ export function App() {
           const exists = (r.bugLogs || []).some(b => b.id === newBug.id);
           const updatedRun = {
             ...r,
-            bugLogs: exists ? r.bugLogs.map(b => b.id === newBug.id ? newBug : b) : [...(r.bugLogs || []), newBug]
+            bugLogs: exists ? (r.bugLogs || []).map(b => b.id === newBug.id ? newBug : b) : [...(r.bugLogs || []), newBug]
           };
           syncTestRunToSupabase(updatedRun);
           return updatedRun;
@@ -1267,7 +1636,7 @@ export function App() {
           const exists = (r.bugLogs || []).some(b => b.id === newBug.id);
           const updatedRun = {
             ...r,
-            bugLogs: exists ? r.bugLogs.map(b => b.id === newBug.id ? newBug : b) : [...(r.bugLogs || []), newBug]
+            bugLogs: exists ? (r.bugLogs || []).map(b => b.id === newBug.id ? newBug : b) : [...(r.bugLogs || []), newBug]
           };
           syncArchivedRunToSupabase(updatedRun);
           return updatedRun;
@@ -1280,24 +1649,46 @@ export function App() {
   };
 
   const handleRestartRun = (runIdOrPlanId: string, ownRunId?: string) => {
-    const plan = testPlans.find(p => p.id === runIdOrPlanId);
+    markUserMutation();
+    lastDeviceEditTimeRef.current = Date.now();
+    const plan = testPlansRef.current.find(p => p.id === runIdOrPlanId);
     const planId = plan ? plan.id : runIdOrPlanId;
-    const planName = plan ? plan.name : 'Test Plan';
+
+    try {
+      localStorage.removeItem(`qa_in_progress_run_${planId}`);
+    } catch (e) {}
+
+    // Release device lock if held by ownRunId
+    if (ownRunId) {
+      setDevices(prev => {
+        let changed = false;
+        const next = prev.map(d => {
+          if (d.activeRunId === ownRunId) {
+            changed = true;
+            const released = { ...d, activeRunId: undefined, activeTesterName: undefined };
+            syncDeviceToSupabase(released);
+            return released;
+          }
+          return d;
+        });
+        if (changed) {
+          safeSetStorageItem('qa_devices_list', JSON.stringify(next));
+          safeSyncDevices(next);
+        }
+        return next;
+      });
+    }
 
     setTestRuns(prev => {
-      // Only ever close the caller's OWN run, matched by exact run id. This used to match
-      // by planId, which grabbed the first unfinished run on the plan - i.e. another
-      // tester's live run - and archived it as 'completed' mid-test.
+      // Only ever close the caller's OWN run, matched by exact run id.
       const oldRun = ownRunId ? prev.find(r => r.id === ownRunId) : undefined;
       if (oldRun) {
         const stepEntries = Object.entries(oldRun.results || {}).filter(
-          ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+          ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
         );
         const hasBugs = oldRun.bugLogs && oldRun.bugLogs.length > 0;
-        // If the session being ended had steps executed or bugs, ARCHIVE IT so results & bugs are never lost!
-        // A run that was cut short is 'terminated', never 'completed', so it can't count toward quota.
         if (stepEntries.length > 0 || hasBugs) {
-          const isFull = isRunFullyCompleted({ ...oldRun, status: 'completed' }, testPlans);
+          const isFull = isRunFullyCompleted({ ...oldRun, status: 'completed' }, testPlansRef.current);
           const archivedRun: TestRun = {
             ...oldRun,
             status: isFull ? 'completed' : 'terminated',
@@ -1312,63 +1703,105 @@ export function App() {
         safeDeleteTestRun(oldRun.id);
       }
 
-      // Drop only the caller's own previous run from local state; other testers' runs on the same plan stay untouched.
-      const filtered = oldRun ? prev.filter(r => r.id !== oldRun.id) : prev;
-      const newRun: TestRun = {
-        id: `run-${planId}-${Date.now().toString(36)}`,
-        planId: planId,
-        planName: planName,
-        testerName: '',
-        deviceName: '',
-        status: 'not_started',
-        currentStepIndex: 0,
-        results: {},
-        bugLogs: [],
-        startedAt: new Date().toISOString()
-      };
-      syncTestRunToSupabase(newRun);
-      return [newRun, ...filtered];
+      // Drop only the caller's own previous run from local state; MobileTester synthesizes a fresh run on session setup.
+      return oldRun ? prev.filter(r => r.id !== oldRun.id) : prev;
     });
   };
 
   const handleSaveDevice = (device: DeviceProfile) => {
+    markUserMutation();
     lastDeviceEditTimeRef.current = Date.now();
-    const exists = devices.some(d => d.id === device.id);
-    const next = exists ? devices.map(d => d.id === device.id ? device : d) : [...devices, device];
-    setDevices(next);
-    localStorage.setItem('qa_devices_list', JSON.stringify(next));
     syncDeviceToSupabase(device);
-    syncDevicesListToCloud(next);
+    setDevices(prev => {
+      const exists = prev.some(d => d.id === device.id);
+      const next = exists ? prev.map(d => d.id === device.id ? device : d) : [...prev, device];
+      safeSetStorageItem('qa_devices_list', JSON.stringify(next));
+      syncDevicesListToCloud(next);
+      return next;
+    });
   };
 
   const handleDeleteDevice = (deviceId: string) => {
+    markUserMutation();
     lastDeviceEditTimeRef.current = Date.now();
+    const targetDev = devicesRef.current.find(d => d.id === deviceId);
     deleteDeviceFromSupabase(deviceId);
-    const next = devices.filter(d => d.id !== deviceId);
-    setDevices(next);
-    localStorage.setItem('qa_devices_list', JSON.stringify(next));
-    syncDevicesListToCloud(next);
+    setDevices(prev => {
+      const next = prev.filter(d => d.id !== deviceId);
+      safeSetStorageItem('qa_devices_list', JSON.stringify(next));
+      syncDevicesListToCloud(next);
+      return next;
+    });
+    if (targetDev?.name) {
+      setPopulatedDevices(prev => prev.filter(n => n.toLowerCase().trim() !== targetDev.name.toLowerCase().trim()));
+    }
+    // Terminate any active in-progress runs on this deleted device
+    setTestRuns(prev => prev.map(r => {
+      if (r.status === 'in_progress') {
+        const matchesId = Boolean(r.deviceId && r.deviceId.toLowerCase().trim() === deviceId.toLowerCase().trim());
+        const matchesName = Boolean(targetDev?.name && r.deviceName && r.deviceName.toLowerCase().trim() === targetDev.name.toLowerCase().trim());
+        if (matchesId || matchesName) {
+          const terminated = { ...r, status: 'terminated' as any };
+          safeSyncTestRun(terminated);
+          return terminated;
+        }
+      }
+      return r;
+    }));
   };
 
   const handleSaveTester = (tester: TesterProfile) => {
-    syncTesterToSupabase(tester);
+    markUserMutation();
+    const normName = (tester.name || '').toLowerCase().trim();
     setTesters(prev => {
-      const exists = prev.some(t => t.id === tester.id);
-      const next = exists ? prev.map(t => t.id === tester.id ? tester : t) : [...prev, tester];
-      localStorage.setItem('qa_testers_list', JSON.stringify(next));
+      const existingById = prev.find(t => t.id === tester.id);
+      const existingByName = !existingById ? prev.find(t => t.name.toLowerCase().trim() === normName) : undefined;
+      const targetToUpdate = existingById || existingByName;
+      const canonicalTester: TesterProfile = targetToUpdate
+        ? { ...targetToUpdate, ...tester, id: targetToUpdate.id, name: tester.name.trim() }
+        : { ...tester, name: tester.name.trim() };
+
+      syncTesterToSupabase(canonicalTester);
+      const next = targetToUpdate
+        ? prev.map(t => t.id === targetToUpdate.id ? canonicalTester : t)
+        : [...prev, canonicalTester];
+      safeSetStorageItem('qa_testers_list', JSON.stringify(next));
       syncTestersListToCloud(next);
       return next;
     });
   };
 
   const handleDeleteTesterProfile = (testerId: string) => {
+    markUserMutation();
+    lastDeviceEditTimeRef.current = Date.now();
+    const target = testersRef.current.find(t => t.id === testerId);
     deleteTesterFromSupabase(testerId);
     setTesters(prev => {
       const next = prev.filter(t => t.id !== testerId);
-      localStorage.setItem('qa_testers_list', JSON.stringify(next));
+      safeSetStorageItem('qa_testers_list', JSON.stringify(next));
       syncTestersListToCloud(next);
       return next;
     });
+    if (target?.name) {
+      const normName = target.name.toLowerCase().trim();
+      setDevices(prev => {
+        let changed = false;
+        const next = prev.map(d => {
+          if (d.activeTesterName && d.activeTesterName.toLowerCase().trim() === normName) {
+            changed = true;
+            const released = { ...d, activeRunId: undefined, activeTesterName: undefined };
+            syncDeviceToSupabase(released);
+            return released;
+          }
+          return d;
+        });
+        if (changed) {
+          safeSetStorageItem('qa_devices_list', JSON.stringify(next));
+          syncDevicesListToCloud(next);
+        }
+        return next;
+      });
+    }
   };
 
   const handleOpenMobileView = (planId?: string) => {
@@ -1381,31 +1814,91 @@ export function App() {
   };
 
   const handleDeleteFeature = (featureName: string) => {
-    const trimmed = featureName.trim();
+    const trimmed = (featureName || '').trim();
     if (!trimmed) return;
+    markUserMutation();
+    const normFeature = trimmed.toLowerCase();
 
-    setPopulatedFeatures(prev => prev.filter(f => f.toLowerCase() !== trimmed.toLowerCase()));
+    // Remove from Supabase & local populatedFeatures
+    const matchingKeys = populatedFeaturesRef.current.filter(f => typeof f === 'string' && f.toLowerCase().trim() === normFeature);
+    if (matchingKeys.length > 0) {
+      matchingKeys.forEach(k => deletePopulatedFeatureFromSupabase(k));
+    } else {
+      deletePopulatedFeatureFromSupabase(trimmed);
+    }
+    setPopulatedFeatures(prev => prev.filter(f => typeof f === 'string' && f.toLowerCase().trim() !== normFeature));
 
-    // Reset matching step features in plans to 'General'
-    setTestPlans(prev => prev.map(plan => ({
-      ...plan,
-      steps: plan.steps.map(step => (step.feature?.toLowerCase() === trimmed.toLowerCase()) ? { ...step, feature: 'General' } : step)
-    })));
+    // Reset matching step features in plans to 'General' & sync to Supabase
+    setTestPlans(prev => prev.map(plan => {
+      const hasMatch = (plan.steps || []).some(step => step.feature?.toLowerCase().trim() === normFeature);
+      if (!hasMatch) return plan;
+      const updatedPlan: TestPlan = {
+        ...plan,
+        steps: (plan.steps || []).map(step => (step.feature?.toLowerCase().trim() === normFeature) ? { ...step, feature: 'General' } : step)
+      };
+      syncTestPlanToSupabase(updatedPlan);
+      return updatedPlan;
+    }));
 
-    // Reset matching feature in bug logs to 'General'
-    setBugLogs(prev => prev.map(bug => (bug.feature?.toLowerCase() === trimmed.toLowerCase()) ? { ...bug, feature: 'General' } : bug));
+    // Reset matching feature in bug logs to 'General' & sync to Supabase
+    setBugLogs(prev => prev.map(bug => {
+      if (bug.feature?.toLowerCase().trim() === normFeature) {
+        const updatedBug = { ...bug, feature: 'General' };
+        syncBugLogToSupabase(updatedBug);
+        return updatedBug;
+      }
+      return bug;
+    }));
 
-    // Reset matching feature in test runs to 'General'
-    setTestRuns(prev => prev.map(run => ({
-      ...run,
-      results: Object.fromEntries(
-        Object.entries(run.results || {}).map(([stepId, res]) => [
-          stepId,
-          res.feature?.toLowerCase() === trimmed.toLowerCase() ? { ...res, feature: 'General' } : res
-        ])
-      ),
-      bugLogs: run.bugLogs.map(bug => (bug.feature?.toLowerCase() === trimmed.toLowerCase()) ? { ...bug, feature: 'General' } : bug)
-    })));
+    // Reset matching feature in test runs to 'General' & sync to Supabase
+    setTestRuns(prev => prev.map(run => {
+      let modified = false;
+      const nextResults = Object.fromEntries(
+        Object.entries(run.results || {}).map(([stepId, res]) => {
+          if (res && typeof res === 'object' && (res as any).feature?.toLowerCase().trim() === normFeature) {
+            modified = true;
+            return [stepId, { ...res, feature: 'General' }];
+          }
+          return [stepId, res];
+        })
+      );
+      const nextBugs = (run.bugLogs || []).map(bug => {
+        if (bug.feature?.toLowerCase().trim() === normFeature) {
+          modified = true;
+          return { ...bug, feature: 'General' };
+        }
+        return bug;
+      });
+      if (!modified) return run;
+      const updatedRun = { ...run, results: nextResults, bugLogs: nextBugs };
+      syncTestRunToSupabase(updatedRun);
+      return updatedRun;
+    }));
+
+    // Reset matching feature in archived runs to 'General' & sync to Supabase
+    setArchivedRuns(prev => prev.map(run => {
+      let modified = false;
+      const nextResults = Object.fromEntries(
+        Object.entries(run.results || {}).map(([stepId, res]) => {
+          if (res && typeof res === 'object' && (res as any).feature?.toLowerCase().trim() === normFeature) {
+            modified = true;
+            return [stepId, { ...res, feature: 'General' }];
+          }
+          return [stepId, res];
+        })
+      );
+      const nextBugs = (run.bugLogs || []).map(bug => {
+        if (bug.feature?.toLowerCase().trim() === normFeature) {
+          modified = true;
+          return { ...bug, feature: 'General' };
+        }
+        return bug;
+      });
+      if (!modified) return run;
+      const updatedRun = { ...run, results: nextResults, bugLogs: nextBugs };
+      syncArchivedRunToSupabase(updatedRun);
+      return updatedRun;
+    }));
   };
 
   return (
@@ -1418,51 +1911,51 @@ export function App() {
         <div className="liquid-orb liquid-orb-3"></div>
       </div>
 
-      {/* Main View Router */}
+      {/* Main View Router - keep Dashboard mounted so active tabs, filters, and modals never reset */}
       <main className="flex-1 relative z-10">
-        {currentView === 'dashboard' && (
-          <div key="dashboard-view">
-            <Dashboard
-              testPlans={testPlans}
-              testRuns={testRuns}
-              bugLogs={bugLogs}
-              populatedFeatures={populatedFeatures.filter(f => f && !f.startsWith('__'))}
-              devices={devices}
-              testers={testers}
-              onSelectPlanToBuild={handleCreatePlanClick}
-              onOpenMobileView={handleOpenMobileView}
-              onDeletePlan={handleDeletePlan}
-              onDeleteBug={handleDeleteBug}
-              onWipeAllBugs={handleWipeAllBugs}
-              onClonePlan={handleClonePlan}
-              onEditPlan={handleEditPlan}
-              onLoadSampleData={handleLoadSampleData}
-              onClearAllData={handleClearAllData}
-              onImportJSONData={handleImportJSONData}
-              onAddFeature={handleAddPopulatedFeature}
-              onDeleteFeature={handleDeleteFeature}
-              onDeleteTestRun={handleDeleteTestRun}
-              onBootTester={handleBootTester}
-              onDeleteTester={handleDeleteTester}
-              onResetActiveDay={handleResetActiveDay}
-              onResetDailyQuotas={handleResetDailyQuotas}
-              onSaveDevice={handleSaveDevice}
-              onDeleteDevice={handleDeleteDevice}
-              onSaveTester={handleSaveTester}
-              onDeleteTesterProfile={handleDeleteTesterProfile}
-              archivedRuns={archivedRuns}
-              onRunSubagentTest={handleRunSubagentAutomatedTest}
-              minAppVersion={minAppVersion}
-              onUpdateMinAppVersion={handleUpdateMinAppVersion}
-            />
-          </div>
-        )}
+        <div key="dashboard-view" className={currentView === 'dashboard' ? 'block' : 'hidden'}>
+          <Dashboard
+            testPlans={testPlans}
+            testRuns={testRuns}
+            bugLogs={bugLogs}
+            populatedFeatures={populatedFeatures.filter(f => typeof f === 'string' && f.trim() !== '' && !f.startsWith('__'))}
+            devices={devices}
+            testers={testers}
+            onSelectPlanToBuild={handleCreatePlanClick}
+            onOpenMobileView={handleOpenMobileView}
+            onDeletePlan={handleDeletePlan}
+            onDeleteBug={handleDeleteBug}
+            onUpdateBugLog={handleUpdateBugLog}
+            onWipeAllBugs={handleWipeAllBugs}
+            onClonePlan={handleClonePlan}
+            onEditPlan={handleEditPlan}
+            onLoadSampleData={handleLoadSampleData}
+            onClearAllData={handleClearAllData}
+            onImportJSONData={handleImportJSONData}
+            onAddFeature={handleAddPopulatedFeature}
+            onDeleteFeature={handleDeleteFeature}
+            onDeleteTestRun={handleDeleteTestRun}
+            onBootTester={handleBootTester}
+            onDeleteTester={handleDeleteTester}
+            onResetActiveDay={handleResetActiveDay}
+            onResetDailyQuotas={handleResetDailyQuotas}
+            onSaveDevice={handleSaveDevice}
+            onDeleteDevice={handleDeleteDevice}
+            onSaveTester={handleSaveTester}
+            onDeleteTesterProfile={handleDeleteTesterProfile}
+            archivedRuns={archivedRuns}
+            onRunSubagentTest={handleRunSubagentAutomatedTest}
+            minAppVersion={minAppVersion}
+            onUpdateMinAppVersion={handleUpdateMinAppVersion}
+          />
+        </div>
 
         {currentView === 'plan-builder' && (
           <div key="plan-builder-view" className="animate-liquid-fade">
             <PlanBuilder
+              key={editingPlan?.id || 'new-plan'}
               initialPlan={editingPlan}
-              populatedFeatures={populatedFeatures.filter(f => f && !f.startsWith('__'))}
+              populatedFeatures={populatedFeatures.filter(f => typeof f === 'string' && f.trim() !== '' && !f.startsWith('__'))}
               onAddPopulatedFeature={handleAddPopulatedFeature}
               onDeleteFeature={handleDeleteFeature}
               onSavePlan={handleSavePlan}
@@ -1492,9 +1985,7 @@ export function App() {
               onAddPopulatedDevice={handleAddPopulatedDevice}
               onSelectPlan={(planId) => {
                 setSelectedPlanId(planId);
-                try {
-                  localStorage.setItem('qa_selected_plan_id', planId);
-                } catch (e) {}
+                safeSetStorageItem('qa_selected_plan_id', planId);
               }}
               onUpdateRun={handleUpdateRun}
               onDeleteRun={handleDeleteTestRun}

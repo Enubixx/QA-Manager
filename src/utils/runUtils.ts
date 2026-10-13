@@ -16,11 +16,26 @@ export type StepFirstSeenIndex = Map<string, number>;
 
 export const stepFirstSeenKey = (planId: string, stepId: string): string => `${planId}::${stepId}`;
 
+const VALID_RECORDED_STATUSES = new Set([
+  'green',
+  'yellow',
+  'red',
+  'pass',
+  'fail',
+  'skip',
+  'blocked',
+]);
+
 /** A recorded step result: an object with a real (non-empty, non-pending) status. `_meta` is never a step. */
-const isRecordedResult = (key: string, value: unknown): boolean => {
-  if (key === '_meta' || !value || typeof value !== 'object') return false;
+export const isRecordedResult = (...args: [keyOrValue: unknown, maybeValue?: unknown]): boolean => {
+  const [keyOrValue, maybeValue] = args;
+  const hasKeyArg = args.length >= 2 || typeof keyOrValue === 'string';
+  if (hasKeyArg && keyOrValue === '_meta') return false;
+  const value = hasKeyArg ? maybeValue : keyOrValue;
+  if (!value || typeof value !== 'object') return false;
   const status = (value as { status?: unknown }).status;
-  return !!status && status !== 'pending';
+  if (typeof status !== 'string') return false;
+  return VALID_RECORDED_STATUSES.has(status.trim().toLowerCase());
 };
 
 /** Epoch ms of a timestamp, or NaN when it is missing or invalid. */
@@ -52,60 +67,56 @@ export const buildStepFirstSeenIndex = (runs: TestRun[]): StepFirstSeenIndex => 
 
 /**
  * History-aware step check (no status or one-time check): the run's plan exists and has
- * steps, the run recorded at least one result, and every current plan step was either
- * recorded by this run or did not exist yet when the run finished - i.e. no run of the
- * plan had recorded it at or before this run's finish time.
- * Finish time = completedAt, else the latest result timestamp; with neither, every step
- * that has ever been recorded is required.
+ * steps, the run recorded at least one current plan step result, and every current plan
+ * step was either recorded by this run or was first recorded across the system strictly
+ * after this run finished.
  */
-export const hasAllLiveStepsRecorded = (run: TestRun, plans: TestPlan[], firstSeen: StepFirstSeenIndex): boolean => {
-  if (!run) return false;
-  const plan = plans.find(p => p.id === run.planId);
-  if (!plan || !plan.steps || plan.steps.length === 0) return false;
+export const hasAllLiveStepsRecorded = (
+  run: TestRun,
+  plans: TestPlan[] | TestPlan,
+  firstSeen?: StepFirstSeenIndex
+): boolean => {
+  if (!run || run.status === 'terminated') return false;
+  const plan = Array.isArray(plans) ? plans.find(p => p.id === run.planId) : plans;
+  if (!plan || !Array.isArray(plan.steps) || plan.steps.length === 0) return false;
   const results = run.results || {};
 
-  let recordedCount = 0;
+  let recordedPlanStepCount = 0;
   let latestResultMs = NaN;
-  Object.entries(results).forEach(([stepId, res]) => {
-    if (!isRecordedResult(stepId, res)) return;
-    recordedCount++;
-    const ms = toEpochMs(res.timestamp);
-    if (!Number.isNaN(ms) && (Number.isNaN(latestResultMs) || ms > latestResultMs)) latestResultMs = ms;
+  plan.steps.forEach(s => {
+    const res = results[s.id];
+    if (!isRecordedResult(s.id, res)) return;
+    recordedPlanStepCount++;
+    const ms = toEpochMs(res?.timestamp);
+    if (!Number.isNaN(ms) && (Number.isNaN(latestResultMs) || ms > latestResultMs)) {
+      latestResultMs = ms;
+    }
   });
-  if (recordedCount === 0) return false;
+  if (recordedPlanStepCount === 0) return false;
 
   const completedMs = toEpochMs(run.completedAt);
-  const finishedAt = !Number.isNaN(completedMs) ? completedMs : latestResultMs;
+  const startedMs = toEpochMs(run.startedAt);
+  const finishedAt = !Number.isNaN(completedMs)
+    ? completedMs
+    : !Number.isNaN(latestResultMs)
+    ? latestResultMs
+    : startedMs;
 
   return plan.steps.every(s => {
     if (isRecordedResult(s.id, results[s.id])) return true;
+    if (!firstSeen) return false;
     const stepFirstSeen = firstSeen.get(stepFirstSeenKey(plan.id, s.id));
-    if (stepFirstSeen === undefined) return true;
+    if (stepFirstSeen === undefined) return false;
     return !Number.isNaN(finishedAt) && stepFirstSeen > finishedAt;
   });
 };
 
 // Single source of truth for "this run counts as a finished run".
-// Used by quota counters so they always agree with the logged-data views, which
-// only show runs where every step of the plan has a non-pending result.
-// Runs that were cut short (e.g. archived by a restart) stay out of the quota.
-//
-// History-aware option (pass `firstSeen` from buildStepFirstSeenIndex): the strict rule
-// judges every run against the plan as it is NOW, so adding a step to a plan used to
-// hide every earlier run of that plan from the reports and quota counters (they never
-// recorded the new step). With `firstSeen`, a run only needs the steps that already
-// existed when it finished (some run of the plan had recorded them by then); runs cut
-// short still miss steps that existed at the time, so they stay excluded.
-// The restart/archive decision in App.tsx (handleRestartRun) keeps the strict rule
-// (no `firstSeen`): at that moment the current plan is the plan being run.
 export const isRunFullyCompleted = (run: TestRun, plans: TestPlan[], firstSeen?: StepFirstSeenIndex): boolean => {
   if (!run || run.status !== 'completed') return false;
   if (ONE_TIME_INCLUDED_RUN_IDS.has(run.id)) return true;
   if (firstSeen) return hasAllLiveStepsRecorded(run, plans, firstSeen);
-  const plan = plans.find(p => p.id === run.planId);
-  if (!plan || plan.steps.length === 0) return false;
-  return plan.steps.every(s => {
-    const res = run.results?.[s.id];
-    return !!(res && res.status && res.status !== 'pending');
-  });
+  const plan = (plans || []).find(p => p.id === run.planId);
+  if (!plan || !Array.isArray(plan.steps) || plan.steps.length === 0) return false;
+  return plan.steps.every(s => isRecordedResult(s.id, run.results?.[s.id]));
 };

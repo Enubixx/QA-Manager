@@ -124,6 +124,18 @@ export const SAMPLE_RUNS: TestRun[] = [
         stepId: 'step-demo-102',
         status: 'yellow',
         feature: 'Authentication',
+        timestamp: new Date(Date.now() - 2.5 * 3600 * 1000).toISOString()
+      },
+      'step-demo-103': {
+        stepId: 'step-demo-103',
+        status: 'green',
+        feature: 'Security',
+        timestamp: new Date(Date.now() - 2.2 * 3600 * 1000).toISOString()
+      },
+      'step-demo-104': {
+        stepId: 'step-demo-104',
+        status: 'green',
+        feature: 'Authentication',
         timestamp: new Date(Date.now() - 2 * 3600 * 1000).toISOString()
       }
     },

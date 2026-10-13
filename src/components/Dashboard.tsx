@@ -11,8 +11,9 @@ import type { ExecutiveQAResult, SummaryScopeContext } from '../services/geminiS
 import { GOOGLE_APPS_SCRIPT_CODE } from '../googleAppsScriptCode';
 import { toBlob } from 'html-to-image';
 
-/** Identifies an exact set of bugs, so a stored AI summary is only reused for the same bugs. */
-const makeBugsKey = (bugs: BugLog[]): string => bugs.map(b => String(b.id)).sort().join('|');
+/** Identifies an exact set of bugs and their notes, so a stored AI summary is invalidated when notes/titles change. */
+const makeBugsKey = (bugs: BugLog[]): string =>
+  bugs.map(b => `${b.id}:${b.stepTitle || ''}:${b.note || ''}`).sort().join('|');
 
 /** Gemini web app used by the "AI Chat" summary flow (no API key needed). */
 const GEMINI_CHAT_URL = 'https://gemini.google.com/app';
@@ -30,12 +31,13 @@ interface DashboardProps {
   onOpenMobileView: (planId?: string) => void;
   onDeletePlan: (planId: string) => void;
   onDeleteBug: (bugId: string) => void;
+  onUpdateBugLog?: (updatedBug: BugLog | BugLog[]) => void;
   onWipeAllBugs?: () => void;
   onClonePlan: (planId: string) => void;
   onEditPlan?: (plan: TestPlan) => void;
   onLoadSampleData: () => void;
   onClearAllData?: () => void;
-  onImportJSONData: (data: { testPlans?: TestPlan[]; testRuns?: TestRun[]; bugLogs?: BugLog[] }) => void;
+  onImportJSONData: (data: { testPlans?: TestPlan[]; testRuns?: TestRun[]; bugLogs?: BugLog[]; archivedRuns?: TestRun[] }) => void;
   onAddFeature?: (featureName: string) => void;
   onDeleteFeature?: (featureName: string) => void;
   onDeleteTestRun?: (runId: string) => void;
@@ -54,7 +56,11 @@ interface DashboardProps {
 }
 
 const getLocalDateStr = (dateInput?: string | Date) => {
-  const d = dateInput ? new Date(dateInput) : new Date();
+  if (dateInput === '') return '';
+  if (typeof dateInput === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateInput.trim())) {
+    return dateInput.trim();
+  }
+  const d = dateInput !== undefined ? new Date(dateInput) : new Date();
   if (isNaN(d.getTime())) return '';
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, '0');
@@ -74,6 +80,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onOpenMobileView,
   onDeletePlan,
   onDeleteBug,
+  onUpdateBugLog,
   onWipeAllBugs,
   onClonePlan,
   onEditPlan,
@@ -118,14 +125,22 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [testerViewMode, setTesterViewMode] = useState<'all' | 'active'>('all');
   const [searchTesterQuery, setSearchTesterQuery] = useState('');
 
-  // Live ongoing test duration ticker (updates every second for real-time counters)
+  // Live ongoing test duration ticker (gated on active in-progress runs & relevant tabs to prevent 1Hz full-tree re-renders)
   const [liveTickerTime, setLiveTickerTime] = useState(() => Date.now());
+  const hasActiveInProgressRun = useMemo(() => {
+    return testRuns.some(r => r && r.status === 'in_progress') || devices.some(d => Boolean(d.activeRunId || d.activeTesterName));
+  }, [testRuns, devices]);
+
   useEffect(() => {
+    if (!hasActiveInProgressRun || (activeTab !== 'overview' && activeTab !== 'devices' && activeTab !== 'testers')) {
+      return;
+    }
+    setLiveTickerTime(Date.now());
     const timer = setInterval(() => {
       setLiveTickerTime(Date.now());
     }, 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [hasActiveInProgressRun, activeTab]);
 
   const formatOngoingDuration = (startedAt?: string): string => {
     if (!startedAt) return '0s';
@@ -147,10 +162,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   // Helper to determine real, effective run status
   const getEffectiveRunStatus = (run: TestRun) => {
+    if ((run.status as any) === 'terminated') return 'terminated';
     const plan = testPlans.find(p => p.id === run.planId);
-    const totalSteps = plan?.steps.length || 0;
+    const totalSteps = plan?.steps?.length || 0;
     const stepEntries = Object.entries(run.results || {}).filter(
-      ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+      ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
     );
     const completedCount = stepEntries.length;
 
@@ -192,13 +208,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
       isAway: boolean;
     }>();
 
-    const computeMetrics = (testerName: string, devName: string, run?: TestRun, devId?: string) => {
-      if (!testerName) return;
+    const computeMetrics = (testerName: string, devName: string, run: TestRun, devId?: string) => {
+      if (!testerName || !run) return;
       const key = testerName.toLowerCase().trim();
-      const plan = run ? testPlans.find(p => p.id === run.planId) : undefined;
-      const totalSteps = plan?.steps.length || 1;
-      const stepEntries = Object.entries(run?.results || {}).filter(
-        ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+      const plan = testPlans.find(p => p.id === run.planId);
+      const totalSteps = Math.max(1, plan?.steps?.length || 1);
+      const stepEntries = Object.entries(run.results || {}).filter(
+        ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
       );
       const completedResults = stepEntries.map(([_, v]) => v as any);
       const completedSteps = completedResults.length;
@@ -208,23 +224,23 @@ export const Dashboard: React.FC<DashboardProps> = ({
       const yellowCount = completedResults.filter(r => r.status === 'yellow').length;
       const redCount = completedResults.filter(r => r.status === 'red').length;
 
-      const currentStepIdx = (run?.currentStepIndex !== undefined) ? run.currentStepIndex : completedSteps;
-      const currentStep = plan?.steps[Math.min(currentStepIdx, totalSteps - 1)];
+      const currentStepIdx = (run.currentStepIndex !== undefined) ? run.currentStepIndex : completedSteps;
+      const currentStep = plan?.steps?.[Math.min(currentStepIdx, totalSteps - 1)];
       const currentStepTitle = currentStep ? (currentStep.title || currentStep.feature || `Step ${currentStepIdx + 1}`) : undefined;
 
-      const lastResultTimestamp = Object.values(run?.results || {})
-        .map((r: any) => r.timestamp ? new Date(r.timestamp).getTime() : 0)
-        .filter((t: number) => t > 0)
+      const lastResultTimestamp = completedResults
+        .map((r: any) => (r && r.timestamp) ? new Date(r.timestamp).getTime() : 0)
+        .filter((t: number) => t > 0 && !isNaN(t))
         .sort((a: number, b: number) => b - a)[0];
-      const lastActivityTime = lastResultTimestamp || (run?.startedAt ? new Date(run.startedAt).getTime() : 0);
-      const isAway = lastActivityTime > 0 && (Date.now() - lastActivityTime > 3 * 60 * 1000);
+      const lastActivityTime = lastResultTimestamp || (run.startedAt ? new Date(run.startedAt).getTime() : 0);
+      const isAway = lastActivityTime > 0 && !isNaN(lastActivityTime) && (Date.now() - lastActivityTime > 3 * 60 * 1000);
 
       map.set(key, {
-        deviceName: devName || run?.deviceName || 'Mobile Device',
-        deviceId: devId || run?.deviceId,
-        planName: run?.planName || plan?.name || 'Test Plan',
-        runId: run?.id,
-        startedAt: run?.startedAt,
+        deviceName: devName || run.deviceName || 'Mobile Device',
+        deviceId: devId || run.deviceId,
+        planName: plan?.name || run.planName || 'Test Plan',
+        runId: run.id,
+        startedAt: run.startedAt,
         currentStepIndex: Math.min(currentStepIdx + 1, totalSteps),
         totalSteps,
         currentStepTitle,
@@ -236,19 +252,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
       });
     };
 
-    // 1. Check devices that are currently locked by a tester WITH an active in_progress run
+    // 1. Check devices that are currently locked by a tester WITH an actual in_progress run
     devices.forEach(d => {
       const activeTester = d.activeTesterName?.trim();
       if (activeTester) {
         const activeRun = testRuns.find(r => 
           r.status === 'in_progress' && (
             (d.activeRunId && r.id === d.activeRunId) || 
-            (r.deviceId === d.id) ||
+            (r.deviceId && r.deviceId.toLowerCase().trim() === d.id.toLowerCase().trim()) ||
             (r.deviceName && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim()) ||
             (r.testerName && r.testerName.toLowerCase().trim() === activeTester.toLowerCase())
           )
         );
-        computeMetrics(activeTester, d.name, activeRun, d.id);
+        if (activeRun) {
+          computeMetrics(activeTester, d.name, activeRun, d.id);
+        }
       }
     });
 
@@ -257,8 +275,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
       if (r.status === 'in_progress' && r.testerName && r.testerName.trim()) {
         const key = r.testerName.toLowerCase().trim();
         const existing = map.get(key);
-        // If not in map, or if existing has less recent results count
-        const currentEntriesCount = Object.keys(r.results || {}).length;
+        const currentEntriesCount = Object.entries(r.results || {}).filter(
+          ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
+        ).length;
         const existingCount = existing ? (existing.greenCount + existing.yellowCount + existing.redCount) : -1;
         if (!existing || currentEntriesCount >= existingCount) {
           computeMetrics(r.testerName, r.deviceName || 'Mobile Device', r, r.deviceId);
@@ -285,15 +304,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
     
     runMap.forEach(run => {
       // Only runs that recorded every step that existed when they finished count toward quota
-      // (history-aware, see runUtils) - same rule as the logged-data views, so partial runs cut
-      // short by a restart can't inflate the counter.
       if (!run.completedAt || !isRunFullyCompleted(run, testPlans, stepFirstSeen)) return;
 
       const runDate = getLocalDateStr(run.completedAt);
       if (runDate !== todayStr) return;
       
       const targetDev = devices.find(d => 
-        (run.deviceId && (d.id === run.deviceId || d.id.toLowerCase() === run.deviceId.toLowerCase())) ||
+        (run.deviceId && d.id.toLowerCase().trim() === run.deviceId.toLowerCase().trim()) ||
         (run.deviceName && d.name && d.name.toLowerCase().trim() === run.deviceName.toLowerCase().trim())
       );
       if (targetDev) {
@@ -308,10 +325,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
     let totalTarget = 0;
     let totalCompleted = 0;
     devices.forEach(dev => {
-      dev.quotas.forEach(q => {
-        totalTarget += q.targetRunsPerDay;
+      const seenPlans = new Set<string>();
+      (dev.quotas || []).forEach(q => {
+        if (!q || !q.planId || seenPlans.has(q.planId)) return;
+        const target = Math.max(0, Number(q.targetRunsPerDay) || 0);
+        if (target <= 0) return;
+        seenPlans.add(q.planId);
+        totalTarget += target;
         const doneToday = (todayRunsMap[dev.id] && todayRunsMap[dev.id][q.planId]) || 0;
-        totalCompleted += Math.min(doneToday, q.targetRunsPerDay);
+        totalCompleted += Math.min(doneToday, target);
       });
     });
     const pct = totalTarget > 0 ? Math.round((totalCompleted / totalTarget) * 100) : 0;
@@ -353,19 +375,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [copiedImage, setCopiedImage] = useState<boolean>(false);
   const [copiedBugs, setCopiedBugs] = useState<boolean>(false);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState<boolean>(false);
-  // Holds the finished report so the user can tab away during generation and
-  // copy whenever they come back. Clipboard writes require an in-focus document,
-  // so copying is now an explicit second action instead of an automatic one.
   const [generatedReport, setGeneratedReport] = useState<{
     plainText: string;
     htmlText: string;
     generatedAt: number;
-    // Report scope (plan + day) the report was generated for - see buildReportScopeKey
     scopeKey: string;
     modelUsed?: string;
-    // Why the AI summary was unavailable (an offline summary was used instead)
     aiError?: string;
-    // AI summaries per CUJ, tagged with the exact bugs they summarize
     featureSummaries?: Record<string, { summary: string; bugsKey: string }>;
   } | null>(null);
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState<boolean>(false);
@@ -374,18 +390,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [isTestingKey, setIsTestingKey] = useState<boolean>(false);
   const [testKeyStatus, setTestKeyStatus] = useState<{ success: boolean; message: string; models?: string[] } | null>(null);
   const [summaryToast, setSummaryToast] = useState<{ type: 'success' | 'warning' | 'error'; message: string } | null>(null);
-  // "AI Chat" flow: copy a prompt into any AI chat, paste its reply back - no API key needed
   const [isChatSummaryOpen, setIsChatSummaryOpen] = useState<boolean>(false);
   const [chatReplyText, setChatReplyText] = useState<string>('');
   const [chatPromptCopied, setChatPromptCopied] = useState<boolean>(false);
   const [chatStatus, setChatStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-  // Why the AI chat opened by itself (e.g. the saved API key was rejected)
   const [chatNotice, setChatNotice] = useState<string | null>(null);
-  // Open Gemini in a new tab whenever the AI chat flow starts (remembered in this browser)
   const [chatAutoOpenGemini, setChatAutoOpenGemini] = useState<boolean>(() => localStorage.getItem(CHAT_AUTO_OPEN_GEMINI_KEY) === '1');
-  // Latest reply handler for the window focus / paste listeners (avoids stale closures)
   const chatReplyHandlerRef = useRef<((text: string, source: 'auto' | 'paste') => void) | null>(null);
-  // Clipboard text the automatic pickup already looked at, so tab switches don't re-check it
   const lastAutoCheckedReplyRef = useRef<string>('');
   const [isVisualSnapshotModalOpen, setIsVisualSnapshotModalOpen] = useState<boolean>(false);
   const [selectedImagePreviewUrl, setSelectedImagePreviewUrl] = useState<string | null>(null);
@@ -406,14 +417,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const handleUpdateBugCategorization = (bugId: string, field: 'bugType' | 'priority' | 'status', value: any) => {
     setBugCategorizations(prev => {
       const existing = prev[bugId] || {};
+      const nextCat = {
+        ...existing,
+        [field]: value
+      };
       const updated = {
         ...prev,
-        [bugId]: {
-          ...existing,
-          [field]: value
-        }
+        [bugId]: nextCat
       };
-      localStorage.setItem('qa_bug_categorizations', JSON.stringify(updated));
+      try {
+        localStorage.setItem('qa_bug_categorizations', JSON.stringify(updated));
+      } catch (e) {}
+      const targetBug = bugLogs.find(b => b.id === bugId);
+      if (targetBug && onUpdateBugLog) {
+        onUpdateBugLog({
+          ...targetBug,
+          bugType: nextCat.bugType || targetBug.bugType || 'Bug',
+          priority: nextCat.priority || targetBug.priority || (targetBug.severity === 'critical' ? 'P0' : targetBug.severity === 'high' ? 'P1' : 'P2'),
+          status: nextCat.status || targetBug.status || 'Filed'
+        });
+      }
       return updated;
     });
   };
@@ -444,15 +467,30 @@ export const Dashboard: React.FC<DashboardProps> = ({
       if (!silent) setSheetSyncStatus({ success: false, message: 'No bugs found to sync.' });
       return;
     }
+    const trimmedSheetUrl = (googleSheetUrl || '').trim();
+    if (!trimmedSheetUrl.startsWith('https://script.google.com/')) {
+      if (!silent) {
+        setSheetSyncStatus({
+          success: false,
+          message: 'Invalid Google Apps Script URL. Must begin with https://script.google.com/.'
+        });
+      }
+      return;
+    }
     if (!silent) {
       setIsSyncingSheet(true);
       setSheetSyncStatus(null);
     }
     try {
-      const enriched = bugsToSync.map(b => {
+      const planMap = new Map(testPlans.map(p => [p.id, p.name]));
+      const enrichedPayload = bugsToSync.map(b => {
         const cat = bugCategorizations[b.id];
+        const resolvedPlanName = (b.planId && planMap.get(b.planId)) || (b as any).planName || 'General QA';
         return {
           ...b,
+          planName: resolvedPlanName,
+          // Strip base64 data URLs so serverless proxy body limit is never exceeded
+          imageUrl: (b.imageUrl && b.imageUrl.startsWith('data:')) ? undefined : b.imageUrl,
           bugType: cat?.bugType || b.bugType || 'Bug',
           priority: cat?.priority || b.priority || (b.severity === 'critical' ? 'P0' : b.severity === 'high' ? 'P1' : 'P2'),
           status: cat?.status || b.status || 'Filed'
@@ -467,39 +505,45 @@ export const Dashboard: React.FC<DashboardProps> = ({
         const res = await fetch('/api/sync-sheet', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ scriptUrl: googleSheetUrl, bugs: enriched })
+          body: JSON.stringify({ scriptUrl: trimmedSheetUrl, bugs: enrichedPayload })
         });
         const data = await res.json();
-        if (res.ok && data.status === 'success' && !data.result?.raw?.includes('Sign in')) {
+        if (
+          res.ok &&
+          data.status === 'success' &&
+          data.result?.status !== 'error' &&
+          !data.result?.raw?.includes('Sign in')
+        ) {
           success = true;
-          respMsg = data.result?.message || `Successfully synced ${enriched.length} bug(s) to Google Sheets!`;
+          respMsg = data.result?.message || `Successfully synced ${enrichedPayload.length} bug(s) to Google Sheets!`;
+          if (onUpdateBugLog) {
+            const markedSynced = bugsToSync.map(b => {
+              const cat = bugCategorizations[b.id];
+              return {
+                ...b,
+                syncedToSheet: true,
+                bugType: cat?.bugType || b.bugType || 'Bug',
+                priority: cat?.priority || b.priority || (b.severity === 'critical' ? 'P0' : b.severity === 'high' ? 'P1' : 'P2'),
+                status: cat?.status || b.status || 'Filed'
+              };
+            });
+            onUpdateBugLog(markedSynced);
+          }
+        } else if (data?.result?.message || data?.error) {
+          respMsg = data?.result?.message || data?.error;
         }
       } catch (err) {
-        if (!silent) console.warn('Proxy sync failed, attempting direct browser request:', err);
-      }
-
-      // 2. Direct browser sync fallback (only if user manually clicked, never in silent background sync)
-      if (!success && googleSheetUrl && !silent) {
-        try {
-          const syncWin = window.open(googleSheetUrl, 'qa_sync_window', 'width=520,height=520,resizable=yes,scrollbars=yes');
-          if (syncWin) {
-            success = true;
-            respMsg = `Google Sheets sync triggered in popup! Check your spreadsheet tabs.`;
-          } else {
-            window.open(googleSheetUrl, '_blank');
-            success = true;
-            respMsg = `Google Sheets sync opened in a new tab.`;
-          }
-        } catch (err: any) {
-          respMsg = err.message || 'Error opening Google Apps Script sync window';
-        }
+        if (!silent) console.warn('Proxy sync failed:', err);
       }
 
       if (!silent) {
         if (success) {
-          setSheetSyncStatus({ success: true, message: respMsg || `Successfully synced ${enriched.length} bug(s)!` });
+          setSheetSyncStatus({ success: true, message: respMsg || `Successfully synced ${enrichedPayload.length} bug(s)!` });
         } else {
-          setSheetSyncStatus({ success: false, message: respMsg || 'Failed to sync to Google Sheet.' });
+          setSheetSyncStatus({
+            success: false,
+            message: respMsg || 'Could not reach Google Apps Script POST endpoint via /api/sync-sheet. Verify your Web App URL and deployment permissions.'
+          });
         }
       }
     } catch (e: any) {
@@ -513,6 +557,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
+  const bugLogsLatestRef = useRef<BugLog[]>(bugLogs);
+  useEffect(() => {
+    bugLogsLatestRef.current = bugLogs;
+  }, [bugLogs]);
+
   const lastSyncedBugCountRef = useRef<number>(bugLogs.length);
   useEffect(() => {
     if (autoSyncSheet && googleSheetUrl && bugLogs.length > lastSyncedBugCountRef.current) {
@@ -521,18 +570,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
     } else {
       lastSyncedBugCountRef.current = bugLogs.length;
     }
-  }, [bugLogs.length, autoSyncSheet, googleSheetUrl, bugLogs]);
+  }, [bugLogs.length, autoSyncSheet, googleSheetUrl]);
 
-  // 1-minute recurring auto-sync interval while dashboard is active
+  // 1-minute recurring auto-sync interval while dashboard is active (uses ref to avoid resetting timer on every bug edit)
   useEffect(() => {
     if (!autoSyncSheet || !googleSheetUrl) return;
 
     const intervalId = setInterval(() => {
-      handleSyncToGoogleSheet(bugLogs, true);
+      if (bugLogsLatestRef.current.length > 0) {
+        handleSyncToGoogleSheet(bugLogsLatestRef.current, true);
+      }
     }, 60000);
 
     return () => clearInterval(intervalId);
-  }, [autoSyncSheet, googleSheetUrl, bugLogs]);
+  }, [autoSyncSheet, googleSheetUrl]);
 
   const handleCopyBugsToClipboard = async () => {
     const filterLabelDate = selectedDateFilter === 'all' 
@@ -570,20 +621,27 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
+  // Global Escape key listener closes any active modal or popover
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && selectedImagePreviewUrl) {
-        setSelectedImagePreviewUrl(null);
+      if (e.key === 'Escape') {
+        if (selectedImagePreviewUrl) setSelectedImagePreviewUrl(null);
+        if (isVisualSnapshotModalOpen) setIsVisualSnapshotModalOpen(false);
+        if (isChatSummaryOpen) setIsChatSummaryOpen(false);
+        if (isApiKeyModalOpen) setIsApiKeyModalOpen(false);
+        if (isSheetModalOpen) setIsSheetModalOpen(false);
+        if (isBugFilterMenuOpen) setIsBugFilterMenuOpen(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedImagePreviewUrl]);
+  }, [selectedImagePreviewUrl, isVisualSnapshotModalOpen, isChatSummaryOpen, isApiKeyModalOpen, isSheetModalOpen, isBugFilterMenuOpen]);
 
   const handleCreateFeatureSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newFeatureInput.trim() || !onAddFeature) return;
-    onAddFeature(newFeatureInput.trim());
+    const trimmed = newFeatureInput.trim();
+    if (!trimmed || trimmed.toLowerCase() === 'general' || trimmed.startsWith('__') || !onAddFeature) return;
+    onAddFeature(trimmed);
     setNewFeatureInput('');
   };
 
@@ -608,7 +666,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   // Filter runs to ONLY include fully finished test plan executions (100% of steps completed)
-  // Uses the same shared rule as the quota counters so the two can never disagree.
   const completedRuns = useMemo(() => {
     const map = new Map<string, TestRun>();
     const combined = [...archivedRuns, ...testRuns];
@@ -620,22 +677,22 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return Array.from(map.values());
   }, [testRuns, archivedRuns, testPlans, stepFirstSeen]);
 
-  // Unique devices populated across bug logs and completed test runs
-  const uniqueDevices = Array.from(
+  // Unique devices populated across bug logs and completed test runs (memoized)
+  const uniqueDevices = useMemo(() => Array.from(
     new Set(
       bugLogs.map(b => b.deviceName).concat(completedRuns.map(r => r.deviceName)).filter(Boolean)
     )
-  ) as string[];
+  ) as string[], [bugLogs, completedRuns]);
 
-  // Unique features populated across test steps, bug logs, and populatedFeatures (excluding 'General')
-  const uniqueFeatures = Array.from(
+  // Unique features populated across test steps, bug logs, and populatedFeatures (excluding 'General' and '__*')
+  const uniqueFeatures = useMemo(() => Array.from(
     new Set(
       populatedFeatures
-        .concat(testPlans.flatMap(p => p.steps.map(s => s.feature || '')))
+        .concat(testPlans.flatMap(p => (p.steps || []).map(s => s.feature || '')))
         .concat(bugLogs.map(b => b.feature || ''))
-        .filter(f => f && f.trim() !== '' && f.toLowerCase() !== 'general' && !f.startsWith('__'))
+        .filter(f => typeof f === 'string' && f.trim() !== '' && f.toLowerCase() !== 'general' && !f.startsWith('__'))
     )
-  ) as string[];
+  ) as string[], [populatedFeatures, testPlans, bugLogs]);
 
   // Today Local Date string (YYYY-MM-DD)
   const todayStr = useMemo(() => getLocalDateStr(new Date()), []);
@@ -644,7 +701,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [selectedDailySessionDate, setSelectedDailySessionDate] = useState<string>(todayStr);
 
   // Test plan the CUJ report is scoped to (always opens on "All plans"; not persisted).
-  // Falls back to "All plans" when the selected plan no longer exists.
   const [selectedReportPlanId, setSelectedReportPlanId] = useState<string>(ALL_PLANS);
   const reportPlanId = selectedReportPlanId === ALL_PLANS || testPlans.some(p => p.id === selectedReportPlanId)
     ? selectedReportPlanId
@@ -658,7 +714,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     () => listReportDates({ plans: testPlans, runs: mergedRuns, bugs: bugLogs, planId: reportPlanId, firstSeen: stepFirstSeen }),
     [testPlans, mergedRuns, bugLogs, reportPlanId, stepFirstSeen]
   );
-  // Latest day with data for the selected plan ('' if none) - offered by the empty state
   const latestReportDate = reportDates.length > 0 ? reportDates[0].dateStr : '';
 
   // List of Saved Historical Days with execution counts: Today, then the selected plan's days
@@ -677,7 +732,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const otherDays = reportDates
       .filter(d => d.dateStr !== todayStr)
       .map(d => ({ dateStr: d.dateStr, label: formatDisplayLabel(d.dateStr), stepCount: d.stepCount, bugCount: d.bugCount }));
-    // Keep the selected day listed even when the selected plan has no data on it
     if (selectedDailySessionDate !== ALL_DATES && selectedDailySessionDate !== todayStr && !otherDays.some(d => d.dateStr === selectedDailySessionDate)) {
       otherDays.push({ dateStr: selectedDailySessionDate, label: formatDisplayLabel(selectedDailySessionDate), stepCount: 0, bugCount: 0 });
       otherDays.sort((a, b) => b.dateStr.localeCompare(a.dateStr));
@@ -696,8 +750,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   );
   const allPlansRunCount = planPickerOptions.reduce((sum, o) => sum + o.runCount, 0);
 
-  // CUJ report for the selected plan + day: finished runs only, each result under the CUJ it was
-  // recorded as, and untested CUJs never reported (see cujReportUtils)
+  // CUJ report for the selected plan + day
   const reportScope = useMemo(() => ({ planId: reportPlanId, date: selectedDailySessionDate }), [reportPlanId, selectedDailySessionDate]);
   const reportScopeKey = buildReportScopeKey(reportScope);
   const knownCujNames = useMemo(() => getKnownCujNames(testPlans, bugLogs, populatedFeatures), [testPlans, bugLogs, populatedFeatures]);
@@ -706,23 +759,27 @@ export const Dashboard: React.FC<DashboardProps> = ({
     [testPlans, mergedRuns, bugLogs, reportScope, knownCujNames, stepFirstSeen]
   );
   const reportPlanLabel = cujReport.planLabel;
-  // The copied report and the AI prompt name the real date; the on-screen card says "Today"
   const reportDateLabel = formatReportDateLabel(selectedDailySessionDate);
   const reportDayDisplayLabel = selectedDailySessionDate === todayStr ? 'Today' : reportDateLabel;
-  // "on Today" / "on Oct 9, 2026" / "across all days" - for the empty-state texts
   const reportDayPhrase = selectedDailySessionDate === ALL_DATES ? 'across all days' : `on ${reportDayDisplayLabel}`;
   const reportScopeContext: SummaryScopeContext = {
     scopeKey: reportScopeKey,
     scopeLabel: reportPlanId === ALL_PLANS ? `all test plans (${reportDateLabel})` : `the "${reportPlanLabel}" test plan (${reportDateLabel})`
   };
 
-  // A stored report belongs to one scope: switching plan or day clears it, so Copy Report can
-  // never copy another scope's report. The ref lets an in-flight generation detect a switch.
+  // Invalidate stored report when scope, underlying CUJ report data, or disclaimer changes
+  const reportDataSignature = useMemo(() => {
+    const bugsSig = [...cujReport.testedMetrics, ...cujReport.bugOnlyMetrics]
+      .map(m => `${m.featureName}:${m.greenCount}/${m.yellowCount}/${m.redCount}:${makeBugsKey(m.associatedBugs)}`)
+      .join('||');
+    return `${reportScopeKey}::${cujReport.totals.stepsExecuted}::${cujReport.golden.goldenCount}/${cujReport.golden.totalCount}::${reportDisclaimer}::${bugsSig}`;
+  }, [reportScopeKey, cujReport, reportDisclaimer]);
+
   const reportScopeKeyRef = useRef(reportScopeKey);
   reportScopeKeyRef.current = reportScopeKey;
   useEffect(() => {
     setGeneratedReport(null);
-  }, [reportScopeKey]);
+  }, [reportDataSignature]);
   const hasCurrentReport = !!generatedReport && generatedReport.scopeKey === reportScopeKey;
 
   // Historical Quality Evolution Timeline Points (Only fully finished runs of the selected plan)
@@ -731,19 +788,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
     [testPlans, mergedRuns, bugLogs, reportPlanId, stepFirstSeen]
   );
 
-  // Tested CUJs in the selected scope (worst first), CUJs with bugs but no completed steps,
-  // and known CUJs not tested in this view (only listed so they can still be deleted)
   const featureMetricsList = cujReport.testedMetrics;
   const bugOnlyMetrics = cujReport.bugOnlyMetrics;
   const untestedCujNames = cujReport.untestedCujNames;
 
-  // Compute QA Status metrics for individual tester profiles & daily tracking
+  // Compute QA Status metrics for individual tester profiles & daily tracking (case-insensitive grouping)
   const testerProfilesMap = useMemo(() => {
     const runsMap = new Map<string, TestRun>();
     [...archivedRuns, ...testRuns].forEach(r => {
       if (r && r.id) runsMap.set(r.id, r);
     });
     const combinedRuns = Array.from(runsMap.values());
+    const planTitleMap = new Map(testPlans.map(p => [p.id, p.name]));
     const map = new Map<string, {
       testerName: string;
       devicesUsed: Set<string>;
@@ -768,50 +824,66 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }>();
 
     combinedRuns.forEach(run => {
-      const tester = run.testerName?.trim() || 'Unassigned Tester';
-      if (!map.has(tester)) {
-        map.set(tester, {
-          testerName: tester,
+      const displayTester = run.testerName?.trim() || 'Unassigned Tester';
+      const normKey = displayTester.toLowerCase();
+      if (!map.has(normKey)) {
+        map.set(normKey, {
+          testerName: displayTester,
           devicesUsed: new Set<string>(),
           allTimeCompletedCount: 0,
           dailyStats: {}
         });
       }
-      const profile = map.get(tester)!;
+      const profile = map.get(normKey)!;
       if (run.deviceName) profile.devicesUsed.add(run.deviceName);
 
       const effectiveStatus = getEffectiveRunStatus(run);
       const stepEntries = Object.entries(run.results || {}).filter(
-        ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any)
+        ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
       );
       const isCompleted = effectiveStatus === 'completed' && stepEntries.length > 0;
 
       if (isCompleted) {
         profile.allTimeCompletedCount++;
 
-        const runDate = (run.completedAt) ? new Date(run.completedAt) : (run.startedAt ? new Date(run.startedAt) : new Date());
-        const dateStr = getLocalDateStr(runDate);
-        const timeFormatted = runDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-        const resultsArray = Object.values(run.results || {});
+        const resultsArray = stepEntries.map(([_, v]) => v as any);
         const stepTimestamps = resultsArray
-          .map(r => r.timestamp ? new Date(r.timestamp).getTime() : NaN)
-          .filter(t => !isNaN(t));
+          .map(r => (r && r.timestamp) ? new Date(r.timestamp).getTime() : NaN)
+          .filter(t => !isNaN(t) && t > 0)
+          .sort((a, b) => a - b);
 
-        let durationMs = run.durationMs || 0;
+        const maxStepTime = stepTimestamps.length > 0 ? stepTimestamps[stepTimestamps.length - 1] : 0;
+        const minStepTime = stepTimestamps.length > 0 ? stepTimestamps[0] : 0;
+
+        const runDate = run.completedAt
+          ? new Date(run.completedAt)
+          : (maxStepTime > 0 ? new Date(maxStepTime) : (run.startedAt ? new Date(run.startedAt) : new Date()));
+        const dateStr = getLocalDateStr(runDate) || defaultTodayStr;
+        const timeFormatted = !isNaN(runDate.getTime())
+          ? runDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : '';
+
+        let durationMs = (typeof run.durationMs === 'number' && !isNaN(run.durationMs) && run.durationMs > 0) ? run.durationMs : 0;
         if (!durationMs) {
           const startMs = run.startedAt ? new Date(run.startedAt).getTime() : 0;
-          const endMs = run.completedAt ? new Date(run.completedAt).getTime() : Date.now();
+          const endMs = run.completedAt ? new Date(run.completedAt).getTime() : (maxStepTime || startMs);
 
           if (startMs > 0 && endMs > startMs) {
             durationMs = endMs - startMs;
-          } else if (stepTimestamps.length > 0) {
-            const minStepTime = Math.min(...stepTimestamps);
-            const maxStepTime = Math.max(...stepTimestamps);
-            if (maxStepTime > minStepTime) {
-              durationMs = maxStepTime - minStepTime;
-            }
+          } else if (maxStepTime > minStepTime) {
+            durationMs = maxStepTime - minStepTime;
           }
+        }
+
+        // Cap multi-hour overnight idle gaps between steps so average run time isn't skewed
+        const MAX_STEP_GAP_MS = 30 * 60 * 1000;
+        if (durationMs > 2 * 3600 * 1000 && stepTimestamps.length > 1) {
+          let cappedSum = 0;
+          for (let i = 1; i < stepTimestamps.length; i++) {
+            const delta = Math.max(0, stepTimestamps[i] - stepTimestamps[i - 1]);
+            cappedSum += Math.min(delta, MAX_STEP_GAP_MS);
+          }
+          if (cappedSum > 0) durationMs = cappedSum;
         }
 
         const durationSecs = Math.max(1, Math.round(durationMs / 1000));
@@ -825,6 +897,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         const yellowCount = resultsArray.filter(r => r.status === 'yellow').length;
         const redCount = resultsArray.filter(r => r.status === 'red').length;
         const deviceNameStr = run.deviceName?.trim() || 'Mobile Device';
+        const latestPlanName = planTitleMap.get(run.planId) || run.planName || 'Test Plan';
 
         if (!profile.dailyStats[dateStr]) {
           profile.dailyStats[dateStr] = {
@@ -841,7 +914,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         profile.dailyStats[dateStr].devicesUsedOnDay.add(deviceNameStr);
         profile.dailyStats[dateStr].completedRuns.push({
           runId: run.id,
-          planName: run.planName,
+          planName: latestPlanName,
           deviceName: deviceNameStr,
           completedAtFormatted: timeFormatted,
           durationMs,
@@ -854,7 +927,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     });
 
     return Array.from(map.values());
-  }, [testRuns, archivedRuns]);
+  }, [testRuns, archivedRuns, testPlans, defaultTodayStr]);
 
   // Extract all unique dates for QA Status dropdown
   const allQaDatesList = useMemo(() => {
@@ -876,6 +949,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
     // 1. Add all registered testers
     testers.forEach(t => {
+      if (!t || !t.name) return;
       map.set(t.name.toLowerCase().trim(), {
         id: t.id,
         name: t.name,
@@ -900,8 +974,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [testers, testerProfilesMap]);
 
-  // Executive Feature Health Visual Aggregates for the selected scope - tested CUJs only, already
-  // sorted Critical (Red) first -> Warning (Yellow) -> Healthy (Green) by the report module
   const reportTotals = cujReport.totals;
   const totalFeaturesCount = reportTotals.testedCujCount;
   const criticalFeaturesCount = reportTotals.criticalCount;
@@ -912,22 +984,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const warningPct = reportTotals.warningPct;
   const healthyPct = reportTotals.healthyPct;
 
-  // null when nothing was tested in this view (shown as "—")
   const avgHealthScore = reportTotals.avgHealthScore;
 
   const totalStepsAcrossFeatures = reportTotals.stepsExecuted;
-  // Bugs on tested CUJs plus bugs on CUJs without completed steps
   const totalBugsAcrossFeatures = reportTotals.bugCount;
 
-  // Evaluate Golden Runs:
-  // "runs where every feature passed with a green, it is allowed 1 yellow but no more, and definitly no reds"
-  // Finished runs in the selected scope, judged on everything they recorded (see cujReportUtils).
   const goldenRunsAnalysis = cujReport.golden;
 
-  /**
-   * Bugs per CUJ in the selected report scope (plan + day) - the only data AI summaries may use.
-   * Shared by the Gemini path and the AI-chat path so the prompt and the pasted reply always match.
-   */
   const buildDailySummaryPayload = () => {
     const featuresPayload = [...cujReport.testedMetrics, ...cujReport.bugOnlyMetrics].map(m => ({
       featureName: m.featureName,
@@ -945,14 +1008,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   /**
    * Builds the CUJ report. Pass `precomputedResult` (a pasted AI-chat reply) to skip
-   * the Gemini API entirely - no key needed.
+   * the Gemini API entirely - no key needed. When 0 bugs exist in scope, generates immediately without requiring an API key.
    */
   const handleExecuteCopyReport = async (
     skipKeyCheck: boolean = false,
     precomputedResult?: ExecutiveQAResult
   ): Promise<{ plainText: string; htmlText: string } | null> => {
-    // No API key: summarize through an AI chat instead - the prompt is copied right away
-    if (!skipKeyCheck && !precomputedResult && !getStoredGeminiApiKey()) {
+    const { featuresPayload, allBugs, scopeContext } = buildDailySummaryPayload();
+
+    // No API key: if there are bugs with notes to summarize, open AI Chat; if 0 bugs, generate directly!
+    if (!skipKeyCheck && !precomputedResult && !getStoredGeminiApiKey() && allBugs.some(b => b.note && b.note.trim())) {
       openChatSummary();
       return null;
     }
@@ -960,18 +1025,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
     if (isGeneratingSummary) return null;
     setIsGeneratingSummary(true);
 
-    // The scope this report is for - if the user switches plan or day mid-generation, the result is discarded
     const requestScopeKey = reportScopeKey;
 
     try {
-      // Extract all features & bugs for the dedicated Gemini sub-task (strictly scoped to the selected plan and day)
-      const { featuresPayload, allBugs, scopeContext } = buildDailySummaryPayload();
-
-      // Spin up dedicated subtask prompt to Gemini using ONLY the bugs in the selected scope,
-      // unless the summary was already written by an AI chat and pasted back
       const result = precomputedResult ?? await generateBatchExecutiveSummaryWithGemini(featuresPayload, allBugs, scopeContext);
 
-      // The plan or day changed while the summary was being written: it belongs to the old view
       if (reportScopeKeyRef.current !== requestScopeKey) {
         setSummaryToast({
           type: 'warning',
@@ -981,9 +1039,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         return null;
       }
 
-      // The saved key was rejected (suspended, invalid, leaked...): go straight to the AI chat
-      // flow instead of an offline summary, so one click still gets an AI-written report
-      const rejectedKeyHint = !precomputedResult && !skipKeyCheck && !result.modelUsed
+      const rejectedKeyHint = !precomputedResult && !skipKeyCheck && !result.modelUsed && allBugs.length > 0
         ? getGeminiKeyErrorHint(result.error)
         : null;
       if (rejectedKeyHint) {
@@ -994,7 +1050,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
       const overallGeminiSummary = result.overallSummary;
       const featureSummaryMap = result.featureSummaries;
 
-      // Helper to cleanly retrieve or synthesize summary strictly from the bugs in the selected scope
       const getFeatureSummary = (metric: CujMetric): string => {
         const bugs = metric.associatedBugs;
         if (bugs.length === 0) {
@@ -1022,7 +1077,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
         console.warn('Gemini executive summary notice:', result.error);
       }
 
-      // Plain text + rich HTML (for Slack, Teams, Google Docs, Word, Apple Notes, Email)
       const { plainText, htmlText } = buildCujReportText(cujReport, {
         dateLabel: reportDateLabel,
         disclaimer: reportDisclaimer,
@@ -1030,8 +1084,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
         getSummary: getFeatureSummary
       });
 
-      // Keep the AI summaries so the Feature Health table shows the same text,
-      // tagged with the exact bugs they cover (the table falls back if bugs change).
       const aiFeatureSummaries: Record<string, { summary: string; bugsKey: string }> = {};
       if (result.modelUsed) {
         [...cujReport.testedMetrics, ...cujReport.bugOnlyMetrics].forEach(m => {
@@ -1040,9 +1092,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
         });
       }
 
-      // Store the finished report instead of writing to the clipboard here.
-      // Clipboard writes throw "Document is not focused" when the user tabs away
-      // mid-generation, which previously forced a full regeneration.
       setGeneratedReport({
         plainText,
         htmlText,
@@ -1063,7 +1112,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
           message: `✨ AI Executive Summary generated with ${result.modelUsed}${cacheNote}. Click "Copy Report" when you're ready.`
         });
       } else if (aiFailed) {
-        // Key/project problems get a plain-language fix; other errors show the (redacted) API message
         const keyHint = getGeminiKeyErrorHint(result.error);
         const shortError = result.error!.length > 180 ? `${result.error!.slice(0, 177)}...` : result.error;
         setSummaryToast({
@@ -1074,8 +1122,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
         });
       } else if (!hasApiKey) {
         setSummaryToast({
-          type: 'warning',
-          message: `📋 Standard synthesized summary ready. Click "Gemini AI" to configure an API key for full AI executive summaries.`
+          type: 'success',
+          message: `📋 Synthesized CUJ report is ready to copy!`
         });
       } else {
         setSummaryToast({
@@ -1113,10 +1161,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
-  /**
-   * Opens the AI chat flow and copies the prompt right away (the click allows the clipboard
-   * write). `notice` explains why it opened by itself, e.g. the saved API key was rejected.
-   */
   const openChatSummary = (notice?: string) => {
     setChatStatus(null);
     setChatNotice(notice || null);
@@ -1125,31 +1169,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
     lastAutoCheckedReplyRef.current = '';
     setIsChatSummaryOpen(true);
     void handleCopyChatPrompt().then(copied => {
-      // Opened only after the copy - leaving the tab first would make the clipboard write fail
       if (copied && chatAutoOpenGemini) openGeminiChat();
     });
   };
 
-  /** Opens Gemini in a new tab. Called soon after a click, so it isn't blocked as a popup. */
   const openGeminiChat = () => {
     try {
       const tab = window.open(GEMINI_CHAT_URL, '_blank');
       if (tab) tab.opener = null;
-    } catch (e) {
-      // Blocked - the "Open Gemini" button still works
-    }
+    } catch (e) {}
   };
 
   const toggleChatAutoOpenGemini = (on: boolean) => {
     setChatAutoOpenGemini(on);
     try {
       localStorage.setItem(CHAT_AUTO_OPEN_GEMINI_KEY, on ? '1' : '0');
-    } catch (e) {
-      // Storage unavailable - the choice still applies until the page reloads
-    }
+    } catch (e) {}
   };
 
-  /** Copies the same prompt the Gemini API would receive. Returns whether it was copied. */
   const handleCopyChatPrompt = async (): Promise<boolean> => {
     const { featuresPayload, allBugs, scopeContext } = buildDailySummaryPayload();
     const built = buildChatSummaryPrompt(featuresPayload, allBugs, scopeContext);
@@ -1180,11 +1217,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
-  /**
-   * Builds the report from an AI chat reply, then copies it. `auto` = text found on the
-   * clipboard when the user came back to this tab - text that isn't a reply to our prompt
-   * (the prompt itself, or no report ID) is ignored quietly. `paste` = pasted or Build Report.
-   */
   const handleChatReplyText = async (text: string, source: 'auto' | 'paste') => {
     if (!text || !text.trim()) return;
     const { featuresPayload, allBugs, scopeContext } = buildDailySummaryPayload();
@@ -1192,9 +1224,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
     if (source === 'auto') {
       if (text === lastAutoCheckedReplyRef.current) return;
       lastAutoCheckedReplyRef.current = text;
-      if (isChatSummaryPrompt(text)) return; // still the prompt - the AI hasn't answered yet
+      if (isChatSummaryPrompt(text)) return;
       const replyId = getChatReplyReportId(text);
-      if (!replyId) return; // not a reply to our prompt (a reply without an ID can still be pasted)
+      if (!replyId) return;
       const current = buildChatSummaryPrompt(featuresPayload, allBugs, scopeContext);
       if (!current) return;
       if (replyId !== current.reportId) {
@@ -1207,7 +1239,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     try {
       result = applyChatSummaryReply(featuresPayload, allBugs, text, scopeContext);
     } catch (e: any) {
-      // Automatic pickups only get here when the reply is for the current prompt, so say what's wrong
       setChatStatus({ type: 'error', message: e?.message || "Couldn't read the AI's reply." });
       return;
     }
@@ -1229,8 +1260,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     void handleChatReplyText(chatReplyText, 'paste');
   };
 
-  // While the AI chat window is open, pick up the AI's reply by itself: when the user comes
-  // back to this tab (clipboard read - Chrome asks for permission once) or presses ⌘V anywhere.
   useEffect(() => {
     if (!isChatSummaryOpen) return;
     const checkClipboard = async () => {
@@ -1239,13 +1268,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
       try {
         const text = await navigator.clipboard.readText();
         if (text) chatReplyHandlerRef.current?.(text, 'auto');
-      } catch (e) {
-        // Clipboard access denied or the page lost focus - pasting still works
-      }
+      } catch (e) {}
     };
     const onPaste = (e: ClipboardEvent) => {
       const text = e.clipboardData?.getData('text') || '';
-      // Deferred so a paste into the reply box lands first and an error message isn't cleared by it
       if (text.trim()) setTimeout(() => chatReplyHandlerRef.current?.(text, 'paste'), 0);
     };
     window.addEventListener('focus', checkClipboard);
@@ -1258,7 +1284,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     };
   }, [isChatSummaryOpen]);
 
-  /** Writes the report as rich text with a plain-text fallback. Returns false if every copy path was blocked. */
   const writeReportToClipboard = async (plainText: string, htmlText: string): Promise<boolean> => {
     try {
       if (navigator.clipboard && window.ClipboardItem) {
@@ -1279,7 +1304,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
         await navigator.clipboard.writeText(plainText);
         return true;
       } catch (fallbackErr) {
-        // Last-resort copy path for browsers that block the async clipboard API
         const ta = document.createElement('textarea');
         ta.value = plainText;
         ta.style.position = 'fixed';
@@ -1294,10 +1318,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
-  /**
-   * Instant clipboard copy of the already-generated report.
-   * No API calls, no regeneration - safe to run any time after generating.
-   */
   const handleCopyGeneratedReport = async () => {
     if (!generatedReport || generatedReport.scopeKey !== reportScopeKey) {
       handleGenerateSummary();
@@ -1310,6 +1330,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   const handleCopyVisualImageToClipboard = async () => {
+    if (!isFeatureReportExpanded) {
+      setIsFeatureReportExpanded(true);
+      await new Promise(resolve => setTimeout(resolve, 120));
+    }
     if (!visualCardRef.current) return;
     try {
       const blob = await toBlob(visualCardRef.current, {
@@ -1321,7 +1345,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           maxWidth: '1400px',
           padding: '40px',
           borderRadius: '32px',
-          backgroundColor: '#020617',
+          backgroundColor: '#111827',
         },
         filter: (node) => {
           if (node instanceof HTMLElement && node.classList.contains('no-capture')) {
@@ -1333,13 +1357,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       if (!blob) return;
 
-      // Download PNG file directly so user gets a real high-res PNG file
+      // Download PNG file directly (append to DOM for cross-browser compatibility)
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `QA_Quality_Profile_${new Date().toISOString().slice(0, 10)}.png`;
+      link.download = `QA_Quality_Profile_${getLocalDateStr(new Date())}.png`;
+      document.body.appendChild(link);
       link.click();
-      URL.revokeObjectURL(url);
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
 
       // Also copy PNG blob to clipboard if browser allows
       try {
@@ -1348,9 +1374,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             new ClipboardItem({ 'image/png': blob })
           ]);
         }
-      } catch (err) {
-        // Clipboard write fallback handled by PNG download
-      }
+      } catch (err) {}
 
       setCopiedImage(true);
       setTimeout(() => setCopiedImage(false), 2500);
@@ -1359,103 +1383,114 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
-  // Filter & Sort Bug Logs (enriched with smart dropdown categorizations)
-  let processedBugs = bugLogs.map(b => {
-    const cat = bugCategorizations[b.id];
-    return {
-      ...b,
-      bugType: cat?.bugType || b.bugType || 'Bug',
-      priority: cat?.priority || b.priority || (b.severity === 'critical' ? 'P0' : b.severity === 'high' ? 'P1' : 'P2'),
-      status: cat?.status || b.status || 'Filed'
-    };
-  });
-
-  if (selectedDeviceFilter !== 'all') {
-    processedBugs = processedBugs.filter(
-      b => (b.deviceName || 'Unspecified').toLowerCase() === selectedDeviceFilter.toLowerCase()
-    );
-  }
-
-  if (selectedFeatureFilter !== 'all') {
-    processedBugs = processedBugs.filter(
-      b => (b.feature || 'General').toLowerCase() === selectedFeatureFilter.toLowerCase()
-    );
-  }
-
-  // Date Filter logic
-  if (selectedDateFilter !== 'all') {
-    const now = new Date();
-    processedBugs = processedBugs.filter(b => {
-      if (!b.timestamp) return false;
-      const bugDate = new Date(b.timestamp);
-
-      if (selectedDateFilter === 'today') {
-        return bugDate.toDateString() === now.toDateString();
-      }
-
-      if (selectedDateFilter === 'yesterday') {
-        const yesterday = new Date(now);
-        yesterday.setDate(yesterday.getDate() - 1);
-        return bugDate.toDateString() === yesterday.toDateString();
-      }
-
-      if (selectedDateFilter === '7days') {
-        const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 3600 * 1000);
-        return bugDate >= sevenDaysAgo;
-      }
-
-      if (selectedDateFilter === '30days') {
-        const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 3600 * 1000);
-        return bugDate >= thirtyDaysAgo;
-      }
-
-      if (selectedDateFilter === 'custom' && customDateInput) {
-        const targetDate = new Date(customDateInput);
-        return bugDate.toDateString() === targetDate.toDateString();
-      }
-
-      return true;
+  // Filter & Sort Bug Logs (memoized and null-safe)
+  const processedBugs = useMemo(() => {
+    let list = bugLogs.map(b => {
+      const cat = bugCategorizations[b.id];
+      return {
+        ...b,
+        bugType: cat?.bugType || b.bugType || 'Bug',
+        priority: cat?.priority || b.priority || (b.severity === 'critical' ? 'P0' : b.severity === 'high' ? 'P1' : 'P2'),
+        status: cat?.status || b.status || 'Filed'
+      };
     });
-  }
 
-  processedBugs.sort((a, b) => {
-    if (sortByDevice === 'device-asc') {
-      return (a.deviceName || 'Unspecified').localeCompare(b.deviceName || 'Unspecified');
+    if (selectedDeviceFilter !== 'all') {
+      list = list.filter(
+        b => (b.deviceName || 'Unspecified').toLowerCase() === selectedDeviceFilter.toLowerCase()
+      );
     }
-    if (sortByDevice === 'device-desc') {
-      return (b.deviceName || 'Unspecified').localeCompare(a.deviceName || 'Unspecified');
-    }
-    if (sortByDevice === 'oldest') {
-      return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
-    }
-    if (sortByDevice === 'priority' || (sortByDevice as any) === 'severity') {
-      const prioMap: Record<string, number> = { P0: 3, '0': 3, P1: 2, '1': 2, P2: 1, '2': 1 };
-      const aPrio = bugCategorizations[a.id]?.priority || a.priority || (a.severity === 'critical' ? 'P0' : a.severity === 'high' ? 'P1' : 'P2');
-      const bPrio = bugCategorizations[b.id]?.priority || b.priority || (b.severity === 'critical' ? 'P0' : b.severity === 'high' ? 'P1' : 'P2');
-      return (prioMap[bPrio] || 0) - (prioMap[aPrio] || 0);
-    }
-    return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
-  });
 
-  // Filter plans by search query
-  const filteredPlans = testPlans.filter(p => 
-    !searchPlanQuery || 
-    p.name.toLowerCase().includes(searchPlanQuery.toLowerCase()) || 
-    p.description.toLowerCase().includes(searchPlanQuery.toLowerCase()) ||
-    p.steps.some(s => s.title.toLowerCase().includes(searchPlanQuery.toLowerCase()) || (s.feature && s.feature.toLowerCase().includes(searchPlanQuery.toLowerCase())))
-  );
+    if (selectedFeatureFilter !== 'all') {
+      list = list.filter(
+        b => (b.feature || 'General').toLowerCase() === selectedFeatureFilter.toLowerCase()
+      );
+    }
 
-  // Filter bugs by text search query
-  if (searchBugQuery.trim()) {
-    const q = searchBugQuery.toLowerCase();
-    processedBugs = processedBugs.filter(b => 
-      b.note.toLowerCase().includes(q) ||
-      b.stepTitle.toLowerCase().includes(q) ||
-      b.testerName.toLowerCase().includes(q) ||
-      (b.feature || '').toLowerCase().includes(q) ||
-      (b.deviceName || '').toLowerCase().includes(q)
+    if (selectedDateFilter !== 'all') {
+      const now = new Date();
+      const todayDateStr = getLocalDateStr(now);
+      const yesterday = new Date(now);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayDateStr = getLocalDateStr(yesterday);
+
+      list = list.filter(b => {
+        if (!b.timestamp) return false;
+        const bugDate = new Date(b.timestamp);
+        if (isNaN(bugDate.getTime())) return false;
+        const bugLocalDay = getLocalDateStr(bugDate);
+
+        if (selectedDateFilter === 'today') {
+          return bugLocalDay === todayDateStr;
+        }
+        if (selectedDateFilter === 'yesterday') {
+          return bugLocalDay === yesterdayDateStr;
+        }
+        if (selectedDateFilter === '7days') {
+          const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 3600 * 1000);
+          return bugDate >= sevenDaysAgo;
+        }
+        if (selectedDateFilter === '30days') {
+          const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 3600 * 1000);
+          return bugDate >= thirtyDaysAgo;
+        }
+        if (selectedDateFilter === 'custom' && customDateInput) {
+          return bugLocalDay === customDateInput.trim();
+        }
+        return true;
+      });
+    }
+
+    if (searchBugQuery.trim()) {
+      const q = searchBugQuery.toLowerCase();
+      list = list.filter(b =>
+        (b.note || '').toLowerCase().includes(q) ||
+        (b.stepTitle || '').toLowerCase().includes(q) ||
+        (b.testerName || '').toLowerCase().includes(q) ||
+        (b.feature || '').toLowerCase().includes(q) ||
+        (b.deviceName || '').toLowerCase().includes(q)
+      );
+    }
+
+    list.sort((a, b) => {
+      if (sortByDevice === 'device-asc') {
+        return (a.deviceName || 'Unspecified').localeCompare(b.deviceName || 'Unspecified');
+      }
+      if (sortByDevice === 'device-desc') {
+        return (b.deviceName || 'Unspecified').localeCompare(a.deviceName || 'Unspecified');
+      }
+      const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      const safeATime = isNaN(aTime) ? 0 : aTime;
+      const safeBTime = isNaN(bTime) ? 0 : bTime;
+      if (sortByDevice === 'oldest') {
+        return safeATime - safeBTime;
+      }
+      if (sortByDevice === 'priority' || (sortByDevice as any) === 'severity') {
+        const prioMap: Record<string, number> = { P0: 3, '0': 3, P1: 2, '1': 2, P2: 1, '2': 1 };
+        const aPrio = bugCategorizations[a.id]?.priority || a.priority || (a.severity === 'critical' ? 'P0' : a.severity === 'high' ? 'P1' : 'P2');
+        const bPrio = bugCategorizations[b.id]?.priority || b.priority || (b.severity === 'critical' ? 'P0' : b.severity === 'high' ? 'P1' : 'P2');
+        return (prioMap[bPrio] || 0) - (prioMap[aPrio] || 0);
+      }
+      return safeBTime - safeATime;
+    });
+
+    return list;
+  }, [bugLogs, bugCategorizations, selectedDeviceFilter, selectedFeatureFilter, selectedDateFilter, customDateInput, searchBugQuery, sortByDevice]);
+
+  // Filter plans by search query (memoized and null-safe)
+  const filteredPlans = useMemo(() => {
+    const q = searchPlanQuery.trim().toLowerCase();
+    if (!q) return testPlans;
+    return testPlans.filter(p =>
+      (p.name || '').toLowerCase().includes(q) ||
+      (p.description || '').toLowerCase().includes(q) ||
+      (p.steps || []).some(s =>
+        (s?.title || '').toLowerCase().includes(q) ||
+        (s?.feature || '').toLowerCase().includes(q)
+      )
     );
-  }
+  }, [testPlans, searchPlanQuery]);
 
   // Stats calculation
   const totalPlans = testPlans.length;
@@ -1558,7 +1593,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <span>QA Testers</span>
               {activeTab === 'testers' && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
             </div>
-            <div className="text-xl font-bold text-slate-50 mt-1 font-mono tracking-tight">{testers.length} Testers</div>
+            <div className="text-xl font-bold text-slate-50 mt-1 font-mono tracking-tight">{unifiedTesters.length} Testers</div>
           </div>
           <div className={`p-2.5 rounded-2xl border transition-all ${
             activeTab === 'testers'
@@ -1655,7 +1690,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (confirm('Reset daily run progress counters for all devices?')) {
+                  if (confirm("Reset today's completed run counters and today's test execution data across all devices?")) {
                     if (onResetActiveDay) onResetActiveDay(getLocalDateStr(new Date()));
                   }
                 }}
@@ -1690,7 +1725,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     className="bg-slate-800 text-blue-300 font-bold border border-slate-700 rounded-lg px-2 py-0.5 text-xs focus:outline-none cursor-pointer"
                   >
                     <option value={1}>v1.0 (Allow All)</option>
-                    <option value={2}>v2.0+ (Enforce v2)</option>
+                    <option value={2}>v2.0+</option>
+                    <option value={3}>v2.1+</option>
+                    <option value={4}>v2.2+</option>
+                    <option value={5}>v2.3.0 (Latest)</option>
                   </select>
                 </div>
               )}
@@ -1717,10 +1755,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (!newDeviceName.trim()) return;
+                  const trimmed = newDeviceName.trim();
+                  if (!trimmed) return;
+                  if (devices.some(d => d.name.trim().toLowerCase() === trimmed.toLowerCase())) {
+                    alert(`Device "${trimmed}" already exists.`);
+                    return;
+                  }
                   const newDev: DeviceProfile = {
                     id: `dev-${Date.now()}`,
-                    name: newDeviceName.trim(),
+                    name: trimmed,
                     isReady: true,
                     quotas: []
                   };
@@ -1744,14 +1787,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 devices.map(device => {
                   const assignedQuota = device.quotas && device.quotas.length > 0 ? device.quotas[0] : null;
                   const assignedPlan = assignedQuota ? testPlans.find(p => p.id === assignedQuota.planId) : null;
-                  const targetRuns = assignedQuota ? assignedQuota.targetRunsPerDay : 3;
+                  const targetRuns = assignedQuota ? Math.max(1, assignedQuota.targetRunsPerDay || 1) : 3;
                   const doneToday = (assignedQuota && todayRunsMap[device.id] && todayRunsMap[device.id][assignedQuota.planId]) || 0;
                   const remaining = assignedQuota ? Math.max(0, targetRuns - doneToday) : 0;
-                  const pct = assignedQuota ? Math.min(100, Math.round((doneToday / targetRuns) * 100)) : 0;
+                  const pct = assignedQuota && targetRuns > 0 ? Math.min(100, Math.round((doneToday / targetRuns) * 100)) : 0;
 
                   const activeRunForDevice = testRuns.find(r => 
-                    r.status === 'in_progress' && 
-                    (r.id === device.activeRunId || (r.deviceId && (r.deviceId === device.id || r.deviceId.includes(device.id))) || (r.deviceName && r.deviceName.toLowerCase().trim() === device.name.toLowerCase().trim()))
+                    getEffectiveRunStatus(r) === 'in_progress' && 
+                    (r.id === device.activeRunId || (r.deviceId && r.deviceId === device.id) || (r.deviceName && r.deviceName.toLowerCase().trim() === device.name.toLowerCase().trim()))
                   );
                   const isInUse = Boolean(activeRunForDevice || (device.activeRunId && device.activeTesterName));
                   const inUseTesterName = activeRunForDevice?.testerName || device.activeTesterName || 'Tester';
@@ -1789,9 +1832,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                     )}
                                   </span>
                                 </span>
-                              ) : !device.isReady && assignedQuota && doneToday >= targetRuns ? (
-                                <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-bold flex items-center gap-1">
-                                  <XCircle className="w-3 h-3 text-amber-400" />
+                              ) : device.isReady && assignedQuota && doneToday >= targetRuns ? (
+                                <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold flex items-center gap-1">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-400" />
                                   <span>Quota Met</span>
                                 </span>
                               ) : null}
@@ -1801,13 +1844,33 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         </div>
 
                         <div className="flex items-center gap-2">
+                          {isInUse && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                const updated: DeviceProfile = { ...device, activeRunId: undefined, activeTesterName: undefined };
+                                if (onSaveDevice) onSaveDevice(updated);
+                              }}
+                              className="px-2.5 py-1.5 rounded-2xl text-[11px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30 transition-all"
+                              title="Force unlock stale device session"
+                            >
+                              Unlock
+                            </button>
+                          )}
                           {/* Readiness Toggle Button */}
                           <button
                             type="button"
                             onClick={(e) => {
                               e.preventDefault();
                               e.stopPropagation();
-                              const updated: DeviceProfile = { ...device, isReady: !device.isReady };
+                              const nextReady = !device.isReady;
+                              const updated: DeviceProfile = {
+                                ...device,
+                                isReady: nextReady,
+                                ...(nextReady ? {} : { activeRunId: undefined, activeTesterName: undefined })
+                              };
                               if (onSaveDevice) onSaveDevice(updated);
                             }}
                             className={`px-3 py-1.5 rounded-2xl text-xs font-bold flex items-center gap-1.5 border transition-all ${
@@ -1894,7 +1957,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   max="50"
                                   value={assignedQuota.targetRunsPerDay}
                                   onChange={e => {
-                                    const val = Math.max(1, parseInt(e.target.value) || 1);
+                                    const val = Math.min(50, Math.max(1, parseInt(e.target.value, 10) || 1));
                                     if (onSaveDevice) {
                                       onSaveDevice({
                                         ...device,
@@ -2646,13 +2709,19 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   const plan = testPlans.find(p => p.id === run.planId);
                   const totalSteps = plan?.steps.length || 1;
                   const stepEntries = Object.entries(run.results || {}).filter(
-                    ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in v
+                    ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in v && (v as any).status !== 'pending'
                   );
                   const completedResults = stepEntries.map(([_, v]) => v);
                   const completedSteps = completedResults.length;
                   const progressPct = Math.min(100, Math.round((completedSteps / totalSteps) * 100));
 
-                  const isAway = Boolean(run.lastActivityTimestamp && (Date.now() - run.lastActivityTimestamp > 3 * 60 * 1000));
+                  const lastResultTs = completedResults.reduce((max: number, r: any) => {
+                    const t = typeof r.timestamp === 'number' ? r.timestamp : r.timestamp ? new Date(r.timestamp).getTime() : 0;
+                    return !isNaN(t) ? Math.max(max, t) : max;
+                  }, 0);
+                  const startedAtMs = run.startedAt ? new Date(run.startedAt).getTime() : 0;
+                  const refTs = run.lastActivityTimestamp || lastResultTs || (!isNaN(startedAtMs) ? startedAtMs : 0);
+                  const isAway = Boolean(refTs && (Date.now() - refTs > 3 * 60 * 1000));
 
                   return (
                     <div key={run.id} className="liquid-glass-card rounded-2xl p-4 space-y-3 shadow-md">
@@ -2682,7 +2751,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       </div>
 
                       <div className="flex items-center justify-between text-[11px] text-slate-400 border-b border-slate-800/60 pb-2">
-                        <span className="truncate max-w-[140px] text-slate-300 font-medium">{run.planName}</span>
+                        <span className="truncate max-w-[140px] text-slate-300 font-medium">{plan?.name || run.planName}</span>
                         <span className="bg-slate-800 text-slate-200 px-2 py-0.5 rounded font-mono border border-slate-700 flex items-center gap-1">
                           <Smartphone className="w-3 h-3 text-blue-400" />
                           {run.deviceName || 'Device Unset'}
@@ -2858,7 +2927,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   type="button"
                   onClick={() => {
                     if (testPlans.length === 0) onLoadSampleData();
-                    const targetId = testPlans[0]?.id || 'plan-demo-1';
+                    const targetId = (reportPlanId !== ALL_PLANS ? reportPlanId : testPlans[0]?.id) || 'plan-demo-1';
                     onRunSubagentTest(targetId);
                     setSubagentToast(`Autonomous Subagent tested all steps for Today (${todayStr})! Live feature metrics populated below.`);
                     setTimeout(() => setSubagentToast(null), 5000);
@@ -3056,21 +3125,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <span className="text-xs font-bold font-mono text-slate-50">{avgHealthScore === null ? '—' : `${avgHealthScore}%`}</span>
                     {avgHealthScore !== null && (
                       <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase whitespace-nowrap inline-flex items-center gap-1.5 leading-none border ${
-                        criticalFeaturesCount > 0 || avgHealthScore < 80
+                        criticalFeaturesCount > 0 || avgHealthScore < 60
                           ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
                           : warningFeaturesCount > 0 || avgHealthScore < 95
                           ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
                           : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
                       }`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${
-                          criticalFeaturesCount > 0 || avgHealthScore < 80
+                          criticalFeaturesCount > 0 || avgHealthScore < 60
                             ? 'bg-rose-400'
                             : warningFeaturesCount > 0 || avgHealthScore < 95
                             ? 'bg-amber-400'
                             : 'bg-emerald-400'
                         }`} />
                         <span>
-                          {criticalFeaturesCount > 0 || avgHealthScore < 80
+                          {criticalFeaturesCount > 0 || avgHealthScore < 60
                             ? 'High Risk'
                             : warningFeaturesCount > 0 || avgHealthScore < 95
                             ? 'Moderate Risk'
@@ -3400,7 +3469,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         className={`w-full rounded-lg transition-all duration-300 ${
                           point.scorePct >= 95
                             ? 'bg-emerald-500'
-                            : point.scorePct >= 80
+                            : point.scorePct >= 60
                             ? 'bg-amber-500'
                             : 'bg-rose-500'
                         }`}
@@ -3445,7 +3514,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     type="button"
                     onClick={() => {
                       if (testPlans.length === 0) onLoadSampleData();
-                      const targetId = testPlans[0]?.id || 'plan-demo-1';
+                      const targetId = (reportPlanId !== ALL_PLANS ? reportPlanId : testPlans[0]?.id) || 'plan-demo-1';
                       onRunSubagentTest(targetId);
                       setSubagentToast(`Autonomous Subagent tested all steps for Today (${todayStr})! Live feature metrics populated below.`);
                       setTimeout(() => setSubagentToast(null), 5000);
@@ -3531,7 +3600,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <div className="w-full bg-[#0f172a] h-1.5 rounded-full overflow-hidden border border-slate-800">
                       <div
                         className={`h-full transition-all duration-300 ${
-                          metric.healthScorePct >= 90
+                          metric.healthScorePct >= 95
                             ? 'bg-emerald-500'
                             : metric.healthScorePct >= 60
                             ? 'bg-amber-500'
@@ -3716,7 +3785,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                 {/* Popover Menu Dropdown */}
                 {isBugFilterMenuOpen && (
-                  <div className="absolute right-0 mt-2 w-72 liquid-glass-panel rounded-3xl p-4 space-y-4 shadow-2xl z-50 border-slate-700">
+                  <div className="absolute right-0 mt-2 w-72 max-w-[calc(100vw-2rem)] liquid-glass-panel rounded-3xl p-4 space-y-4 shadow-2xl z-50 border-slate-700">
                     <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
                       <span className="text-xs font-bold text-white flex items-center gap-1.5">
                         <Filter className="w-3.5 h-3.5 text-blue-400" />
@@ -3902,6 +3971,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           <User className="w-3.5 h-3.5 text-blue-400" />
                           {bug.testerName}
                         </span>
+
+                        {bug.priority && (
+                          <span className={`font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold uppercase ${
+                            bug.priority === 'P0' || bug.priority === '0'
+                              ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                              : bug.priority === 'P1' || bug.priority === '1'
+                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                              : 'bg-slate-800 text-slate-300 border-slate-700'
+                          }`}>
+                            {bug.priority}
+                          </span>
+                        )}
                       </div>
 
                       <div className="flex items-center gap-3 ml-auto">
@@ -4011,6 +4092,46 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                     <span className="text-blue-300 font-bold">{bug.testerName} ({bug.deviceName})</span>
                                   </div>
                                 </div>
+
+                                {/* Bug Triage Controls */}
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                                  <div>
+                                    <label className="text-[10px] uppercase font-mono text-slate-400 block font-semibold mb-1">Bug Type</label>
+                                    <select
+                                      value={bugCategorizations[bug.id]?.bugType || bug.bugType || 'Bug'}
+                                      onChange={e => handleUpdateBugCategorization(bug.id, 'bugType', e.target.value)}
+                                      className="w-full bg-[#0f172a] border border-slate-700/80 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 font-semibold focus:outline-none focus:border-blue-500 cursor-pointer"
+                                    >
+                                      {(['Bug', 'Setup Issue', 'Known Issue', 'Feature Request', 'Misc Issue'] as const).map(opt => (
+                                        <option key={opt} value={opt} className="bg-slate-900">{opt}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <label className="text-[10px] uppercase font-mono text-slate-400 block font-semibold mb-1">Priority</label>
+                                    <select
+                                      value={bugCategorizations[bug.id]?.priority || bug.priority || 'P2'}
+                                      onChange={e => handleUpdateBugCategorization(bug.id, 'priority', e.target.value)}
+                                      className="w-full bg-[#0f172a] border border-slate-700/80 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 font-semibold focus:outline-none focus:border-blue-500 cursor-pointer"
+                                    >
+                                      {(['P0', 'P1', 'P2'] as const).map(opt => (
+                                        <option key={opt} value={opt} className="bg-slate-900">{opt}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <label className="text-[10px] uppercase font-mono text-slate-400 block font-semibold mb-1">Status</label>
+                                    <select
+                                      value={bugCategorizations[bug.id]?.status || bug.status || 'Filed'}
+                                      onChange={e => handleUpdateBugCategorization(bug.id, 'status', e.target.value)}
+                                      className="w-full bg-[#0f172a] border border-slate-700/80 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 font-semibold focus:outline-none focus:border-blue-500 cursor-pointer"
+                                    >
+                                      {(['Filed', 'New', "Repro'd Issue"] as const).map(opt => (
+                                        <option key={opt} value={opt} className="bg-slate-900">{opt}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                </div>
                               </div>
 
                               {/* Evidence Image Preview Box */}
@@ -4018,7 +4139,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 <span className="text-[11px] uppercase font-mono text-slate-300 block font-bold mb-1.5">
                                   Evidence Photo:
                                 </span>
-                                {bug.imageUrl ? (
+                                {bug.imageUrl && /^(data:image\/|https?:\/\/|blob:|\/)/i.test(bug.imageUrl) ? (
                                   <div 
                                     onClick={() => setSelectedImagePreviewUrl(bug.imageUrl!)}
                                     className="relative group rounded-2xl overflow-hidden border border-slate-700 cursor-pointer bg-slate-900 max-h-56 flex items-center justify-center shadow-2xl"
@@ -4188,7 +4309,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     const ctx = canvas.getContext('2d');
                     ctx?.drawImage(img, 0, 0);
                     canvas.toBlob(async (blob) => {
-                      if (blob && navigator.clipboard && window.ClipboardItem) {
+                      if (!blob) {
+                        console.warn('Could not export image blob for clipboard.');
+                        return;
+                      }
+                      if (navigator.clipboard && window.ClipboardItem) {
                         await navigator.clipboard.write([
                           new ClipboardItem({ 'image/png': blob })
                         ]);
@@ -4422,9 +4547,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (tempApiKey.trim()) {
-                    saveGeminiApiKey(tempApiKey.trim());
-                  }
+                  saveGeminiApiKey(tempApiKey.trim());
                   saveGeminiModel(tempModel);
                   setIsApiKeyModalOpen(false);
                   handleExecuteCopyReport(false);

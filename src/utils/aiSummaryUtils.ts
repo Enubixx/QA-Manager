@@ -9,17 +9,22 @@ export function getBriefIssueSummary(
   yellowCount: number = 0,
   redCount: number = 0
 ): string {
-  const notes = bugs
-    .map(b => b.note?.trim())
+  const notes = (bugs || [])
+    .map(b => b?.note?.trim())
     .filter((n): n is string => !!n && n.length > 0);
 
-  if (notes.length === 0) {
+  const stepFailureFallback = () => {
     if (redCount > 0 || yellowCount > 0) {
       const count = redCount + yellowCount;
       return `${count} step failure${count > 1 ? 's' : ''}`;
     }
     return '';
+  };
+
+  if (notes.length === 0) {
+    return stepFailureFallback();
   }
 
-  return nlpCleanReword(notes, 'General');
+  const reworded = nlpCleanReword([...notes], 'General');
+  return reworded || stepFailureFallback();
 }

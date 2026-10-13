@@ -31,11 +31,17 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
 
   const handleAddNewFeatureSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newCustomFeatureName.trim()) return;
     const createdName = newCustomFeatureName.trim();
-    onAddPopulatedFeature(createdName);
-    if (selectingFeatureStepIndex !== null) {
-      handleUpdateStep(selectingFeatureStepIndex, 'feature', createdName);
+    if (!createdName) return;
+    if (createdName.startsWith('__')) {
+      alert('Feature names cannot start with reserved prefix "__".');
+      return;
+    }
+    if (createdName.toLowerCase() !== 'general') {
+      onAddPopulatedFeature(createdName);
+    }
+    if (selectingFeatureStepIndex !== null && selectingFeatureStepIndex >= 0) {
+      handleUpdateStep(selectingFeatureStepIndex, 'feature', createdName.toLowerCase() === 'general' ? 'General' : createdName);
     }
     setNewCustomFeatureName('');
   };
@@ -47,9 +53,9 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
     }
     return [
       {
-        id: 'step-' + Date.now() + '-1',
+        id: 'step-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
         title: 'Initialize Test Step 1',
-        feature: populatedFeatures[0] || '',
+        feature: populatedFeatures[0] || 'General',
         description: 'Perform initial action instruction...',
         expectedOutcome: 'Verify initial expected result.'
       }
@@ -58,9 +64,9 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
 
   const handleAddStep = () => {
     const newStep: TestStep = {
-      id: 'step-' + Date.now() + '-' + (steps.length + 1),
+      id: 'step-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
       title: '',
-      feature: populatedFeatures[0] || '',
+      feature: populatedFeatures[0] || 'General',
       description: '',
       expectedOutcome: ''
     };
@@ -100,30 +106,42 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
 
   const handleSavePlanSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!planName.trim()) {
+    const trimmedName = planName.trim();
+    const trimmedDescription = planDescription.trim();
+    if (!trimmedName) {
       alert('Please enter a name for the Test Plan');
       return;
     }
 
-    // Remember user-entered features
-    steps.forEach(s => {
-      if (s.feature?.trim()) {
-        onAddPopulatedFeature(s.feature.trim());
+    const validSteps = steps
+      .filter(s => (s.title && s.title.trim() !== '') || (s.description && s.description.trim() !== '') || (s.expectedOutcome && s.expectedOutcome.trim() !== ''))
+      .map((s, idx) => ({
+        ...s,
+        title: s.title?.trim() || s.description?.trim().slice(0, 40) || `Step ${idx + 1}`,
+        description: s.description?.trim() || '',
+        expectedOutcome: s.expectedOutcome?.trim() || '',
+        feature: (s.feature?.trim() && !s.feature.trim().startsWith('__')) ? s.feature.trim() : 'General'
+      }));
+
+    if (validSteps.length === 0) {
+      alert('Please include at least one test step with a title, description, or expected outcome.');
+      return;
+    }
+
+    // Remember user-entered features (excluding General and reserved __ prefixes)
+    validSteps.forEach(s => {
+      const feat = s.feature?.trim();
+      if (feat && feat.toLowerCase() !== 'general' && !feat.startsWith('__')) {
+        onAddPopulatedFeature(feat);
       }
     });
 
     const savedPlan: TestPlan = {
-      id: initialPlan?.id || 'plan-' + Date.now(),
-      name: planName,
-      description: planDescription,
+      id: initialPlan?.id || 'plan-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+      name: trimmedName,
+      description: trimmedDescription,
       createdAt: initialPlan?.createdAt || new Date().toISOString(),
-      steps: steps
-        .filter(s => (s.title && s.title.trim() !== '') || (s.description && s.description.trim() !== '') || (s.expectedOutcome && s.expectedOutcome.trim() !== ''))
-        .map((s, idx) => ({
-          ...s,
-          title: s.title?.trim() || s.description?.trim().slice(0, 40) || `Step ${idx + 1}`,
-          feature: s.feature?.trim() || 'General'
-        }))
+      steps: validSteps
     };
 
     onSavePlan(savedPlan);
@@ -400,6 +418,7 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
                             e.stopPropagation();
                             if (confirm(`Delete feature tag "${feat}"?`)) {
                               onDeleteFeature(feat);
+                              setSteps(prev => prev.map(s => (s.feature || '').trim().toLowerCase() === feat.trim().toLowerCase() ? { ...s, feature: 'General' } : s));
                             }
                           }}
                           className="hover:text-rose-400 p-0.5 ml-1 text-purple-300/60 transition"

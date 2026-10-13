@@ -160,7 +160,15 @@ function getBugsSignature(bugs) {
   var str = '';
   for (var i = 0; i < bugs.length; i++) {
     var b = bugs[i];
-    str += (b.id || '') + ':' + (b.timestamp || '') + ':' + (b.status || '') + ':' + (b.priority || '') + ';';
+    str +=
+      (b.id || '') + ':' +
+      (b.timestamp || '') + ':' +
+      (b.status || '') + ':' +
+      (b.priority || '') + ':' +
+      (b.severity || '') + ':' +
+      (b.feature || '') + ':' +
+      (b.bugType || b.bug_type || '') + ':' +
+      (b.note || '') + ';';
   }
   return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, str));
 }
@@ -521,12 +529,22 @@ function formatAllExistingTabs() {
 }
 
 /**
- * Get existing sheet or create new tab
+ * Get existing sheet or create new tab (sanitizing invalid sheet name characters)
  */
+function sanitizeSheetTabName(rawName) {
+  var cleaned = String(rawName || 'Unassigned')
+    .replace(/[*?:[\]\\/]/g, '-')
+    .replace(/^'+|'+$/g, '')
+    .trim();
+  if (!cleaned) cleaned = 'Unassigned';
+  return cleaned.slice(0, 95);
+}
+
 function getOrCreateTab(ss, tabName) {
-  var sheet = ss.getSheetByName(tabName);
+  var safeName = sanitizeSheetTabName(tabName);
+  var sheet = ss.getSheetByName(safeName);
   if (!sheet) {
-    sheet = ss.insertSheet(tabName);
+    sheet = ss.insertSheet(safeName);
   }
   return sheet;
 }
@@ -648,7 +666,7 @@ function setupTabFormatting(sheet, templateSettings, isAllBugs) {
  * Adds smart color rules for dropdowns matching user screenshot
  */
 function applyConditionalFormatting(sheet) {
-  var rules = sheet.getConditionalFormatRules() || [];
+  var rules = [];
   var maxRows = Math.max(sheet.getMaxRows(), 500);
 
   var bugTypeRange = sheet.getRange(2, 1, maxRows - 1, 1);
@@ -749,23 +767,35 @@ function applyConditionalFormatting(sheet) {
 }
 
 /**
+ * Neutralize spreadsheet formula injection (=, +, -, @, tab, CR) on free-text cells
+ */
+function sanitizeSheetCellText(val) {
+  var str = String(val === null || val === undefined ? '' : val);
+  if (/^[=+\-@\t\r]/.test(str)) {
+    return "'" + str;
+  }
+  return str;
+}
+
+/**
  * Append or update bugs in a specific sheet - strictly aligns all 10 columns
  */
 function appendOrUpdateBugs(sheet, bugs) {
   var lastRow = sheet.getLastRow();
   var existingMap = {};
 
-  // Build map of existing bugs by (Timestamp + Feature)
-  // Timestamp is Col D (col 4), Feature is Col E (col 5)
+  // Build map of existing bugs by (Timestamp + Feature + Description) and fallback (Timestamp + Feature)
+  // Timestamp is Col D (col 4), Feature is Col E (col 5), Description is Col F (col 6)
   if (lastRow > 1) {
     var numRows = lastRow - 1;
-    var keysRange = sheet.getRange(2, 4, numRows, 2).getValues();
+    var keysRange = sheet.getRange(2, 4, numRows, 3).getValues();
     for (var r = 0; r < keysRange.length; r++) {
       var ts = String(keysRange[r][0] || '').trim();
       var feat = String(keysRange[r][1] || '').trim();
-      var key = ts + '___' + feat;
-      if (key !== '___') {
-        existingMap[key] = r + 2; // Row number in sheet
+      var desc = String(keysRange[r][2] || '').replace(/^'/, '').trim();
+      var fullKey = ts + '___' + feat + '___' + desc;
+      if (ts || feat || desc) {
+        existingMap[fullKey] = r + 2; // Row number in sheet
       }
     }
   }
@@ -802,24 +832,28 @@ function appendOrUpdateBugs(sheet, bugs) {
       formattedTimestamp = '[' + (bug.formatted_time || bug.formattedTime || 'N/A') + ']';
     }
 
-    var feature = bug.feature || 'General';
-    var description = bug.note || '';
-    var device = bug.device_name || bug.deviceName || '';
-    var tester = bug.tester_name || bug.testerName || '';
+    var rawFeature = String(bug.feature || 'General').trim();
+    var rawDescription = String(bug.note || '').trim();
+    var feature = sanitizeSheetCellText(rawFeature);
+    var description = sanitizeSheetCellText(rawDescription);
+    var device = sanitizeSheetCellText(bug.device_name || bug.deviceName || '');
+    var tester = sanitizeSheetCellText(bug.tester_name || bug.testerName || '');
     var stepTitle = bug.step_title || bug.stepTitle || '';
-    var planStep = (bug.planName ? bug.planName + ' - ' : '') + stepTitle;
+    var planStep = sanitizeSheetCellText((bug.planName ? bug.planName + ' - ' : '') + stepTitle);
     
-    // Screenshot link (hyperlink formula)
-    var publicImgUrl = bug.image_url || bug.imageUrl || '';
+    // Screenshot link (hyperlink formula with escaped double quotes)
+    var publicImgUrl = String(bug.image_url || bug.imageUrl || '').trim();
     if (publicImgUrl && publicImgUrl.indexOf('data:image') === 0) {
       publicImgUrl = 'https://qa-manager-brown.vercel.app/api/bug-image?id=' + encodeURIComponent(bugId);
     }
 
-    var imgLink = (publicImgUrl && publicImgUrl !== 'None')
-      ? '=HYPERLINK("' + publicImgUrl + '", "View Screenshot")'
+    var isValidHttpImg = /^https?:\/\//i.test(publicImgUrl);
+    var escapedImgUrl = publicImgUrl.replace(/"/g, '""');
+    var imgLink = (isValidHttpImg && publicImgUrl !== 'None')
+      ? '=HYPERLINK("' + escapedImgUrl + '", "View Screenshot")'
       : 'None';
 
-    var bugKey = formattedTimestamp.trim() + '___' + feature.trim();
+    var bugKey = formattedTimestamp.trim() + '___' + rawFeature + '___' + rawDescription;
 
     // Preserve manual sheet dropdown changes only if valid dropdown value
     if (existingMap[bugKey]) {

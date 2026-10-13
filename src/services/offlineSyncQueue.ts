@@ -21,25 +21,91 @@ export interface OfflineMutation {
   type: OfflineMutationType;
   payload: any;
   timestamp: number;
+  retryCount?: number;
 }
 
 const STORAGE_KEY = 'qa_offline_mutation_queue';
+const MAX_RETRY_COUNT = 5;
 
 export const getOfflineQueue = (): OfflineMutation[] => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(m => m && typeof m === 'object' && typeof m.type === 'string') : [];
   } catch (e) {
     return [];
   }
 };
 
+function getMutationEntityKey(mut: OfflineMutation): string | null {
+  if (!mut || !mut.type) return null;
+  switch (mut.type) {
+    case 'syncTestRun':
+      return mut.payload?.id ? `testRun:${mut.payload.id}` : null;
+    case 'deleteTestRun':
+      return mut.payload ? `testRun:${String(mut.payload)}` : null;
+    case 'syncArchivedRun':
+      return mut.payload?.id ? `archivedRun:${mut.payload.id}` : null;
+    case 'deleteArchivedRun':
+      return mut.payload ? `archivedRun:${String(mut.payload)}` : null;
+    case 'syncBugLog':
+      return mut.payload?.id ? `bugLog:${mut.payload.id}` : null;
+    case 'syncDevices':
+      return 'devices:all';
+    default:
+      return null;
+  }
+}
+
+function deduplicateMutations(queue: OfflineMutation[]): OfflineMutation[] {
+  const latestIndexByKey = new Map<string, number>();
+  queue.forEach((mut, idx) => {
+    const key = getMutationEntityKey(mut);
+    if (key) latestIndexByKey.set(key, idx);
+  });
+  return queue.filter((mut, idx) => {
+    const key = getMutationEntityKey(mut);
+    if (!key) return true;
+    return latestIndexByKey.get(key) === idx;
+  });
+}
+
+function stripBase64ImagesFromMutation(mut: OfflineMutation): OfflineMutation {
+  if (!mut || !mut.payload || typeof mut.payload !== 'object') return mut;
+  if (mut.type === 'syncBugLog' && typeof mut.payload.imageUrl === 'string' && mut.payload.imageUrl.startsWith('data:image')) {
+    return { ...mut, payload: { ...mut.payload, imageUrl: undefined } };
+  }
+  if ((mut.type === 'syncTestRun' || mut.type === 'syncArchivedRun') && Array.isArray(mut.payload.bugLogs)) {
+    return {
+      ...mut,
+      payload: {
+        ...mut.payload,
+        bugLogs: mut.payload.bugLogs.map((b: any) =>
+          b && typeof b.imageUrl === 'string' && b.imageUrl.startsWith('data:image')
+            ? { ...b, imageUrl: undefined }
+            : b
+        ),
+      },
+    };
+  }
+  return mut;
+}
+
 const saveOfflineQueue = (queue: OfflineMutation[]) => {
+  const deduped = deduplicateMutations(queue);
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(queue));
-    notifyQueueChange(queue.length);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(deduped));
+    notifyQueueChange(deduped.length);
   } catch (e) {
-    console.error('Failed to save offline queue', e);
+    try {
+      // Strip heavy base64 screenshots on QuotaExceededError so metadata is never lost
+      const slimmed = deduped.map(stripBase64ImagesFromMutation);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(slimmed));
+      notifyQueueChange(slimmed.length);
+    } catch (innerErr) {
+      console.error('Failed to save offline queue even after stripping images', innerErr);
+    }
   }
 };
 
@@ -65,7 +131,8 @@ export const enqueueOfflineMutation = (type: OfflineMutationType, payload: any) 
     id: 'mut-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7),
     type,
     payload,
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    retryCount: 0,
   };
   queue.push(mutation);
   saveOfflineQueue(queue);
@@ -77,42 +144,55 @@ export const drainOfflineQueue = async () => {
   if (isDraining) return;
   if (typeof navigator !== 'undefined' && !navigator.onLine) return;
 
-  const queue = getOfflineQueue();
-  if (queue.length === 0) return;
+  const initialQueue = deduplicateMutations(getOfflineQueue());
+  if (initialQueue.length === 0) return;
 
   isDraining = true;
-  const remaining: OfflineMutation[] = [];
+  const snapshotIds = new Set(initialQueue.map(m => m.id));
+  const failedToRetain: OfflineMutation[] = [];
 
-  for (const mut of queue) {
-    try {
-      switch (mut.type) {
-        case 'syncTestRun':
-          await syncTestRunToSupabase(mut.payload as TestRun);
-          break;
-        case 'syncArchivedRun':
-          await syncArchivedRunToSupabase(mut.payload as TestRun);
-          break;
-        case 'syncBugLog':
-          await syncBugLogToSupabase(mut.payload as BugLog);
-          break;
-        case 'deleteTestRun':
-          await deleteTestRunFromSupabase(mut.payload as string);
-          break;
-        case 'deleteArchivedRun':
-          await deleteArchivedRunFromSupabase(mut.payload as string);
-          break;
-        case 'syncDevices':
-          await syncDevicesListToCloud(mut.payload as DeviceProfile[]);
-          break;
+  try {
+    for (const mut of initialQueue) {
+      try {
+        switch (mut.type) {
+          case 'syncTestRun':
+            await syncTestRunToSupabase(mut.payload as TestRun);
+            break;
+          case 'syncArchivedRun':
+            await syncArchivedRunToSupabase(mut.payload as TestRun);
+            break;
+          case 'syncBugLog':
+            await syncBugLogToSupabase(mut.payload as BugLog);
+            break;
+          case 'deleteTestRun':
+            await deleteTestRunFromSupabase(mut.payload as string);
+            break;
+          case 'deleteArchivedRun':
+            await deleteArchivedRunFromSupabase(mut.payload as string);
+            break;
+          case 'syncDevices':
+            await syncDevicesListToCloud(mut.payload as DeviceProfile[]);
+            break;
+        }
+      } catch (err: any) {
+        const nextRetry = (mut.retryCount || 0) + 1;
+        const status = Number(err?.status || err?.statusCode || 0);
+        const isPermanentClientError = status >= 400 && status < 500 && status !== 408 && status !== 429;
+        if (!isPermanentClientError && nextRetry < MAX_RETRY_COUNT) {
+          console.warn(`Failed to sync offline mutation (attempt ${nextRetry}/${MAX_RETRY_COUNT}), retaining in queue:`, mut.type, err);
+          failedToRetain.push({ ...mut, retryCount: nextRetry });
+        } else {
+          console.error('Dropping poison-pill offline mutation after max retries or permanent error:', mut.type, err);
+        }
       }
-    } catch (err) {
-      console.warn('Failed to sync offline mutation, retaining in queue:', mut.type, err);
-      remaining.push(mut);
     }
+  } finally {
+    // Re-read current queue so any mutations enqueued while draining are preserved
+    const latestQueue = getOfflineQueue();
+    const enqueuedDuringDrain = latestQueue.filter(m => !snapshotIds.has(m.id));
+    saveOfflineQueue([...failedToRetain, ...enqueuedDuringDrain]);
+    isDraining = false;
   }
-
-  saveOfflineQueue(remaining);
-  isDraining = false;
 };
 
 // Safe wrappers that automatically queue mutations if offline or network fails

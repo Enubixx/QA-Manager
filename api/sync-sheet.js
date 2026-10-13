@@ -14,13 +14,29 @@ export default async function handler(req, res) {
 
   try {
     const { scriptUrl, bugs } = req.body || {};
-    const targetUrl = scriptUrl || 'https://script.google.com/a/macros/google.com/s/AKfycbzMH5O3zxz5mHQrQzH5gqc62jssceuXszuKxxRmnHMuj4Pq0AyEVRzrrv_OUrM7B5GlsA/exec';
+    const defaultUrl = 'https://script.google.com/a/macros/google.com/s/AKfycbzMH5O3zxz5mHQrQzH5gqc62jssceuXszuKxxRmnHMuj4Pq0AyEVRzrrv_OUrM7B5GlsA/exec';
+    const targetUrl = typeof scriptUrl === 'string' && scriptUrl.trim() ? scriptUrl.trim() : defaultUrl;
 
-    if (!bugs || !Array.isArray(bugs) || bugs.length === 0) {
-      return res.status(400).json({ error: 'No bugs provided to sync' });
+    // Validate targetUrl against SSRF: only allow official Google Apps Script domains over HTTPS
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(targetUrl);
+    } catch (urlErr) {
+      return res.status(400).json({ status: 'error', error: 'Invalid Google Apps Script URL' });
+    }
+    const allowedHosts = new Set(['script.google.com', 'script.googleusercontent.com']);
+    if (parsedUrl.protocol !== 'https:' || !allowedHosts.has(parsedUrl.hostname.toLowerCase())) {
+      return res.status(400).json({
+        status: 'error',
+        error: 'Only https://script.google.com/ Web App URLs are permitted',
+      });
     }
 
-    const response = await fetch(targetUrl, {
+    if (!bugs || !Array.isArray(bugs) || bugs.length === 0) {
+      return res.status(400).json({ status: 'error', error: 'No bugs provided to sync' });
+    }
+
+    const response = await fetch(parsedUrl.toString(), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -43,6 +59,17 @@ export default async function handler(req, res) {
       jsonResponse = JSON.parse(responseText);
     } catch (e) {
       jsonResponse = { raw: responseText };
+    }
+
+    if (!response.ok || jsonResponse?.status === 'error') {
+      const errMsg = jsonResponse?.message || jsonResponse?.error || `Google Apps Script returned HTTP ${response.status}`;
+      return res.status(response.ok ? 502 : response.status).json({
+        status: 'error',
+        statusCode: response.status,
+        error: errMsg,
+        message: errMsg,
+        result: jsonResponse,
+      });
     }
 
     return res.status(200).json({

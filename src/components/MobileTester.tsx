@@ -75,15 +75,38 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   // Persistent Device Identifier for multi-tester isolation
   const getDeviceId = () => {
-    let devId = localStorage.getItem('qa_device_id');
-    if (!devId) {
-      devId = 'dev-' + Math.random().toString(36).substring(2, 9) + '-' + Date.now().toString(36);
-      localStorage.setItem('qa_device_id', devId);
+    try {
+      let devId = localStorage.getItem('qa_device_id');
+      if (!devId) {
+        devId = 'dev-' + Math.random().toString(36).substring(2, 9) + '-' + Date.now().toString(36);
+        localStorage.setItem('qa_device_id', devId);
+      }
+      return devId;
+    } catch {
+      return 'dev-mem-' + Math.random().toString(36).substring(2, 9);
     }
-    return devId;
   };
 
-  const deviceId = getDeviceId();
+  const [deviceId] = useState(() => getDeviceId());
+  const [deletedBugIds, setDeletedBugIds] = useState<string[]>([]);
+
+  const saveInProgressRunLocal = (planId: string | undefined, run: TestRun) => {
+    if (!planId) return;
+    const key = `qa_in_progress_run_${planId}`;
+    try {
+      localStorage.setItem(key, JSON.stringify(run));
+    } catch {
+      try {
+        const stripped: TestRun = {
+          ...run,
+          bugLogs: (run.bugLogs || []).map(b =>
+            b.imageUrl && b.imageUrl.startsWith('data:') ? { ...b, imageUrl: undefined } : b
+          )
+        };
+        localStorage.setItem(key, JSON.stringify(stripped));
+      } catch {}
+    }
+  };
 
   // Match device currently in use by this phone / tester
   const currentSavedDevName = inputDeviceName || getStoredDeviceName();
@@ -94,31 +117,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       d.id === deviceId
     );
   }, [devices, currentSavedDevName, deviceId]);
-
-  // "The only test plan that should be available to that Device is the one it has a quota set for"
-  const availablePlans = useMemo(() => {
-    if (!currentDevice || !currentDevice.quotas || currentDevice.quotas.length === 0) {
-      return testPlans;
-    }
-    const filtered = testPlans.filter(p => 
-      currentDevice.quotas.some(q => q.planId === p.id && q.targetRunsPerDay > 0)
-    );
-    return filtered.length > 0 ? filtered : testPlans;
-  }, [testPlans, currentDevice]);
-
-  // Current plan strictly resolves to an available plan for this device
-  const currentPlan = useMemo(() => {
-    if (availablePlans.length === 0) return testPlans[0];
-    const match = availablePlans.find(p => p.id === selectedPlanId);
-    return match || availablePlans[0];
-  }, [availablePlans, selectedPlanId, testPlans]);
-
-  // Synchronize parent selectedPlanId if current device is locked to a specific quota plan
-  useEffect(() => {
-    if (currentPlan && currentPlan.id !== selectedPlanId) {
-      onSelectPlan(currentPlan.id);
-    }
-  }, [currentPlan?.id, selectedPlanId, onSelectPlan]);
 
   const todayStr = useMemo(() => {
     const d = new Date();
@@ -157,8 +155,49 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     return map;
   }, [archivedRuns, testRuns, devices, todayStr, testPlans, stepFirstSeen]);
 
+  // "The only test plan that should be available to that Device is the one it has a quota set for"
+  // Prefer plans with remaining daily quota today before falling back to exhausted quota plans.
+  const availablePlans = useMemo(() => {
+    if (!currentDevice || !currentDevice.quotas || currentDevice.quotas.length === 0) {
+      return testPlans;
+    }
+    const activeQuotaPlanIds = new Set(
+      currentDevice.quotas.filter(q => q.targetRunsPerDay > 0).map(q => q.planId)
+    );
+    const remainingQuotaPlanIds = new Set(
+      currentDevice.quotas
+        .filter(q => {
+          if (q.targetRunsPerDay <= 0) return false;
+          const doneToday = (todayRunsMap[currentDevice.id] && todayRunsMap[currentDevice.id][q.planId]) || 0;
+          return doneToday < q.targetRunsPerDay;
+        })
+        .map(q => q.planId)
+    );
+    const remainingPlans = testPlans.filter(p => remainingQuotaPlanIds.has(p.id));
+    if (remainingPlans.length > 0) return remainingPlans;
+    const allQuotaPlans = testPlans.filter(p => activeQuotaPlanIds.has(p.id));
+    return allQuotaPlans.length > 0 ? allQuotaPlans : testPlans;
+  }, [testPlans, currentDevice, todayRunsMap]);
+
+  // Current plan strictly resolves to an available plan for this device
+  const currentPlan = useMemo(() => {
+    if (availablePlans.length === 0) return testPlans[0];
+    const match = availablePlans.find(p => p.id === selectedPlanId);
+    return match || availablePlans[0];
+  }, [availablePlans, selectedPlanId, testPlans]);
+
+  // Synchronize parent selectedPlanId if current device is locked to a specific quota plan
+  useEffect(() => {
+    if (currentPlan && currentPlan.id !== selectedPlanId) {
+      onSelectPlan(currentPlan.id);
+    }
+  }, [currentPlan?.id, selectedPlanId, onSelectPlan]);
+
   // Check localStorage for any persistent in-progress run for this plan
-  const localSavedRunJson = currentPlan ? localStorage.getItem(`qa_in_progress_run_${currentPlan.id}`) : null;
+  let localSavedRunJson: string | null = null;
+  try {
+    localSavedRunJson = currentPlan ? localStorage.getItem(`qa_in_progress_run_${currentPlan.id}`) : null;
+  } catch {}
   let localSavedRun: TestRun | null = null;
   if (localSavedRunJson) {
     try {
@@ -190,27 +229,44 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   // Fallback: check if an unassigned active run matching legacy ID exists
   if (!activeRun && currentPlan) {
-    activeRun = testRuns.find(r => r.id === 'run-' + currentPlan.id && r.status !== 'completed' && (r.status as any) !== 'terminated');
+    activeRun = testRuns.find(
+      r =>
+        r.id === 'run-' + currentPlan.id &&
+        r.status === 'not_started' &&
+        !r.testerName &&
+        !r.deviceName
+    );
   }
+
+  const deletedBugSet = new Set(deletedBugIds);
 
   // Merge with locally persisted in-progress run so step results are NEVER lost
   if (localSavedRun && localSavedRun.planId === currentPlan?.id) {
     if (!activeRun) {
-      activeRun = localSavedRun;
+      activeRun = {
+        ...localSavedRun,
+        bugLogs: (localSavedRun.bugLogs || []).filter(b => !deletedBugSet.has(b.id))
+      };
     } else {
+      const mergedBugs = [
+        ...(activeRun.bugLogs || []),
+        ...(localSavedRun.bugLogs || []).filter(b => !(activeRun?.bugLogs || []).some(existing => existing.id === b.id))
+      ].filter(b => !deletedBugSet.has(b.id));
       activeRun = {
         ...activeRun,
         results: {
           ...(activeRun.results || {}),
           ...(localSavedRun.results || {})
         },
-        bugLogs: [
-          ...(activeRun.bugLogs || []),
-          ...(localSavedRun.bugLogs || []).filter(b => !(activeRun?.bugLogs || []).some(existing => existing.id === b.id))
-        ],
+        bugLogs: mergedBugs,
         currentStepIndex: localSavedRun.currentStepIndex !== undefined ? localSavedRun.currentStepIndex : activeRun.currentStepIndex
       };
     }
+  } else if (activeRun && deletedBugSet.size > 0) {
+    activeRun = {
+      ...activeRun,
+      bugLogs: (activeRun.bugLogs || []).filter(b => !deletedBugSet.has(b.id))
+    };
   }
 
   if (!activeRun && currentPlan) {
@@ -234,6 +290,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   // Selectable devices: Ready, not locked by another tester, and has configured daily test quota(s)
   const selectableDevices = useMemo(() => {
     const currentSavedName = getStoredDeviceName() || inputDeviceName || '';
+    const myTesterLower = (getStoredTesterName() || inputReporterName || '').toLowerCase().trim();
 
     return devices.filter(dev => {
       if (!dev.isReady) return false;
@@ -241,7 +298,13 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       // Lock out ONLY if locked by another tester's active, in-progress run
       if (dev.activeRunId && dev.activeRunId !== activeRun?.id) {
         const matchingRun = testRuns.find(r => r.id === dev.activeRunId);
-        const isSelfDevice = currentSavedName && dev.name.toLowerCase().trim() === currentSavedName.toLowerCase().trim();
+        const isSelfDevice = Boolean(
+          currentSavedName &&
+          dev.name.toLowerCase().trim() === currentSavedName.toLowerCase().trim() &&
+          (!matchingRun ||
+            matchingRun.deviceId === deviceId ||
+            (myTesterLower && matchingRun.testerName && matchingRun.testerName.toLowerCase().trim() === myTesterLower))
+        );
         if (matchingRun && matchingRun.status === 'in_progress' && !isSelfDevice) {
           return false;
         }
@@ -263,20 +326,22 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
       return hasRemaining;
     });
-  }, [devices, todayRunsMap, activeRun, testRuns, inputDeviceName]);
+  }, [devices, todayRunsMap, activeRun, testRuns, inputDeviceName, inputReporterName, deviceId]);
 
   // Keep tester identity reliably in localStorage and sessionStorage (NEVER wipe on mount)
   useEffect(() => {
     const name = getStoredTesterName();
     const dev = getStoredDeviceName();
-    if (name) {
-      localStorage.setItem('qa_tester_name', name);
-      sessionStorage.setItem('qa_tester_name', name);
-    }
-    if (dev) {
-      localStorage.setItem('qa_device_name', dev);
-      sessionStorage.setItem('qa_device_name', dev);
-    }
+    try {
+      if (name) {
+        localStorage.setItem('qa_tester_name', name);
+        sessionStorage.setItem('qa_tester_name', name);
+      }
+      if (dev) {
+        localStorage.setItem('qa_device_name', dev);
+        sessionStorage.setItem('qa_device_name', dev);
+      }
+    } catch {}
   }, []);
 
   // Active Mobile View Tab: 'plans' (Configured Test Plans) vs 'bugs' (Logged Bugs)
@@ -355,21 +420,23 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   // Dynamically compute active bugs for current plan/run
   const activeBugs = useMemo(() => {
-    const rawRunBugs = (activeOrSummaryCompleted || activeRun)?.bugLogs || [];
+    const deletedSet = new Set(deletedBugIds);
+    const rawRunBugs = ((activeOrSummaryCompleted || activeRun)?.bugLogs || []).filter(b => !deletedSet.has(b.id));
     if (rawRunBugs.length > 0) {
       if (bugLogs && bugLogs.length > 0) {
         const validIds = new Set(bugLogs.map(b => b.id));
-        // Keep bugs that are either in global bugLogs OR were newly created in this local session
-        return rawRunBugs.filter(b => validIds.has(b.id) || b.id.startsWith('bug-'));
+        return rawRunBugs.filter(b => validIds.has(b.id));
       }
       return rawRunBugs;
     }
     // Fallback to global bugLogs matching this plan or run
     if (bugLogs && bugLogs.length > 0) {
-      return bugLogs.filter(b => b.planId === currentPlan?.id || (activeRun && b.testRunId === activeRun.id));
+      return bugLogs.filter(
+        b => !deletedSet.has(b.id) && (b.planId === currentPlan?.id || (activeRun && b.testRunId === activeRun.id))
+      );
     }
     return [];
-  }, [bugLogs, activeOrSummaryCompleted, activeRun?.bugLogs, currentPlan?.id]);
+  }, [bugLogs, activeOrSummaryCompleted, activeRun?.bugLogs, activeRun?.id, currentPlan?.id, deletedBugIds]);
 
   // Selected Status for current step
   const [selectedStatus, setSelectedStatus] = useState<'green' | 'yellow' | 'red' | null>(null);
@@ -395,8 +462,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   const handleQuitAndReleaseSession = () => {
     // 1. Release active lock on target device and tester
-    const currentDeviceName = sessionStorage.getItem('qa_device_name') || activeRun?.deviceName || inputDeviceName;
-    const currentTesterName = sessionStorage.getItem('qa_tester_name') || activeRun?.testerName || inputReporterName;
+    const currentDeviceName = getStoredDeviceName() || activeRun?.deviceName || inputDeviceName;
+    const currentTesterName = getStoredTesterName() || activeRun?.testerName || inputReporterName;
 
     if (onSaveDevice) {
       devices.forEach(d => {
@@ -415,13 +482,13 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       });
     }
 
-    // 2. Delete active uncompleted run session to restore test quota
+    // 2. Delete ONLY this device/tester's active uncompleted run session to restore test quota
     const runsToDelete = testRuns.filter(r => 
       r.status !== 'completed' && (
         (activeRun && r.id === activeRun.id) ||
+        (deviceId && r.deviceId === deviceId) ||
         (currentTesterName && r.testerName && r.testerName.toLowerCase().trim() === currentTesterName.toLowerCase().trim()) ||
-        (currentDeviceName && r.deviceName && r.deviceName.toLowerCase().trim() === currentDeviceName.toLowerCase().trim()) ||
-        (currentPlan && r.planId === currentPlan.id)
+        (currentDeviceName && r.deviceName && r.deviceName.toLowerCase().trim() === currentDeviceName.toLowerCase().trim())
       )
     );
 
@@ -461,10 +528,12 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     } catch (e) {}
 
     // 5. Clear session & local storage & reset setup state
-    sessionStorage.removeItem('qa_tester_name');
-    sessionStorage.removeItem('qa_device_name');
-    localStorage.removeItem('qa_tester_name');
-    localStorage.removeItem('qa_device_name');
+    try {
+      sessionStorage.removeItem('qa_tester_name');
+      sessionStorage.removeItem('qa_device_name');
+      localStorage.removeItem('qa_tester_name');
+      localStorage.removeItem('qa_device_name');
+    } catch {}
     setInputReporterName('');
     setInputDeviceName('');
     setActiveStepIndex(0);
@@ -485,8 +554,45 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   const [bugSuccessMessage, setBugSuccessMessage] = useState<string | null>(null);
   const [isListeningSpeech, setIsListeningSpeech] = useState(false);
   const speechRecognitionRef = useRef<any>(null);
+  const speechStartingRef = useRef<boolean>(false);
+
+  const stopSpeechRecognition = () => {
+    speechStartingRef.current = false;
+    if (speechRecognitionRef.current) {
+      try {
+        speechRecognitionRef.current.stop();
+      } catch (e) {}
+      speechRecognitionRef.current = null;
+    }
+    setIsListeningSpeech(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      stopSpeechRecognition();
+    };
+  }, []);
+
+  const closeBugModal = () => {
+    stopSpeechRecognition();
+    setEditingBug(null);
+    setBugNote('');
+    setBugImageUrl('');
+    setBugSeverity('medium');
+    setShowBugModal(false);
+  };
+
+  const openNewBugModal = () => {
+    stopSpeechRecognition();
+    setEditingBug(null);
+    setBugNote('');
+    setBugImageUrl('');
+    setBugSeverity('medium');
+    setShowBugModal(true);
+  };
 
   const handleStartEditBug = (bug: BugLog) => {
+    stopSpeechRecognition();
     setEditingBug(bug);
     setBugNote(bug.note);
     setBugSeverity(bug.severity || 'medium');
@@ -502,21 +608,20 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       return;
     }
 
-    if (isListeningSpeech) {
-      if (speechRecognitionRef.current) {
-        try { speechRecognitionRef.current.stop(); } catch (e) {}
-      }
-      setIsListeningSpeech(false);
+    if (isListeningSpeech || speechStartingRef.current) {
+      stopSpeechRecognition();
       return;
     }
 
     try {
+      speechStartingRef.current = true;
       const recognition = new SpeechRecognitionClass();
       recognition.continuous = false;
       recognition.interimResults = false;
       recognition.lang = 'en-US';
 
       recognition.onstart = () => {
+        speechStartingRef.current = false;
         setIsListeningSpeech(true);
         triggerHaptic('light');
       };
@@ -531,10 +636,12 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
       recognition.onerror = (err: any) => {
         console.warn('Speech recognition error:', err);
+        speechStartingRef.current = false;
         setIsListeningSpeech(false);
       };
 
       recognition.onend = () => {
+        speechStartingRef.current = false;
         setIsListeningSpeech(false);
       };
 
@@ -542,6 +649,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       recognition.start();
     } catch (err) {
       console.warn('Speech recognition start error:', err);
+      speechStartingRef.current = false;
       setIsListeningSpeech(false);
     }
   };
@@ -574,10 +682,12 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     });
 
     // Store in both localStorage and sessionStorage so tester identity is never lost
-    sessionStorage.setItem('qa_tester_name', trimmedReporter);
-    sessionStorage.setItem('qa_device_name', trimmedDevice);
-    localStorage.setItem('qa_tester_name', trimmedReporter);
-    localStorage.setItem('qa_device_name', trimmedDevice);
+    try {
+      sessionStorage.setItem('qa_tester_name', trimmedReporter);
+      sessionStorage.setItem('qa_device_name', trimmedDevice);
+      localStorage.setItem('qa_tester_name', trimmedReporter);
+      localStorage.setItem('qa_device_name', trimmedDevice);
+    } catch {}
 
     onAddPopulatedDevice(trimmedDevice);
 
@@ -599,7 +709,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       status: 'in_progress',
       currentStepIndex: isBrandNew ? 0 : (activeRun.currentStepIndex || 0),
       results: isBrandNew ? {} : (activeRun.results || {}),
-      bugLogs: isBrandNew ? [] : (activeRun.bugLogs || []),
+      bugLogs: activeRun.bugLogs || [],
       startedAt: isBrandNew ? new Date().toISOString() : (activeRun.startedAt || new Date().toISOString())
     };
 
@@ -609,9 +719,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     }
 
     // Save in-progress run to localStorage immediately
-    if (currentPlan) {
-      localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updatedRun));
-    }
+    saveInProgressRunLocal(currentPlan?.id, updatedRun);
 
     // Sync in-progress run to state & Supabase immediately so dashboard reflects it
     onUpdateRun(updatedRun);
@@ -635,6 +743,19 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     setShowSetupModal(false);
   };
 
+  // Highest step index unlocked in this session (includes currentStepIndex and any step after a recorded step)
+  const maxUnlockedStepIndex = useMemo(() => {
+    let maxIdx = currentStepIndex;
+    steps.forEach((s, idx) => {
+      const st = activeRun?.results?.[s.id]?.status;
+      if (st && st !== 'pending') {
+        const nextUnlocked = Math.min( Math.max(0, totalSteps - 1), idx + 1 );
+        if (nextUnlocked > maxIdx) maxIdx = nextUnlocked;
+      }
+    });
+    return maxIdx;
+  }, [steps, activeRun?.results, currentStepIndex, totalSteps]);
+
   // Navigate to previous step (to inspect or correct a mistake)
   const handlePreviousStep = () => {
     if (currentStepIndex > 0) {
@@ -646,16 +767,14 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       setSelectedStatus(prevStatus && prevStatus !== 'pending' ? prevStatus : null);
       if (activeRun) {
         const updated = { ...activeRun, currentStepIndex: prevIndex };
-        if (currentPlan) {
-          localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updated));
-        }
+        saveInProgressRunLocal(currentPlan?.id, updated);
       }
     }
   };
 
-  // Go back to a specific previous step (only allowed to go backward)
+  // Jump to any unlocked step (backward or forward up to maxUnlockedStepIndex)
   const handleGoToStep = (targetIdx: number) => {
-    if (targetIdx >= 0 && targetIdx < currentStepIndex) {
+    if (targetIdx >= 0 && targetIdx <= maxUnlockedStepIndex && targetIdx !== currentStepIndex) {
       triggerHaptic('light');
       setActiveStepIndex(targetIdx);
       const targetStep = steps[targetIdx];
@@ -663,9 +782,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       setSelectedStatus(existingStatus && existingStatus !== 'pending' ? existingStatus : null);
       if (activeRun) {
         const updated = { ...activeRun, currentStepIndex: targetIdx };
-        if (currentPlan) {
-          localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updated));
-        }
+        saveInProgressRunLocal(currentPlan?.id, updated);
       }
     }
   };
@@ -673,22 +790,29 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   // Current step defects (for reviewing or removing mistaken bugs)
   const currentStepBugs = useMemo(() => {
     if (!currentStep || !activeRun) return [];
-    return (activeRun.bugLogs || []).filter(b => b.stepId === currentStep.id);
-  }, [currentStep?.id, activeRun?.bugLogs]);
+    const deletedSet = new Set(deletedBugIds);
+    return (activeRun.bugLogs || []).filter(b => b.stepId === currentStep.id && !deletedSet.has(b.id));
+  }, [currentStep?.id, activeRun?.bugLogs, deletedBugIds]);
 
-  // Remove a mistake bug from the current step
+  // Remove a mistake bug from the current step, Bugs tab, or Completion Summary
   const handleDeleteStepBug = (bugId: string) => {
+    setDeletedBugIds(prev => (prev.includes(bugId) ? prev : [...prev, bugId]));
     if (onDeleteBug) onDeleteBug(bugId);
     if (activeRun) {
       const updatedBugLogs = (activeRun.bugLogs || []).filter(b => b.id !== bugId);
       const updatedRun = { ...activeRun, bugLogs: updatedBugLogs };
       onUpdateRun(updatedRun);
-      if (currentPlan) {
-        localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updatedRun));
+      if (!isCompleted) {
+        saveInProgressRunLocal(currentPlan?.id, updatedRun);
       }
-      setBugSuccessMessage('Defect removed from this step');
-      setTimeout(() => setBugSuccessMessage(null), 3000);
     }
+    if (completedRunSummary) {
+      setCompletedRunSummary(prev =>
+        prev ? { ...prev, bugLogs: (prev.bugLogs || []).filter(b => b.id !== bugId) } : null
+      );
+    }
+    setBugSuccessMessage('Defect removed');
+    setTimeout(() => setBugSuccessMessage(null), 3000);
   };
 
   // Submit Step with Selected Status (or Update Existing Result)
@@ -715,9 +839,17 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     // Ensure _meta never pollutes step result keys
     delete (updatedResults as any)._meta;
 
+    const firstUnrecordedIdx = steps.findIndex(s => {
+      const r = updatedResults[s.id];
+      return !r || !r.status || r.status === 'pending';
+    });
     const isLastStep = currentStepIndex >= totalSteps - 1;
-    const isDone = isLastStep;
-    const nextIndex = isLastStep ? totalSteps : currentStepIndex + 1;
+    const isDone = isLastStep && firstUnrecordedIdx === -1;
+    const nextIndex = isDone
+      ? totalSteps
+      : isLastStep && firstUnrecordedIdx !== -1
+      ? firstUnrecordedIdx
+      : currentStepIndex + 1;
 
     let computedDurationMs: number | undefined = undefined;
     if (isDone) {
@@ -750,9 +882,11 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     if (isDone) {
       triggerHaptic('success');
       setCompletedRunSummary(updatedRun);
-      if (currentPlan) {
-        localStorage.removeItem(`qa_in_progress_run_${currentPlan.id}`);
-      }
+      try {
+        if (currentPlan) {
+          localStorage.removeItem(`qa_in_progress_run_${currentPlan.id}`);
+        }
+      } catch {}
       const activeDevName = activeRun.deviceName;
       const matchedDev = devices.find(d => (activeDevName && d.name.toLowerCase().trim() === activeDevName.toLowerCase().trim()) || d.activeRunId === activeRun.id);
       if (matchedDev && onSaveDevice) {
@@ -766,9 +900,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       setTimeout(() => setBugSuccessMessage(null), 4000);
     } else {
       triggerHaptic('light');
-      if (currentPlan) {
-        localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updatedRun));
-      }
+      saveInProgressRunLocal(currentPlan?.id, updatedRun);
       setActiveStepIndex(nextIndex);
       // Pre-select next step's recorded status if already tested previously
       const nextStepObj = steps[nextIndex];
@@ -781,23 +913,50 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     setBugSuccessMessage(null);
   };
 
-  // Keyboard Shortcuts listener (1 = Green, 2 = Yellow, 3 = Red, Enter = Confirm, B = Bug, Left = Prev, Right = Next)
+  const [bootMessage, setBootMessage] = useState<string | null>(null);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+
+  // Keyboard Shortcuts listener (1 = Green, 2 = Yellow, 3 = Red, Enter = Confirm, B = Bug, Left = Prev)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const targetTag = (e.target as HTMLElement)?.tagName;
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(targetTag)) {
+      if (minAppVersion && minAppVersion > APP_VERSION_CODE) return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+
+      const targetEl = e.target as HTMLElement | null;
+      const targetTag = targetEl?.tagName || '';
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(targetTag) || targetEl?.isContentEditable) {
         if (e.key === 'Escape' && showBugModal) {
-          setShowBugModal(false);
+          closeBugModal();
         }
         return;
       }
 
-      if (showSetupModal || isCompleted) return;
-
-      if (showBugModal) {
-        if (e.key === 'Escape') setShowBugModal(false);
+      if (previewImageUrl) {
+        if (e.key === 'Escape') setPreviewImageUrl(null);
         return;
       }
+
+      if (showBugModal) {
+        if (e.key === 'Escape') closeBugModal();
+        return;
+      }
+
+      if (showQuitConfirmModal) {
+        if (e.key === 'Escape') setShowQuitConfirmModal(false);
+        return;
+      }
+
+      if (openTesterPickerModal) {
+        if (e.key === 'Escape') setOpenTesterPickerModal(false);
+        return;
+      }
+
+      if (openDevicePickerModal) {
+        if (e.key === 'Escape') setOpenDevicePickerModal(false);
+        return;
+      }
+
+      if (bootMessage || showSetupModal || isCompleted || activeMobileTab !== 'plans') return;
 
       if (e.key === '1') {
         e.preventDefault();
@@ -813,7 +972,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         triggerHaptic('light');
       } else if (e.key.toLowerCase() === 'b') {
         e.preventDefault();
-        setShowBugModal(true);
+        openNewBugModal();
       } else if (e.key === 'ArrowLeft' || e.key === 'p' || e.key === 'P') {
         e.preventDefault();
         handlePreviousStep();
@@ -825,9 +984,23 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showSetupModal, isCompleted, showBugModal, selectedStatus, currentStepIndex, totalSteps, steps, activeRun]);
-
-  const [bootMessage, setBootMessage] = useState<string | null>(null);
+  }, [
+    minAppVersion,
+    previewImageUrl,
+    showBugModal,
+    showQuitConfirmModal,
+    openTesterPickerModal,
+    openDevicePickerModal,
+    bootMessage,
+    showSetupModal,
+    isCompleted,
+    activeMobileTab,
+    selectedStatus,
+    currentStepIndex,
+    totalSteps,
+    steps,
+    activeRun
+  ]);
 
   // Active run and plan tracking for real-time remote boot detection
   const activeRunIdRef = useRef<string | null>(null);
@@ -901,14 +1074,14 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       return false;
     }
 
-    // 3. Device Name match (e.g. "GM3" === "GM3")
+    // 3. Exact case-insensitive Device Name match
     const matchesDevName = sigDevName && myDevNames.some(d => d === sigDevName);
 
-    // 4. Device ID match (supports suffixes like dev-123-xyz containing dev-123)
-    const matchesDevId = sigDevId && myDevIds.some(id => id === sigDevId || id.includes(sigDevId) || sigDevId.includes(id));
+    // 4. Exact case-insensitive Device ID match
+    const matchesDevId = sigDevId && myDevIds.some(id => id === sigDevId);
 
-    // 5. Tester Name match (supports full name or partial substring match)
-    const matchesTester = sigTester && myTesters.some(t => t === sigTester || t.includes(sigTester) || sigTester.includes(t));
+    // 5. Exact case-insensitive Tester Name match
+    const matchesTester = sigTester && myTesters.some(t => t === sigTester);
 
     return Boolean(matchesDevName || matchesDevId || matchesTester);
   };
@@ -952,15 +1125,16 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       const bootTester = parts[1] || '';
       const bootDevId = parts[2] || '';
       const bootRunId = parts[3] || '';
-      const bootDevName = parts[4] || '';
-      const bootTimestamp = parts[5] ? parseInt(parts[5], 10) : undefined;
+      const rawLast = parts[parts.length - 1] || '';
+      const parsedTs = /^\d{10,}$/.test(rawLast) ? parseInt(rawLast, 10) : undefined;
+      const bootDevName = parsedTs !== undefined ? parts.slice(4, parts.length - 1).join(':') : parts.slice(4).join(':');
 
       if (checkSignalMatchesThisPhone({
         testerName: bootTester,
         deviceId: bootDevId,
         runId: bootRunId,
         deviceName: bootDevName,
-        timestamp: bootTimestamp
+        timestamp: parsedTs
       })) {
         terminateSession('Session Terminated: You have been remotely kicked from this device by the administrator. Device has been released.');
         break;
@@ -1049,8 +1223,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           ...activeRun,
           bugLogs: (activeRun.bugLogs || []).map(b => b.id === updatedBug.id ? updatedBug : b)
         };
-        if (currentPlan) {
-          localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updatedRun));
+        if (!isCompleted) {
+          saveInProgressRunLocal(currentPlan?.id, updatedRun);
         }
         onUpdateRun(updatedRun);
       }
@@ -1066,10 +1240,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       }
 
       setBugSuccessMessage('Defect updated successfully');
-      setEditingBug(null);
-      setBugNote('');
-      setBugImageUrl('');
-      setShowBugModal(false);
+      closeBugModal();
       return;
     }
 
@@ -1080,14 +1251,14 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     const formattedTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
     const newBug: BugLog = {
-      id: 'bug-' + Date.now(),
-      testRunId: activeRun.id,
+      id: 'bug-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+      testRunId: (completedRunSummary || activeRun).id,
       planId: currentPlan.id,
       stepId: currentStep?.id || `step-${Date.now()}`,
       stepTitle: currentStep?.title || `Mobile Defect (${currentPlan.name})`,
       feature: currentStep?.feature || '',
-      testerName: activeRun.testerName || 'Tester',
-      deviceName: activeRun.deviceName || 'Mobile Device',
+      testerName: (completedRunSummary || activeRun).testerName || 'Tester',
+      deviceName: (completedRunSummary || activeRun).deviceName || 'Mobile Device',
       severity: bugSeverity,
       note: bugNote.trim(),
       imageUrl: bugImageUrl.trim() || undefined,
@@ -1102,25 +1273,25 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     }
 
     try {
+      const targetRun = completedRunSummary || activeRun;
       const updatedRun: TestRun = {
-        ...activeRun,
-        bugLogs: [...(activeRun.bugLogs || []), newBug]
+        ...targetRun,
+        bugLogs: [...(targetRun.bugLogs || []), newBug]
       };
       onUpdateRun(updatedRun);
-      if (currentPlan) {
-        localStorage.setItem(`qa_in_progress_run_${currentPlan.id}`, JSON.stringify(updatedRun));
+      if (completedRunSummary) {
+        setCompletedRunSummary(updatedRun);
+      } else {
+        saveInProgressRunLocal(currentPlan.id, updatedRun);
       }
     } catch (err) {
       console.warn('save bug error:', err);
     }
 
     setBugSuccessMessage(`Bug/Note logged at ${formattedTime}`);
-    setBugNote('');
-    setBugImageUrl('');
-    setShowBugModal(false);
+    closeBugModal();
   };
 
-  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const isDesktop = typeof window !== 'undefined' && window.innerWidth >= 768;
 
   // Capacitor Android Hardware Back Button listener
@@ -1131,13 +1302,15 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         if (previewImageUrl) {
           setPreviewImageUrl(null);
         } else if (showBugModal) {
-          setShowBugModal(false);
+          closeBugModal();
         } else if (showQuitConfirmModal) {
           setShowQuitConfirmModal(false);
         } else if (openTesterPickerModal) {
           setOpenTesterPickerModal(false);
         } else if (openDevicePickerModal) {
           setOpenDevicePickerModal(false);
+        } else if (activeMobileTab === 'bugs') {
+          setActiveMobileTab('plans');
         } else if (!showSetupModal && activeRun && activeRun.status !== 'completed') {
           // If actively running a test walkthrough, prompt user to Quit & Release to suspend cleanly
           setShowQuitConfirmModal(true);
@@ -1154,7 +1327,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     return () => {
       if (sub && typeof sub.remove === 'function') sub.remove();
     };
-  }, [previewImageUrl, showBugModal, showQuitConfirmModal, openTesterPickerModal, openDevicePickerModal, showSetupModal, activeRun, onNavigateToDashboard]);
+  }, [previewImageUrl, showBugModal, showQuitConfirmModal, openTesterPickerModal, openDevicePickerModal, activeMobileTab, showSetupModal, activeRun, onNavigateToDashboard]);
 
   // Requirement 5: App Version Enforcement Blocker
   if (minAppVersion && minAppVersion > APP_VERSION_CODE) {
@@ -1318,7 +1491,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
               <button
                 type="button"
-                onClick={() => setShowBugModal(true)}
+                onClick={openNewBugModal}
                 className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-md border border-rose-500/30 flex items-center gap-1.5 transition-all cursor-pointer"
               >
                 <Bug className="w-3.5 h-3.5" />
@@ -1372,7 +1545,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                         </button>
                         <button
                           type="button"
-                          onClick={() => onDeleteBug(bug.id)}
+                          onClick={() => handleDeleteStepBug(bug.id)}
                           className="text-zinc-400 hover:text-rose-400 p-1 rounded-lg transition cursor-pointer"
                           title="Delete Bug"
                         >
@@ -1436,7 +1609,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 {steps.map((s, idx) => {
                   const sRes = activeRun?.results?.[s.id];
                   const isCurrent = idx === currentStepIndex;
-                  const canGoBack = idx < currentStepIndex;
+                  const canNavigate = idx <= maxUnlockedStepIndex && !isCurrent;
                   const isDone = sRes && sRes.status && sRes.status !== 'pending';
 
                   return (
@@ -1444,14 +1617,14 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                       key={s.id}
                       ref={isCurrent ? activeStepRef : null}
                       type="button"
-                      disabled={!canGoBack}
+                      disabled={!canNavigate}
                       onClick={() => {
-                        if (canGoBack) handleGoToStep(idx);
+                        if (canNavigate) handleGoToStep(idx);
                       }}
                       className={`flex items-center justify-center gap-1 min-w-[38px] h-8 px-2.5 rounded-xl text-xs font-bold transition-colors duration-150 flex-shrink-0 border ${
                         isCurrent
                           ? 'bg-zinc-700 text-zinc-100 border-zinc-400 shadow-md ring-1 ring-zinc-400/40'
-                          : canGoBack
+                          : canNavigate
                           ? isDone
                             ? sRes.status === 'green'
                               ? 'bg-emerald-950/40 text-emerald-300 border-emerald-500/40 hover:bg-emerald-900/40 cursor-pointer'
@@ -1461,7 +1634,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                             : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-white cursor-pointer'
                           : 'bg-zinc-900/40 text-zinc-600 border-zinc-900 opacity-40 cursor-not-allowed'
                       }`}
-                      title={canGoBack ? `Go back to Step ${idx + 1}: ${s.title}` : `Step ${idx + 1}`}
+                      title={canNavigate ? `Go to Step ${idx + 1}: ${s.title}` : `Step ${idx + 1}`}
                     >
                       <span>{idx + 1}</span>
                       {isDone && (
@@ -1500,7 +1673,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   </div>
 
                   <button
-                    onClick={() => setShowBugModal(true)}
+                    type="button"
+                    onClick={openNewBugModal}
                     className="text-xs font-bold text-rose-300 bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 px-3 py-1.5 rounded-2xl transition-all duration-200 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
                   >
                     <Bug className="w-3.5 h-3.5 text-rose-400" />
@@ -1675,8 +1849,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
             const summaryRed = summaryResultsArray.filter((r: any) => r && r.status === 'red').length;
 
             // Golden Run evaluation:
-            // 0 Reds, at most 1 Yellow, fully completed run
-            const isGoldenRun = summaryRed === 0 && summaryYellow <= 1 && (summaryResultsArray.length >= totalSteps || totalSteps === 0);
+            // 0 Reds, at most 1 Yellow, fully completed run with at least 1 step
+            const isGoldenRun = totalSteps > 0 && summaryRed === 0 && summaryYellow <= 1 && summaryResultsArray.length >= totalSteps;
 
             const startMs = summaryRun?.startedAt ? new Date(summaryRun.startedAt).getTime() : 0;
             const endMs = summaryRun?.completedAt ? new Date(summaryRun.completedAt).getTime() : Date.now();
@@ -1685,7 +1859,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               ? `${Math.floor(durationSecs / 60)}m ${durationSecs % 60 < 10 ? '0' : ''}${durationSecs % 60}s`
               : `${durationSecs}s`;
 
-            const bugLogsList = summaryRun?.bugLogs || [];
+            const bugLogsList = (summaryRun?.bugLogs || []).filter(b => !deletedBugIds.includes(b.id));
 
             return (
               <div className="p-6 flex-1 flex flex-col justify-between items-center text-center space-y-4 overflow-y-auto max-h-[580px]">
@@ -1820,7 +1994,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                             </button>
                             <button
                               type="button"
-                              onClick={() => onDeleteBug(bug.id)}
+                              onClick={() => handleDeleteStepBug(bug.id)}
                               className="text-zinc-400 hover:text-rose-400 p-1 cursor-pointer"
                               title="Delete Bug Log"
                             >
@@ -1842,7 +2016,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                       setSelectedStatus(null);
                       setActiveStepIndex(0);
                       if (currentPlan) {
-                        localStorage.removeItem(`qa_in_progress_run_${currentPlan.id}`);
+                        try {
+                          localStorage.removeItem(`qa_in_progress_run_${currentPlan.id}`);
+                        } catch {}
                         // Pass THIS device's run id so restart never closes another tester's run on the same plan.
                         onRestartRun(currentPlan.id, activeRun?.id);
                       }
@@ -1856,8 +2032,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                           });
                         }
                       }
-                      const savedName = sessionStorage.getItem('qa_tester_name') || activeRun?.testerName || '';
-                      const savedDevice = sessionStorage.getItem('qa_device_name') || activeRun?.deviceName || '';
+                      const savedName = getStoredTesterName() || activeRun?.testerName || '';
+                      const savedDevice = getStoredDeviceName() || activeRun?.deviceName || '';
                       if (savedName) setInputReporterName(savedName);
                       if (savedDevice) setInputDeviceName(savedDevice);
                       setShowSetupModal(true);
@@ -2174,10 +2350,14 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                         triggerHaptic('light');
                         const chosenDevName = dev.name;
                         setInputDeviceName(chosenDevName);
-                        // Check if current plan is supported by this device
-                        const hasCurrent = dev.quotas?.some(q => q.planId === currentPlan?.id && q.targetRunsPerDay > 0);
-                        if (!hasCurrent && dev.quotas && dev.quotas.length > 0) {
-                          // Switch to the first plan this device has an active quota for
+                        // Check if current plan is supported by this device AND still has remaining quota today
+                        const hasCurrentRemaining = dev.quotas?.some(q => {
+                          if (q.planId !== currentPlan?.id || q.targetRunsPerDay <= 0) return false;
+                          const done = (todayRunsMap[dev.id] && todayRunsMap[dev.id][q.planId]) || 0;
+                          return done < q.targetRunsPerDay;
+                        });
+                        if (!hasCurrentRemaining && dev.quotas && dev.quotas.length > 0) {
+                          // Switch to the first plan this device has an active remaining quota for today
                           const firstAvailableQuota = dev.quotas.find(q => {
                             const done = (todayRunsMap[dev.id] && todayRunsMap[dev.id][q.planId]) || 0;
                             return q.targetRunsPerDay > 0 && done < q.targetRunsPerDay;
@@ -2332,12 +2512,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               <div className="flex gap-2.5 pt-3 border-t border-zinc-800">
                 <button
                   type="button"
-                  onClick={() => {
-                    setEditingBug(null);
-                    setBugNote('');
-                    setBugImageUrl('');
-                    setShowBugModal(false);
-                  }}
+                  onClick={closeBugModal}
                   className="w-1/3 py-3 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white font-bold text-xs rounded-2xl border border-zinc-800 transition-all cursor-pointer"
                 >
                   Cancel

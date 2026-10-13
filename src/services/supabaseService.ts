@@ -32,10 +32,12 @@ export const fetchAllSupabaseData = async () => {
     }));
 
     const getStartedAtFromItem = (item: any) => {
+      if (!item) return undefined;
       if (item.started_at) return item.started_at;
-      if (item.results) {
+      if (item.results && typeof item.results === 'object') {
         const timestamps = Object.values(item.results)
-          .map((r: any) => r.timestamp ? new Date(r.timestamp).getTime() : NaN)
+          .filter(Boolean)
+          .map((r: any) => (r && r.timestamp ? new Date(r.timestamp).getTime() : NaN))
           .filter((t: number) => !isNaN(t));
         if (timestamps.length > 0) {
           return new Date(Math.min(...timestamps)).toISOString();
@@ -44,43 +46,47 @@ export const fetchAllSupabaseData = async () => {
       return item.created_at || undefined;
     };
 
-    const testRuns: TestRun[] = (runsRes.data || []).map((item: any) => {
-      const devIdFromId = item.id.includes('-dev-') ? 'dev-' + item.id.split('-dev-')[1] : undefined;
-      return {
-        id: item.id,
-        planId: item.plan_id,
-        planName: item.plan_name || '',
-        testerName: item.tester_name || '',
-        deviceName: item.device_name || '',
-        deviceId: item.device_id || devIdFromId,
-        status: item.status || 'not_started',
-        currentStepIndex: item.current_step_index || 0,
-        results: item.results || {},
-        bugLogs: item.bug_logs || [],
-        startedAt: getStartedAtFromItem(item) || new Date().toISOString(),
-        completedAt: item.completed_at,
-        durationMs: item.duration_ms || item.durationMs,
-      };
-    });
+    const testRuns: TestRun[] = (runsRes.data || [])
+      .filter((item: any) => item && typeof item.id === 'string')
+      .map((item: any) => {
+        const devIdFromId = item.id.includes('-dev-') ? 'dev-' + item.id.split('-dev-')[1] : undefined;
+        return {
+          id: item.id,
+          planId: item.plan_id,
+          planName: item.plan_name || '',
+          testerName: item.tester_name || '',
+          deviceName: item.device_name || '',
+          deviceId: item.device_id || devIdFromId,
+          status: item.status || 'not_started',
+          currentStepIndex: item.current_step_index || 0,
+          results: item.results || {},
+          bugLogs: item.bug_logs || [],
+          startedAt: getStartedAtFromItem(item) || new Date().toISOString(),
+          completedAt: item.completed_at,
+          durationMs: item.duration_ms || item.durationMs,
+        };
+      });
 
-    const archivedRuns: TestRun[] = (archivedRes.data || []).map((item: any) => {
-      const devIdFromId = item.id.includes('-dev-') ? 'dev-' + item.id.split('-dev-')[1] : undefined;
-      return {
-        id: item.id,
-        planId: item.plan_id,
-        planName: item.plan_name || '',
-        testerName: item.tester_name || '',
-        deviceName: item.device_name || '',
-        deviceId: item.device_id || devIdFromId,
-        status: item.status || 'completed',
-        currentStepIndex: item.current_step_index || 0,
-        results: item.results || {},
-        bugLogs: item.bug_logs || [],
-        startedAt: getStartedAtFromItem(item) || new Date().toISOString(),
-        completedAt: item.completed_at,
-        durationMs: item.duration_ms || item.durationMs,
-      };
-    });
+    const archivedRuns: TestRun[] = (archivedRes.data || [])
+      .filter((item: any) => item && typeof item.id === 'string')
+      .map((item: any) => {
+        const devIdFromId = item.id.includes('-dev-') ? 'dev-' + item.id.split('-dev-')[1] : undefined;
+        return {
+          id: item.id,
+          planId: item.plan_id,
+          planName: item.plan_name || '',
+          testerName: item.tester_name || '',
+          deviceName: item.device_name || '',
+          deviceId: item.device_id || devIdFromId,
+          status: item.status || 'completed',
+          currentStepIndex: item.current_step_index || 0,
+          results: item.results || {},
+          bugLogs: item.bug_logs || [],
+          startedAt: getStartedAtFromItem(item) || new Date().toISOString(),
+          completedAt: item.completed_at,
+          durationMs: item.duration_ms || item.durationMs,
+        };
+      });
 
     let bugsWipedAt = 0;
     (featuresRes.data || []).forEach((item: any) => {
@@ -204,7 +210,7 @@ export const deleteTestPlanFromSupabase = async (planId: string) => {
 export const syncTestRunToSupabase = async (run: TestRun) => {
   if (!supabase || !isSupabaseConfigured) return;
   try {
-    const payload: any = {
+    const basePayload: any = {
       id: run.id,
       plan_id: run.planId,
       plan_name: run.planName,
@@ -217,17 +223,30 @@ export const syncTestRunToSupabase = async (run: TestRun) => {
       started_at: run.startedAt,
       completed_at: run.completedAt,
     };
-    const { error } = await supabase.from('test_runs').upsert(payload);
-    if (error) console.error('syncTestRunToSupabase error:', error);
+    const fullPayload: any = {
+      ...basePayload,
+      ...(run.deviceId !== undefined ? { device_id: run.deviceId } : {}),
+      ...(run.durationMs !== undefined ? { duration_ms: run.durationMs } : {}),
+    };
+    let { error } = await supabase.from('test_runs').upsert(fullPayload);
+    if (error && (run.deviceId !== undefined || run.durationMs !== undefined)) {
+      const retry = await supabase.from('test_runs').upsert(basePayload);
+      error = retry.error;
+    }
+    if (error) {
+      console.error('syncTestRunToSupabase error:', error);
+      throw error;
+    }
   } catch (err) {
     console.error('syncTestRunToSupabase exception:', err);
+    throw err;
   }
 };
 
 export const syncArchivedRunToSupabase = async (run: TestRun) => {
   if (!supabase || !isSupabaseConfigured) return;
   try {
-    const payload: any = {
+    const basePayload: any = {
       id: run.id,
       plan_id: run.planId,
       plan_name: run.planName,
@@ -240,21 +259,42 @@ export const syncArchivedRunToSupabase = async (run: TestRun) => {
       started_at: run.startedAt,
       completed_at: run.completedAt,
     };
-    const { error } = await supabase.from('archived_runs').upsert(payload);
-    if (error) console.error('syncArchivedRunToSupabase error:', error);
+    const fullPayload: any = {
+      ...basePayload,
+      ...(run.deviceId !== undefined ? { device_id: run.deviceId } : {}),
+      ...(run.durationMs !== undefined ? { duration_ms: run.durationMs } : {}),
+    };
+    let { error } = await supabase.from('archived_runs').upsert(fullPayload);
+    if (error && (run.deviceId !== undefined || run.durationMs !== undefined)) {
+      const retry = await supabase.from('archived_runs').upsert(basePayload);
+      error = retry.error;
+    }
+    if (error) {
+      console.error('syncArchivedRunToSupabase error:', error);
+      throw error;
+    }
   } catch (err) {
     console.error('syncArchivedRunToSupabase exception:', err);
+    throw err;
   }
 };
 
 export const deleteTestRunFromSupabase = async (runId: string) => {
   if (!supabase || !isSupabaseConfigured) return;
-  await supabase.from('test_runs').delete().eq('id', runId);
+  const { error } = await supabase.from('test_runs').delete().eq('id', runId);
+  if (error) {
+    console.error('deleteTestRunFromSupabase error:', error);
+    throw error;
+  }
 };
 
 export const deleteArchivedRunFromSupabase = async (runId: string) => {
   if (!supabase || !isSupabaseConfigured) return;
-  await supabase.from('archived_runs').delete().eq('id', runId);
+  const { error } = await supabase.from('archived_runs').delete().eq('id', runId);
+  if (error) {
+    console.error('deleteArchivedRunFromSupabase error:', error);
+    throw error;
+  }
 };
 
 export const syncBugLogToSupabase = async (bug: BugLog) => {
@@ -317,8 +357,32 @@ export const wipeAllBugsFromSupabase = async () => {
   }
 };
 
+export const deletePopulatedFeaturesByPrefixFromSupabase = async (prefix: string) => {
+  if (!supabase || !isSupabaseConfigured || !prefix) return;
+  try {
+    await supabase.from('populated_features').delete().like('feature_name', `${prefix}%`);
+  } catch (err) {
+    console.error('deletePopulatedFeaturesByPrefixFromSupabase error:', err);
+  }
+};
+
 export const syncPopulatedFeatureToSupabase = async (featureName: string) => {
   if (!supabase || !isSupabaseConfigured) return;
+  const singletonPrefixes = [
+    '__APP_MIN_VERSION__:',
+    '__DAILY_QUOTA_RESET_DATE__:',
+    '__GLOBAL_BUGS_WIPED_AT__:',
+  ];
+  const matchedPrefix = singletonPrefixes.find(p => featureName.startsWith(p));
+  if (matchedPrefix) {
+    try {
+      await supabase
+        .from('populated_features')
+        .delete()
+        .like('feature_name', `${matchedPrefix}%`)
+        .neq('feature_name', featureName);
+    } catch (e) {}
+  }
   await supabase.from('populated_features').upsert({
     feature_name: featureName,
   });
@@ -455,16 +519,19 @@ export const syncDevicesListToCloud = async (devices: DeviceProfile[]) => {
     }
 
     const newFeatureKey = '__GLOBAL_DEVICES_CONFIG__:' + JSON.stringify(mergedDevices);
-    const { data: updatedData } = await supabase
+    const { data: updatedData, error: updateError } = await supabase
       .from('populated_features')
       .update({ feature_name: newFeatureKey })
       .like('feature_name', '__GLOBAL_DEVICES_CONFIG__%')
       .select();
 
+    if (updateError) throw updateError;
+
     if (!updatedData || updatedData.length === 0) {
-      await supabase.from('populated_features').upsert({
+      const { error: upsertError } = await supabase.from('populated_features').upsert({
         feature_name: newFeatureKey
       });
+      if (upsertError) throw upsertError;
     } else if (updatedData.length > 1) {
       for (let i = 1; i < updatedData.length; i++) {
         await supabase.from('populated_features').delete().eq('feature_name', updatedData[i].feature_name);
@@ -472,6 +539,7 @@ export const syncDevicesListToCloud = async (devices: DeviceProfile[]) => {
     }
   } catch (err) {
     console.error('syncDevicesListToCloud error:', err);
+    throw err;
   }
 };
 
@@ -549,12 +617,24 @@ export interface BootSignal {
 }
 
 let globalCommandsChannel: any = null;
+const commandListeners = new Set<(signal: BootSignal) => void>();
 
 export const getCommandsChannel = () => {
   if (!supabase || !isSupabaseConfigured) return null;
   if (!globalCommandsChannel) {
     globalCommandsChannel = supabase.channel('qa-system-commands', {
       config: { broadcast: { self: true } }
+    });
+    globalCommandsChannel.on('broadcast', { event: 'BOOT_TESTER' }, (msg: any) => {
+      if (msg && msg.payload) {
+        commandListeners.forEach(listener => {
+          try {
+            listener(msg.payload);
+          } catch (e) {
+            console.error('Error in BOOT_TESTER listener:', e);
+          }
+        });
+      }
     });
     globalCommandsChannel.subscribe();
   }
@@ -567,16 +647,10 @@ export const subscribeToSystemCommands = (onBootReceived: (signal: BootSignal) =
   const channel = getCommandsChannel();
   if (!channel) return () => {};
 
-  const handler = (msg: any) => {
-    if (msg && msg.payload) {
-      onBootReceived(msg.payload);
-    }
-  };
-
-  channel.on('broadcast', { event: 'BOOT_TESTER' }, handler);
+  commandListeners.add(onBootReceived);
 
   return () => {
-    // Keep channel subscription alive
+    commandListeners.delete(onBootReceived);
   };
 };
 
