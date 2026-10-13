@@ -737,12 +737,12 @@ export function buildCujReportText(data: CujReportData, opts: {
   const showPlans = scope.planId === ALL_PLANS && plansInScope.length > 0;
   const planRuns = (p: PlanInScope) => `(${p.runCount} ${p.runCount === 1 ? 'run' : 'runs'})`;
   const goldenCount = golden.goldenCount;
-  // Demo Flow step counts: the non-zero colors only, in 🟢 🟠 🔴 order (e.g. "🟢 6 · 🔴 2")
+  // Demo Flow step counts: non-zero counts only, in green / yellow / red order (e.g. "7 · 2 · 1")
   const flowParts = (row: DemoFlowStepRow) =>
     [
-      { emoji: '🟢', count: row.greenCount, color: '#16a34a' },
-      { emoji: '🟠', count: row.yellowCount, color: '#ea580c' },
-      { emoji: '🔴', count: row.redCount, color: '#dc2626' }
+      { count: row.greenCount, color: '#16a34a' },
+      { count: row.yellowCount, color: '#d97706' },
+      { count: row.redCount, color: '#dc2626' }
     ].filter(part => part.count > 0);
 
   // Plain text format
@@ -805,11 +805,9 @@ export function buildCujReportText(data: CujReportData, opts: {
   demoFlow.forEach(section => {
     // Exactly one blank line before each block
     plainText = plainText.replace(/\n*$/, '\n\n');
-    plainText += `🎬 Demo Flow Quality: ${section.planName} ${planRuns(section)}\n`;
-    plainText += `• Step results: 🟢 ${section.greenCount} | 🟠 ${section.yellowCount} | 🔴 ${section.redCount} (${section.greenPct}% green)\n`;
-    plainText += `• Steps: ${section.allGreenSteps} all green | ${section.orangeSteps} with orange | ${section.redSteps} with red\n`;
+    plainText += `🎬 Demo Flow Quality:\n`;
     section.rows.forEach(row => {
-      plainText += `${row.position}. ${row.title}: ${flowParts(row).map(part => `${part.emoji} ${part.count}`).join(' · ')} (${row.greenPct}%)\n`;
+      plainText += `${row.position}. ${row.title}: ${flowParts(row).map(part => `${part.count}`).join(' · ')} (${row.greenPct}%)\n`;
     });
   });
 
@@ -875,12 +873,10 @@ export function buildCujReportText(data: CujReportData, opts: {
   if (demoFlow.length > 0) {
     htmlText += `<div style="border-top: 1px solid #e2e8f0; margin: 12px 0 0 0;"></div>`;
     demoFlow.forEach(section => {
-      htmlText += `<p style="margin: 14px 0 4px 0; color: #4f46e5; font-weight: 700;">🎬 Demo Flow Quality: ${escapeHtml(section.planName)} <span style="color: #64748b; font-weight: 400;">${planRuns(section)}</span></p>`;
-      htmlText += `<p style="margin: 0 0 2px 0;">• <b>Step results</b>: 🟢 ${section.greenCount} | 🟠 ${section.yellowCount} | 🔴 ${section.redCount} <b>(${section.greenPct}% green)</b></p>`;
-      htmlText += `<p style="margin: 0 0 6px 0;">• <b>Steps</b>: ${section.allGreenSteps} all green | ${section.orangeSteps} with orange | ${section.redSteps} with red</p>`;
+      htmlText += `<p style="margin: 14px 0 6px 0; color: #4f46e5; font-weight: 700;">🎬 Demo Flow Quality:</p>`;
       htmlText += `<div style="margin: 0 0 8px 0;">`;
       section.rows.forEach(row => {
-        const countsHtml = flowParts(row).map(part => `<span style="color: ${part.color}; font-weight: 700;">${part.emoji} ${part.count}</span>`).join(' · ');
+        const countsHtml = flowParts(row).map(part => `<span style="color: ${part.color}; font-weight: 700;">${part.count}</span>`).join(' · ');
         htmlText += `<div style="margin-bottom: 3px;"><b>${row.position}. ${escapeHtml(row.title)}</b>: ${countsHtml} <span style="color: #64748b;">(${row.greenPct}%)</span></div>`;
       });
       htmlText += `</div>`;
