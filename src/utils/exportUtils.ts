@@ -155,10 +155,18 @@ export function exportAllQADataToJSON(
  * Export Bug Logs to CSV (compatible with Google Sheets & Excel)
  * Columns in order: Timestamp, Tester Name, Device, Feature, Description/Note, Image URL
  */
-export function exportBugsToCSV(bugs: BugLog[]) {
-  const sanitize = sanitizeCsvCell;
+export interface BugCsvExportOptions {
+  /** Name of the test plan the export is scoped to (used in the file name). */
+  planName?: string;
+  /** Resolves each bug's test plan name for the "Test Plan" column. */
+  getPlanName?: (bug: BugLog) => string;
+}
 
-  let csvContent = 'Timestamp,Tester Name,Device,Feature,Description/Note,Image URL\n';
+export function exportBugsToCSV(bugs: BugLog[], options?: BugCsvExportOptions) {
+  const sanitize = sanitizeCsvCell;
+  const getPlanName = options?.getPlanName;
+
+  let csvContent = 'Timestamp,Tester Name,Device,Feature,Description/Note,Image URL' + (getPlanName ? ',Test Plan' : '') + '\n';
 
   (bugs || []).forEach(bug => {
     let formattedTs = bug.formattedTime || 'N/A';
@@ -171,10 +179,13 @@ export function exportBugsToCSV(bugs: BugLog[]) {
       }
     } catch (e) {}
 
-    csvContent += `${sanitize(formattedTs)},${sanitize(bug.testerName || 'Anonymous')},${sanitize(bug.deviceName || 'Mobile Device')},${sanitize(bug.feature || 'General')},${sanitize(bug.note || '')},${sanitize(bug.imageUrl || '')}\n`;
+    csvContent += `${sanitize(formattedTs)},${sanitize(bug.testerName || 'Anonymous')},${sanitize(bug.deviceName || 'Mobile Device')},${sanitize(bug.feature || 'General')},${sanitize(bug.note || '')},${sanitize(bug.imageUrl || '')}` + (getPlanName ? `,${sanitize(getPlanName(bug))}` : '') + '\n';
   });
 
-  const fileName = `QA_Bug_Logs_${getLocalDateStr()}.csv`;
+  const planSlug = (options?.planName || '').trim().replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60);
+  const fileName = planSlug
+    ? `QA_Bug_Logs_${planSlug}_${getLocalDateStr()}.csv`
+    : `QA_Bug_Logs_${getLocalDateStr()}.csv`;
   downloadFile(csvContent, fileName);
 }
 
@@ -182,6 +193,8 @@ export interface BugCopyFilterOptions {
   dateFilter?: string;
   featureFilter?: string;
   deviceFilter?: string;
+  /** Test plan name the copied list is scoped to; shown as a heading. */
+  planFilter?: string;
   searchQuery?: string;
 }
 
@@ -353,7 +366,8 @@ export function formatBugsToText(bugs: BugLog[], filterOptions?: BugCopyFilterOp
   );
 
   // 1. Plain Text Output (Grouped by individual)
-  let plainText = '';
+  const planHeading = (filterOptions?.planFilter || '').trim();
+  let plainText = planHeading ? `Test Plan: ${planHeading} (${scopedBugs.length} ${scopedBugs.length === 1 ? 'bug' : 'bugs'})\n\n` : '';
   sortedGroups.forEach((group, groupIdx) => {
     plainText += `${group.displayName}\n\n`;
     group.bugs.forEach((bug, idx) => {
@@ -380,6 +394,9 @@ export function formatBugsToText(bugs: BugLog[], filterOptions?: BugCopyFilterOp
 
   // 2. Rich HTML Output for Google Docs (escaped against HTML/attribute injection)
   let htmlText = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5; max-width: 680px;">`;
+  if (planHeading) {
+    htmlText += `<div style="font-size: 18px; font-weight: 800; color: #1d4ed8; margin-bottom: 16px;">Test Plan: ${escapeHtml(planHeading)} <span style="font-size: 13px; font-weight: 600; color: #475569;">(${scopedBugs.length} ${scopedBugs.length === 1 ? 'bug' : 'bugs'})</span></div>`;
+  }
   sortedGroups.forEach((group, groupIdx) => {
     htmlText += `<div style="${groupIdx > 0 ? 'margin-top: 28px; padding-top: 16px; border-top: 2px solid #cbd5e1;' : 'margin-top: 0;'}">`;
     htmlText += `<div style="font-size: 16px; font-weight: 800; color: #0f172a; margin-bottom: 12px;">${escapeHtml(group.displayName)}</div>`;

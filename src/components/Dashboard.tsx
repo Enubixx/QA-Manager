@@ -362,6 +362,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [selectedDeviceFilter, setSelectedDeviceFilter] = useState<string>('all');
   const [selectedFeatureFilter, setSelectedFeatureFilter] = useState<string>('all');
   const [selectedDateFilter, setSelectedDateFilter] = useState<string>('all');
+  const [selectedPlanFilter, setSelectedPlanFilter] = useState<string>('all');
   const [customDateInput, setCustomDateInput] = useState<string>('');
   const [sortByDevice, setSortByDevice] = useState<'newest' | 'oldest' | 'device-asc' | 'device-desc' | 'priority' | 'severity'>('newest');
   
@@ -602,6 +603,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       dateFilter: filterLabelDate,
       featureFilter: selectedFeatureFilter,
       deviceFilter: selectedDeviceFilter,
+      planFilter: selectedPlanFilterName || undefined,
       searchQuery: searchBugQuery.trim() || undefined
     });
 
@@ -693,6 +695,54 @@ export const Dashboard: React.FC<DashboardProps> = ({
         .filter(f => typeof f === 'string' && f.trim() !== '' && f.toLowerCase() !== 'general' && !f.startsWith('__'))
     )
   ) as string[], [populatedFeatures, testPlans, bugLogs]);
+
+  // Which test plan each bug belongs to. Uses the bug's own planId, falling back to the
+  // plan of the run it was logged in (older bugs may not carry a planId).
+  const bugPlanLookup = useMemo(() => {
+    const runPlan = new Map<string, { planId: string; planName: string }>();
+    mergedRuns.forEach(r => {
+      if (r && r.id) runPlan.set(r.id, { planId: r.planId || '', planName: r.planName || '' });
+    });
+    const planNames = new Map<string, string>();
+    testPlans.forEach(p => { if (p && p.id) planNames.set(p.id, p.name || 'Untitled Plan'); });
+    const resolve = (bug: BugLog): { planId: string; planName: string } => {
+      const fromRun = bug.testRunId ? runPlan.get(bug.testRunId) : undefined;
+      const planId = bug.planId || fromRun?.planId || '';
+      if (!planId) return { planId: '__none__', planName: 'No Test Plan' };
+      const planName = planNames.get(planId) || fromRun?.planName || 'Deleted Plan';
+      return { planId, planName };
+    };
+    return resolve;
+  }, [mergedRuns, testPlans]);
+
+  // Test plan options for the Bugs tab plan filter, with bug counts (sorted by name)
+  const bugPlanOptions = useMemo(() => {
+    const counts = new Map<string, { planId: string; planName: string; count: number }>();
+    testPlans.forEach(p => {
+      if (p && p.id) counts.set(p.id, { planId: p.id, planName: p.name || 'Untitled Plan', count: 0 });
+    });
+    bugLogs.forEach(b => {
+      const { planId, planName } = bugPlanLookup(b);
+      const entry = counts.get(planId) || { planId, planName, count: 0 };
+      entry.count += 1;
+      counts.set(planId, entry);
+    });
+    return Array.from(counts.values()).sort((a, b) =>
+      a.planName.localeCompare(b.planName, undefined, { sensitivity: 'base' })
+    );
+  }, [testPlans, bugLogs, bugPlanLookup]);
+
+  const selectedPlanFilterName = useMemo(() => {
+    if (selectedPlanFilter === 'all') return '';
+    return bugPlanOptions.find(o => o.planId === selectedPlanFilter)?.planName || '';
+  }, [selectedPlanFilter, bugPlanOptions]);
+
+  // If the selected plan disappears (deleted / data reset), fall back to all plans
+  useEffect(() => {
+    if (selectedPlanFilter !== 'all' && !bugPlanOptions.some(o => o.planId === selectedPlanFilter)) {
+      setSelectedPlanFilter('all');
+    }
+  }, [selectedPlanFilter, bugPlanOptions]);
 
   // Today Local Date string (YYYY-MM-DD)
   const todayStr = useMemo(() => getLocalDateStr(new Date()), []);
@@ -1395,6 +1445,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
       };
     });
 
+    if (selectedPlanFilter !== 'all') {
+      list = list.filter(b => bugPlanLookup(b).planId === selectedPlanFilter);
+    }
+
     if (selectedDeviceFilter !== 'all') {
       list = list.filter(
         b => (b.deviceName || 'Unspecified').toLowerCase() === selectedDeviceFilter.toLowerCase()
@@ -1476,7 +1530,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     });
 
     return list;
-  }, [bugLogs, bugCategorizations, selectedDeviceFilter, selectedFeatureFilter, selectedDateFilter, customDateInput, searchBugQuery, sortByDevice]);
+  }, [bugLogs, bugCategorizations, selectedPlanFilter, bugPlanLookup, selectedDeviceFilter, selectedFeatureFilter, selectedDateFilter, customDateInput, searchBugQuery, sortByDevice]);
 
   // Filter plans by search query (memoized and null-safe)
   const filteredPlans = useMemo(() => {
@@ -3711,6 +3765,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 )}
               </div>
 
+              {/* Test Plan Filter (scopes the list, Copy Bugs, and CSV export to one plan) */}
+              <div className="relative">
+                <ListChecks className="w-3.5 h-3.5 text-blue-400 absolute left-3 top-2.5 pointer-events-none" />
+                <select
+                  value={selectedPlanFilter}
+                  onChange={e => setSelectedPlanFilter(e.target.value)}
+                  className={`liquid-glass-input rounded-2xl pl-8 pr-3 py-1.5 text-xs font-semibold focus:outline-none cursor-pointer max-w-[14rem] ${
+                    selectedPlanFilter !== 'all' ? '!border-blue-500/50 text-blue-200' : 'text-slate-200'
+                  }`}
+                  title="Show, copy, and export only the bugs from one test plan"
+                >
+                  <option value="all" className="bg-slate-900">All Test Plans ({bugLogs.length})</option>
+                  {bugPlanOptions.map(opt => (
+                    <option key={opt.planId} value={opt.planId} className="bg-slate-900">
+                      {opt.planName} ({opt.count})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               {/* Copy Filtered Bugs Button (with screenshots for Google Docs / Email) */}
               <button
                 type="button"
@@ -3726,7 +3800,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 ) : (
                   <>
                     <Copy className="w-3.5 h-3.5 text-white" />
-                    <span>Copy Bugs (Google Docs)</span>
+                    <span>{selectedPlanFilterName ? 'Copy Plan Bugs (Google Docs)' : 'Copy Bugs (Google Docs)'}</span>
                   </>
                 )}
               </button>
@@ -3797,6 +3871,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             setSelectedDateFilter('all');
                             setSelectedFeatureFilter('all');
                             setSelectedDeviceFilter('all');
+                            setSelectedPlanFilter('all');
                             setSortByDevice('newest');
                             setCustomDateInput('');
                           }}
@@ -3893,12 +3968,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <div className="pt-2 border-t border-slate-800 space-y-2 text-center">
                       <button
                         type="button"
-                        onClick={() => exportBugsToCSV(processedBugs)}
+                        onClick={() => exportBugsToCSV(processedBugs, { planName: selectedPlanFilterName || undefined, getPlanName: b => bugPlanLookup(b).planName })}
                         className="w-full py-1.5 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5"
                         title="Download CSV file for Excel / Sheets"
                       >
                         <Download className="w-3.5 h-3.5 text-emerald-300" />
-                        <span>Export to CSV File</span>
+                        <span>{selectedPlanFilterName ? 'Export Plan Bugs to CSV' : 'Export to CSV File'}</span>
                       </button>
                       <button
                         type="button"
