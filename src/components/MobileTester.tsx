@@ -1288,6 +1288,11 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       console.warn('save bug error:', err);
     }
 
+    // When a bug is logged on the current step, default the step status away from Pass (Green)
+    if (!completedRunSummary && (selectedStatus === null || selectedStatus === 'green')) {
+      setSelectedStatus(bugSeverity === 'critical' || bugSeverity === 'high' ? 'red' : 'yellow');
+    }
+
     setBugSuccessMessage(`Bug/Note logged at ${formattedTime}`);
     closeBugModal();
   };
