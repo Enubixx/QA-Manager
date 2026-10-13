@@ -48,6 +48,29 @@ export interface CujReportTotals {
   bugCount: number;
 }
 export interface PlanInScope { planId: string; planName: string; runCount: number }
+/** One listed step of a Demo Flow Quality section (a current plan step with >= 1 counted result in scope). */
+export interface DemoFlowStepRow {
+  stepId: string;
+  position: number;     // 1-based index in plan.steps (current order); skipped/hidden entries still use up their index
+  title: string;        // collapse(step.title) || `Step ${position}`
+  greenCount: number;
+  yellowCount: number;  // shown as 🟠 "orange" (tester button "Caution")
+  redCount: number;
+  total: number;        // greenCount + yellowCount + redCount (> 0 for every listed row)
+  greenPct: number;     // pct(greenCount, total)
+}
+/** Demo Flow Quality for one plan: its listed steps in plan order, plus their totals. */
+export interface DemoFlowSection {
+  planId: string;
+  planName: string;     // collapse(plan.name) || 'Unknown plan'
+  runCount: number;     // distinct run ids that contributed >= 1 counted result to a listed row
+  rows: DemoFlowStepRow[];
+  greenCount: number; yellowCount: number; redCount: number; total: number; // sums over rows
+  greenPct: number;     // pct(greenCount, total)
+  allGreenSteps: number; // rows with yellowCount === 0 && redCount === 0
+  orangeSteps: number;   // rows with yellowCount > 0 && redCount === 0
+  redSteps: number;      // rows with redCount > 0
+}
 export interface CujReportData {
   scope: CujReportScope;
   /** 'All plans' | plan name | 'Unknown plan' */
@@ -61,6 +84,8 @@ export interface CujReportData {
   totals: CujReportTotals;
   golden: { runs: GoldenRunRow[]; goldenCount: number; totalCount: number; goldenPct: number };
   plansInScope: PlanInScope[];
+  /** Demo Flow Quality: one section per plan in scope with >= 1 listed step, most runs first (D1-D9) */
+  demoFlow: DemoFlowSection[];
 }
 export interface ReportDateEntry { dateStr: string; stepCount: number; bugCount: number; runCount: number }
 export interface TimelinePoint { dateStr: string; displayDate: string; totalSteps: number; green: number; yellow: number; red: number; bugs: number; scorePct: number }
@@ -275,6 +300,109 @@ const runRecencyMs = (run: TestRun): number => {
 };
 
 // ---------------------------------------------------------------------------
+// Demo flow (D1-D9)
+// ---------------------------------------------------------------------------
+
+/** One-line text: whitespace runs collapsed to one space, trimmed; '' for non-strings. */
+const collapse = (value: unknown): string => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '');
+
+/**
+ * Per-step 🟢/🟠/🔴 counts for each plan in scope, from an existing context: the scope's finished
+ * runs grouped by plan once, then one pass over their recorded results. A result counts for the
+ * current step of its run's plan whose id equals the result key (first occurrence), on the scope's
+ * day; other statuses and deleted steps are ignored. CUJ tags don't matter. Steps without a counted
+ * result are hidden (the rest keep their position), and so are plans without a listed step.
+ */
+const buildDemoFlow = (ctx: CountingContext, scope: CujReportScope): DemoFlowSection[] => {
+  // D1 + D2: runs are already plan-scoped; planById holds the first plan per id
+  const runsByPlan = new Map<string, TestRun[]>();
+  runsInPlanScope(ctx, scope.planId).forEach(run => {
+    let list = runsByPlan.get(run.planId);
+    if (!list) {
+      list = [];
+      runsByPlan.set(run.planId, list);
+    }
+    list.push(run);
+  });
+
+  const sections: DemoFlowSection[] = [];
+  runsByPlan.forEach((runs, planId) => {
+    const plan = ctx.planById.get(planId);
+    if (!plan) return; // unknown plan: no current steps to list
+
+    // D4: current steps by id (first occurrence only); skipped entries still use up their position
+    const rowsById = new Map<string, DemoFlowStepRow>();
+    (plan.steps || []).forEach((step, i) => {
+      const stepId: unknown = step && typeof step === 'object' ? step.id : undefined;
+      if (typeof stepId !== 'string' || stepId === '' || rowsById.has(stepId)) return;
+      rowsById.set(stepId, {
+        stepId,
+        position: i + 1,
+        title: collapse(step.title) || `Step ${i + 1}`,
+        greenCount: 0,
+        yellowCount: 0,
+        redCount: 0,
+        total: 0,
+        greenPct: 0
+      });
+    });
+
+    // D3 + D5: one pass over the recorded results (the day only matters for a single-day scope)
+    const runIds = new Set<string>();
+    runs.forEach(run => {
+      getRecordedResults(run).forEach(([stepId, res]) => {
+        const row = rowsById.get(stepId);
+        const status = res.status;
+        if (!row || (status !== 'green' && status !== 'yellow' && status !== 'red')) return;
+        if (scope.date !== ALL_DATES && !matchesDate(resultDateOf(res, run), scope.date)) return;
+        if (status === 'green') row.greenCount += 1;
+        else if (status === 'yellow') row.yellowCount += 1;
+        else row.redCount += 1;
+        row.total += 1;
+        runIds.add(run.id);
+      });
+    });
+
+    // D7: hide steps with no counted result; rows stay in position order
+    const rows = Array.from(rowsById.values()).filter(row => row.total > 0);
+    if (rows.length === 0) return;
+    rows.forEach(row => {
+      row.greenPct = pct(row.greenCount, row.total);
+    });
+    const greenCount = rows.reduce((sum, r) => sum + r.greenCount, 0);
+    const yellowCount = rows.reduce((sum, r) => sum + r.yellowCount, 0);
+    const redCount = rows.reduce((sum, r) => sum + r.redCount, 0);
+    const total = greenCount + yellowCount + redCount;
+    sections.push({
+      planId: plan.id,
+      planName: collapse(plan.name) || 'Unknown plan',
+      runCount: runIds.size,
+      rows,
+      greenCount,
+      yellowCount,
+      redCount,
+      total,
+      greenPct: pct(greenCount, total),
+      allGreenSteps: rows.filter(r => r.yellowCount === 0 && r.redCount === 0).length,
+      orangeSteps: rows.filter(r => r.yellowCount > 0 && r.redCount === 0).length,
+      redSteps: rows.filter(r => r.redCount > 0).length
+    });
+  });
+
+  // D8: most runs first, then name, then id
+  return sections.sort((a, b) =>
+    (b.runCount - a.runCount) ||
+    a.planName.localeCompare(b.planName) ||
+    (a.planId < b.planId ? -1 : a.planId > b.planId ? 1 : 0)
+  );
+};
+
+/** Standalone (builds its own context); computeCujReport must reuse its existing context instead. */
+export function computeDemoFlow(input: { plans: TestPlan[]; runs: TestRun[]; scope: CujReportScope; firstSeen?: StepFirstSeenIndex }): DemoFlowSection[] {
+  return buildDemoFlow(buildContext(input.plans, input.runs, input.firstSeen), input.scope);
+}
+
+// ---------------------------------------------------------------------------
 // Report
 // ---------------------------------------------------------------------------
 
@@ -443,6 +571,9 @@ export function computeCujReport(input: {
   const scopedPlan = isAllPlans ? undefined : ctx.planById.get(scope.planId);
   const planLabel = isAllPlans ? 'All plans' : (scopedPlan && scopedPlan.name) || 'Unknown plan';
 
+  // Demo flow from the same context (no second buildContext / firstSeen build)
+  const demoFlow = buildDemoFlow(ctx, scope);
+
   return {
     scope,
     planLabel,
@@ -451,7 +582,8 @@ export function computeCujReport(input: {
     untestedCujNames,
     totals,
     golden: { runs: goldenRows, goldenCount, totalCount: goldenRows.length, goldenPct: pct(goldenCount, goldenRows.length) },
-    plansInScope
+    plansInScope,
+    demoFlow
   };
 }
 
@@ -570,6 +702,7 @@ export function getPlanPickerOptions(input: { plans: TestPlan[]; runs: TestRun[]
 /**
  * Plain-text and rich-HTML report for one scope (same layout as the original Dashboard report).
  * `getSummary` returns the one-line issue summary for a CUJ ('' = no summary line).
+ * Ends with one Demo Flow Quality block per `data.demoFlow` section (nothing when there is none).
  */
 export function buildCujReportText(data: CujReportData, opts: {
   dateLabel: string;
@@ -579,6 +712,7 @@ export function buildCujReportText(data: CujReportData, opts: {
 }): { plainText: string; htmlText: string } {
   const { totals, golden, testedMetrics, bugOnlyMetrics, plansInScope, planLabel, scope } = data;
   const { dateLabel, disclaimer, overallSummary, getSummary } = opts;
+  const demoFlow = Array.isArray(data.demoFlow) ? data.demoFlow : [];
 
   const summaries = new Map<CujMetric, string>();
   const summaryOf = (metric: CujMetric): string => {
@@ -603,6 +737,13 @@ export function buildCujReportText(data: CujReportData, opts: {
   const showPlans = scope.planId === ALL_PLANS && plansInScope.length > 0;
   const planRuns = (p: PlanInScope) => `(${p.runCount} ${p.runCount === 1 ? 'run' : 'runs'})`;
   const goldenCount = golden.goldenCount;
+  // Demo Flow step counts: the non-zero colors only, in 🟢 🟠 🔴 order (e.g. "🟢 6 · 🔴 2")
+  const flowParts = (row: DemoFlowStepRow) =>
+    [
+      { emoji: '🟢', count: row.greenCount, color: '#16a34a' },
+      { emoji: '🟠', count: row.yellowCount, color: '#ea580c' },
+      { emoji: '🔴', count: row.redCount, color: '#dc2626' }
+    ].filter(part => part.count > 0);
 
   // Plain text format
   let plainText = `📊 CUJ Report: ${planLabel} (${dateLabel})\n`;
@@ -611,7 +752,7 @@ export function buildCujReportText(data: CujReportData, opts: {
   }
   plainText += `• Coverage: ${totals.testedCujCount} CUJs (${totals.stepsExecuted} steps)\n`;
   plainText += `• Status: 🟢 ${totals.healthyCount} Healthy | 🟡 ${totals.warningCount} Degraded | 🔴 ${totals.criticalCount} Critical (${totals.bugCount} Bugs)\n`;
-  plainText += `• Golden Runs: 🏆 ${goldenCount} (${goldenCount === 1 ? '1 clean run' : `${goldenCount} clean runs`}, ≤1 yellow, 0 reds)\n`;
+  plainText += `• Golden Runs: 🏆 ${goldenCount} (${goldenCount === 1 ? '1 clean run' : `${goldenCount} clean runs`}, ≤1 orange, 0 reds)\n`;
   if (disclaimer && disclaimer.trim()) {
     plainText += `Disclaimer: ${disclaimer.trim()}\n`;
   }
@@ -660,6 +801,18 @@ export function buildCujReportText(data: CujReportData, opts: {
     });
   }
 
+  // Demo Flow Quality, after every other section: one block per plan
+  demoFlow.forEach(section => {
+    // Exactly one blank line before each block
+    plainText = plainText.replace(/\n*$/, '\n\n');
+    plainText += `🎬 Demo Flow Quality: ${section.planName} ${planRuns(section)}\n`;
+    plainText += `• Step results: 🟢 ${section.greenCount} | 🟠 ${section.yellowCount} | 🔴 ${section.redCount} (${section.greenPct}% green)\n`;
+    plainText += `• Steps: ${section.allGreenSteps} all green | ${section.orangeSteps} with orange | ${section.redSteps} with red\n`;
+    section.rows.forEach(row => {
+      plainText += `${row.position}. ${row.title}: ${flowParts(row).map(part => `${part.emoji} ${part.count}`).join(' · ')} (${row.greenPct}%)\n`;
+    });
+  });
+
   // Rich HTML format (for Slack, Teams, Google Docs, Word, Apple Notes, Email)
   const summaryHtml = (summary: string) =>
     `<div style="color: #475569; font-size: 12px; margin-top: 1px; margin-left: 12px;">↳ <i>Summary: ${escapeHtml(summary)}</i></div>`;
@@ -673,7 +826,7 @@ export function buildCujReportText(data: CujReportData, opts: {
   }
   htmlText += `<p style="margin: 0 0 4px 0;">• <b>Coverage</b>: ${totals.testedCujCount} CUJs (${totals.stepsExecuted} steps)</p>`;
   htmlText += `<p style="margin: 0 0 4px 0;">• <b>Status</b>: 🟢 ${totals.healthyCount} Healthy | 🟡 ${totals.warningCount} Degraded | 🔴 ${totals.criticalCount} Critical (${totals.bugCount} Bugs)</p>`;
-  htmlText += `<p style="margin: 0 0 8px 0;">• <b>Golden Runs</b>: 🏆 <b>${goldenCount}</b> <span style="color: #64748b; font-size: 11px;">(≤1 yellow, 0 reds)</span></p>`;
+  htmlText += `<p style="margin: 0 0 8px 0;">• <b>Golden Runs</b>: 🏆 <b>${goldenCount}</b> <span style="color: #64748b; font-size: 11px;">(≤1 orange, 0 reds)</span></p>`;
   if (disclaimer && disclaimer.trim()) {
     htmlText += `<p style="margin: 0 0 8px 0; color: #475569;"><b>Disclaimer:</b> ${disclaimer.trim()}</p>`;
   }
@@ -717,6 +870,21 @@ export function buildCujReportText(data: CujReportData, opts: {
       htmlText += `<div style="margin-bottom: 6px;"><b>${escapeHtml(m.featureName)}</b>: ${bugsLabel(m.bugCount)}${summary ? summaryHtml(summary) : ''}</div>`;
     });
     htmlText += `</div>`;
+  }
+
+  if (demoFlow.length > 0) {
+    htmlText += `<div style="border-top: 1px solid #e2e8f0; margin: 12px 0 0 0;"></div>`;
+    demoFlow.forEach(section => {
+      htmlText += `<p style="margin: 14px 0 4px 0; color: #4f46e5; font-weight: 700;">🎬 Demo Flow Quality: ${escapeHtml(section.planName)} <span style="color: #64748b; font-weight: 400;">${planRuns(section)}</span></p>`;
+      htmlText += `<p style="margin: 0 0 2px 0;">• <b>Step results</b>: 🟢 ${section.greenCount} | 🟠 ${section.yellowCount} | 🔴 ${section.redCount} <b>(${section.greenPct}% green)</b></p>`;
+      htmlText += `<p style="margin: 0 0 6px 0;">• <b>Steps</b>: ${section.allGreenSteps} all green | ${section.orangeSteps} with orange | ${section.redSteps} with red</p>`;
+      htmlText += `<div style="margin: 0 0 8px 0;">`;
+      section.rows.forEach(row => {
+        const countsHtml = flowParts(row).map(part => `<span style="color: ${part.color}; font-weight: 700;">${part.emoji} ${part.count}</span>`).join(' · ');
+        htmlText += `<div style="margin-bottom: 3px;"><b>${row.position}. ${escapeHtml(row.title)}</b>: ${countsHtml} <span style="color: #64748b;">(${row.greenPct}%)</span></div>`;
+      });
+      htmlText += `</div>`;
+    });
   }
 
   htmlText += `</div>`;
