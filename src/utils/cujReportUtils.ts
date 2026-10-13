@@ -757,31 +757,32 @@ export function buildCujReportText(data: CujReportData, opts: {
     plainText += `Disclaimer: ${disclaimer.trim()}\n`;
   }
   if (overallSummary) {
+    plainText = plainText.replace(/\n*$/, '\n\n');
     plainText += `Issue Summary: ${overallSummary}\n`;
   }
-  plainText += `\n`;
 
   if (criticalList.length > 0) {
+    plainText = plainText.replace(/\n*$/, '\n\n');
     plainText += `🔴 Critical CUJs:\n`;
     criticalList.forEach(m => {
       const summary = summaryOf(m);
       plainText += `${m.featureName}: ${m.healthScorePct}% (${stepDetail(m)}${bugText(m)})\n`;
       if (summary) plainText += `↳ Summary: ${summary}\n`;
     });
-    plainText += `\n`;
   }
 
   if (warningList.length > 0) {
+    plainText = plainText.replace(/\n*$/, '\n\n');
     plainText += `🟡 Degraded CUJs:\n`;
     warningList.forEach(m => {
       const summary = summaryOf(m);
       plainText += `${m.featureName}: ${m.healthScorePct}% (${stepDetail(m)}${bugText(m)})\n`;
       if (summary) plainText += `↳ Summary: ${summary}\n`;
     });
-    plainText += `\n`;
   }
 
   if (healthyList.length > 0) {
+    plainText = plainText.replace(/\n*$/, '\n\n');
     plainText += `🟢 Healthy CUJs:\n`;
     healthyList.forEach(m => {
       const summary = summaryOf(m);
@@ -791,8 +792,7 @@ export function buildCujReportText(data: CujReportData, opts: {
   }
 
   if (bugOnlyMetrics.length > 0) {
-    // Exactly one blank line before this section
-    if (!plainText.endsWith('\n\n')) plainText += `\n`;
+    plainText = plainText.replace(/\n*$/, '\n\n');
     plainText += `🐛 Bugs on CUJs without completed steps:\n`;
     bugOnlyMetrics.forEach(m => {
       const summary = summaryOf(m);
@@ -803,7 +803,6 @@ export function buildCujReportText(data: CujReportData, opts: {
 
   // Demo Flow Quality, after every other section: one block per plan
   demoFlow.forEach(section => {
-    // Exactly one blank line before each block
     plainText = plainText.replace(/\n*$/, '\n\n');
     plainText += `🎬 Demo Flow Quality:\n`;
     section.rows.forEach(row => {
@@ -811,30 +810,32 @@ export function buildCujReportText(data: CujReportData, opts: {
     });
   });
 
-  // Rich HTML format (for Slack, Teams, Google Docs, Word, Apple Notes, Email)
+  // Rich HTML format (for Google Chat, Slack, Teams, Google Docs, Word, Apple Notes, Email)
   const summaryHtml = (summary: string) =>
     `<div style="color: #475569; font-size: 12px; margin-top: 1px; margin-left: 12px;">↳ <i>Summary: ${escapeHtml(summary)}</i></div>`;
   const metricRowHtml = (m: CujMetric, summary: string) =>
-    `<div style="margin-bottom: 6px;"><b>${escapeHtml(m.featureName)}</b>: ${m.healthScorePct}% (${stepDetail(m)}${bugText(m)})${summary ? summaryHtml(summary) : ''}</div>`;
+    `<div style="margin-bottom: 4px;"><b>${escapeHtml(m.featureName)}</b>: ${m.healthScorePct}% (${stepDetail(m)}${bugText(m)})${summary ? summaryHtml(summary) : ''}</div>`;
 
   let htmlText = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5;">`;
-  htmlText += `<p style="margin: 0 0 6px 0;">📊 <b>CUJ Report: ${escapeHtml(planLabel)}</b> (${escapeHtml(dateLabel)})</p>`;
+  htmlText += `<p style="margin: 0 0 6px 0; color: #4f46e5; font-weight: 700;">📊 CUJ Report: ${escapeHtml(planLabel)} (${escapeHtml(dateLabel)})</p>`;
   if (showPlans) {
     htmlText += `<p style="margin: 0 0 4px 0;">• <b>Plans</b>: ${plansInScope.map(p => `${escapeHtml(p.planName)} ${planRuns(p)}`).join(', ')}</p>`;
   }
   htmlText += `<p style="margin: 0 0 4px 0;">• <b>Coverage</b>: ${totals.testedCujCount} CUJs (${totals.stepsExecuted} steps)</p>`;
   htmlText += `<p style="margin: 0 0 4px 0;">• <b>Status</b>: 🟢 ${totals.healthyCount} Healthy | 🟡 ${totals.warningCount} Degraded | 🔴 ${totals.criticalCount} Critical (${totals.bugCount} Bugs)</p>`;
-  htmlText += `<p style="margin: 0 0 8px 0;">• <b>Golden Runs</b>: 🏆 <b>${goldenCount}</b> <span style="color: #64748b; font-size: 11px;">(≤1 orange, 0 reds)</span></p>`;
+  htmlText += `<p style="margin: 0;">• <b>Golden Runs</b>: 🏆 <b>${goldenCount}</b> <span style="color: #64748b; font-size: 11px;">(≤1 orange, 0 reds)</span></p>`;
   if (disclaimer && disclaimer.trim()) {
-    htmlText += `<p style="margin: 0 0 8px 0; color: #475569;"><b>Disclaimer:</b> ${disclaimer.trim()}</p>`;
+    htmlText += `<p style="margin: 4px 0 0 0; color: #475569;"><b>Disclaimer:</b> ${disclaimer.trim()}</p>`;
   }
   if (overallSummary) {
-    htmlText += `<div style="background-color: #f8fafc; border-left: 3px solid #6366f1; padding: 8px 12px; margin: 8px 0 12px 0; border-radius: 6px; font-size: 12.5px; color: #1e293b; line-height: 1.55;"><b>Issue Summary:</b> ${escapeHtml(overallSummary)}</div>`;
+    htmlText += `<br>`;
+    htmlText += `<div style="background-color: #f8fafc; border-left: 3px solid #6366f1; padding: 8px 12px; margin: 0; border-radius: 6px; font-size: 12.5px; color: #1e293b; line-height: 1.55;"><b>Issue Summary:</b> ${escapeHtml(overallSummary)}</div>`;
   }
 
   if (criticalList.length > 0) {
-    htmlText += `<p style="margin: 8px 0 4px 0; color: #dc2626; font-weight: 700;">🔴 Critical CUJs:</p>`;
-    htmlText += `<div style="margin: 0 0 8px 0;">`;
+    htmlText += `<br>`;
+    htmlText += `<p style="margin: 0 0 4px 0; color: #dc2626; font-weight: 700;">🔴 Critical CUJs:</p>`;
+    htmlText += `<div style="margin: 0;">`;
     criticalList.forEach(m => {
       htmlText += metricRowHtml(m, summaryOf(m));
     });
@@ -842,8 +843,9 @@ export function buildCujReportText(data: CujReportData, opts: {
   }
 
   if (warningList.length > 0) {
-    htmlText += `<p style="margin: 8px 0 4px 0; color: #d97706; font-weight: 700;">🟡 Degraded CUJs:</p>`;
-    htmlText += `<div style="margin: 0 0 8px 0;">`;
+    htmlText += `<br>`;
+    htmlText += `<p style="margin: 0 0 4px 0; color: #d97706; font-weight: 700;">🟡 Degraded CUJs:</p>`;
+    htmlText += `<div style="margin: 0;">`;
     warningList.forEach(m => {
       htmlText += metricRowHtml(m, summaryOf(m));
     });
@@ -851,8 +853,9 @@ export function buildCujReportText(data: CujReportData, opts: {
   }
 
   if (healthyList.length > 0) {
-    htmlText += `<p style="margin: 8px 0 4px 0; color: #16a34a; font-weight: 700;">🟢 Healthy CUJs:</p>`;
-    htmlText += `<div style="margin: 0 0 4px 0;">`;
+    htmlText += `<br>`;
+    htmlText += `<p style="margin: 0 0 4px 0; color: #16a34a; font-weight: 700;">🟢 Healthy CUJs:</p>`;
+    htmlText += `<div style="margin: 0;">`;
     healthyList.forEach(m => {
       const summary = summaryOf(m);
       htmlText += metricRowHtml(m, showHealthySummary(m, summary) ? summary : '');
@@ -861,20 +864,21 @@ export function buildCujReportText(data: CujReportData, opts: {
   }
 
   if (bugOnlyMetrics.length > 0) {
-    htmlText += `<p style="margin: 8px 0 4px 0; color: #7c3aed; font-weight: 700;">🐛 Bugs on CUJs without completed steps:</p>`;
-    htmlText += `<div style="margin: 0 0 4px 0;">`;
+    htmlText += `<br>`;
+    htmlText += `<p style="margin: 0 0 4px 0; color: #7c3aed; font-weight: 700;">🐛 Bugs on CUJs without completed steps:</p>`;
+    htmlText += `<div style="margin: 0;">`;
     bugOnlyMetrics.forEach(m => {
       const summary = summaryOf(m);
-      htmlText += `<div style="margin-bottom: 6px;"><b>${escapeHtml(m.featureName)}</b>: ${bugsLabel(m.bugCount)}${summary ? summaryHtml(summary) : ''}</div>`;
+      htmlText += `<div style="margin-bottom: 4px;"><b>${escapeHtml(m.featureName)}</b>: ${bugsLabel(m.bugCount)}${summary ? summaryHtml(summary) : ''}</div>`;
     });
     htmlText += `</div>`;
   }
 
   if (demoFlow.length > 0) {
-    htmlText += `<div style="border-top: 1px solid #e2e8f0; margin: 12px 0 0 0;"></div>`;
     demoFlow.forEach(section => {
-      htmlText += `<p style="margin: 14px 0 6px 0; color: #4f46e5; font-weight: 700;">🎬 Demo Flow Quality:</p>`;
-      htmlText += `<div style="margin: 0 0 8px 0;">`;
+      htmlText += `<br>`;
+      htmlText += `<p style="margin: 0 0 4px 0; color: #4f46e5; font-weight: 700;">🎬 Demo Flow Quality:</p>`;
+      htmlText += `<div style="margin: 0;">`;
       section.rows.forEach(row => {
         const countsHtml = flowParts(row).map(part => `<span style="color: ${part.color}; font-weight: 700;">${part.count}</span>`).join(' · ');
         htmlText += `<div style="margin-bottom: 3px;"><b>${row.position}. ${escapeHtml(row.title)}</b>: ${countsHtml} <span style="color: #64748b;">(${row.greenPct}%)</span></div>`;
