@@ -1409,7 +1409,7 @@ export function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100 relative">
+    <div className="min-h-screen flex flex-col bg-[#0b0f19] text-slate-100 relative">
       
       {/* Liquid Ambient Glowing Background Orbs */}
       <div className="liquid-ambient-bg">

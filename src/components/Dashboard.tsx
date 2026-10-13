@@ -1475,12 +1475,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       {/* Subagent Execution Toast / Banner */}
       {subagentToast && (
-        <div className="bg-gradient-to-r from-emerald-600/30 via-teal-600/30 to-indigo-600/30 border border-emerald-400/50 p-4 rounded-3xl backdrop-blur-xl flex items-center justify-between text-xs font-bold text-emerald-200 animate-in fade-in slide-in-from-top-2 duration-300 shadow-xl shadow-emerald-500/20">
+        <div className="bg-[#111827] border border-blue-500/40 p-4 rounded-3xl backdrop-blur-xl flex items-center justify-between text-xs font-semibold text-slate-100 animate-in fade-in slide-in-from-top-2 duration-300 shadow-lg">
           <div className="flex items-center gap-2.5">
-            <Sparkles className="w-4 h-4 text-emerald-400 flex-shrink-0 animate-pulse" />
+            <Sparkles className="w-4 h-4 text-blue-400 flex-shrink-0" />
             <span>{subagentToast}</span>
           </div>
-          <button onClick={() => setSubagentToast(null)} className="text-emerald-400 hover:text-white p-1">
+          <button onClick={() => setSubagentToast(null)} className="text-slate-400 hover:text-white p-1">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -1494,24 +1494,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
         {/* Card 1: Overview / Test Plans */}
         <div
           onClick={() => setActiveTab('overview')}
-          className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-300 ${
+          className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-200 ${
             activeTab === 'overview'
-              ? 'bg-indigo-500/25 border-indigo-400/80 ring-2 ring-indigo-400/60 shadow-lg scale-[1.02]'
-              : 'opacity-75 hover:opacity-100 hover:scale-[1.01] hover:border-white/30'
+              ? '!bg-[#162033] !border-blue-500 ring-1 ring-blue-500/30 shadow-md'
+              : 'hover:border-slate-700'
           }`}
           title="Click to view Configured Test Plans & Active Runs"
         >
           <div>
-            <div className="text-[11px] font-extrabold text-slate-300 flex items-center gap-1.5">
+            <div className={`text-xs font-semibold ${activeTab === 'overview' ? 'text-slate-200' : 'text-slate-400'} flex items-center gap-1.5`}>
               <span>Test Plans</span>
-              {activeTab === 'overview' && <span className="w-2 h-2 rounded-full bg-indigo-400 animate-pulse"></span>}
+              {activeTab === 'overview' && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
             </div>
-            <div className="text-xl font-black text-white mt-1 font-mono tracking-tight">{totalPlans}</div>
+            <div className="text-xl font-bold text-slate-50 mt-1 font-mono tracking-tight">{totalPlans}</div>
           </div>
-          <div className={`p-2.5 rounded-xl border transition-all ${
+          <div className={`p-2.5 rounded-2xl border transition-all ${
             activeTab === 'overview'
-              ? 'bg-indigo-500 text-white border-indigo-300 shadow-md shadow-indigo-500/50'
-              : 'bg-indigo-500/20 text-indigo-300 border-indigo-400/30 backdrop-blur-md'
+              ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
+              : 'bg-slate-800/90 text-slate-400 border-slate-700/80'
           }`}>
             <ListChecks className="w-4 h-4" />
           </div>
@@ -1520,24 +1520,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
         {/* Card 2: Devices & Quotas */}
         <div
           onClick={() => setActiveTab('devices')}
-          className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-300 ${
+          className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-200 ${
             activeTab === 'devices'
-              ? 'bg-purple-500/25 border-purple-400/80 ring-2 ring-purple-400/60 shadow-lg scale-[1.02]'
-              : 'opacity-75 hover:opacity-100 hover:scale-[1.01] hover:border-white/30'
+              ? '!bg-[#162033] !border-blue-500 ring-1 ring-blue-500/30 shadow-md'
+              : 'hover:border-slate-700'
           }`}
           title="Click to manage Devices & Daily Test Quotas"
         >
           <div>
-            <div className="text-[11px] font-extrabold text-slate-300 flex items-center gap-1.5">
+            <div className={`text-xs font-semibold ${activeTab === 'devices' ? 'text-slate-200' : 'text-slate-400'} flex items-center gap-1.5`}>
               <span>Devices & Quotas</span>
-              {activeTab === 'devices' && <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse"></span>}
+              {activeTab === 'devices' && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
             </div>
-            <div className="text-xl font-black text-purple-300 mt-1 font-mono tracking-tight">{devices.length} Devices</div>
+            <div className="text-xl font-bold text-slate-50 mt-1 font-mono tracking-tight">{devices.length} Devices</div>
           </div>
-          <div className={`p-2.5 rounded-xl border transition-all ${
+          <div className={`p-2.5 rounded-2xl border transition-all ${
             activeTab === 'devices'
-              ? 'bg-purple-500 text-white border-purple-300 shadow-md shadow-purple-500/50'
-              : 'bg-purple-500/20 text-purple-300 border-purple-400/30 backdrop-blur-md'
+              ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
+              : 'bg-slate-800/90 text-slate-400 border-slate-700/80'
           }`}>
             <Smartphone className="w-4 h-4" />
           </div>
@@ -1546,24 +1546,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
         {/* Card 3: QA Testers */}
         <div
           onClick={() => setActiveTab('testers')}
-          className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-300 ${
+          className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-200 ${
             activeTab === 'testers'
-              ? 'bg-emerald-500/25 border-emerald-400/80 ring-2 ring-emerald-400/60 shadow-lg scale-[1.02]'
-              : 'opacity-75 hover:opacity-100 hover:scale-[1.01] hover:border-white/30'
+              ? '!bg-[#162033] !border-blue-500 ring-1 ring-blue-500/30 shadow-md'
+              : 'hover:border-slate-700'
           }`}
           title="Click to view & create QA Tester Profiles"
         >
           <div>
-            <div className="text-[11px] font-extrabold text-slate-300 flex items-center gap-1.5">
+            <div className={`text-xs font-semibold ${activeTab === 'testers' ? 'text-slate-200' : 'text-slate-400'} flex items-center gap-1.5`}>
               <span>QA Testers</span>
-              {activeTab === 'testers' && <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>}
+              {activeTab === 'testers' && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
             </div>
-            <div className="text-xl font-black text-emerald-300 mt-1 font-mono tracking-tight">{testers.length} Testers</div>
+            <div className="text-xl font-bold text-slate-50 mt-1 font-mono tracking-tight">{testers.length} Testers</div>
           </div>
-          <div className={`p-2.5 rounded-xl border transition-all ${
+          <div className={`p-2.5 rounded-2xl border transition-all ${
             activeTab === 'testers'
-              ? 'bg-emerald-500 text-white border-emerald-300 shadow-md shadow-emerald-500/50'
-              : 'bg-emerald-500/20 text-emerald-300 border-emerald-400/30 backdrop-blur-md'
+              ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
+              : 'bg-slate-800/90 text-slate-400 border-slate-700/80'
           }`}>
             <UserCheck className="w-4 h-4" />
           </div>
@@ -1572,30 +1572,29 @@ export const Dashboard: React.FC<DashboardProps> = ({
         {/* Card 4: CUJ Quality Report */}
         <div
           onClick={() => setActiveTab('features')}
-          className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-300 ${
+          className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-200 ${
             activeTab === 'features'
-              ? 'bg-amber-500/25 border-amber-400/80 ring-2 ring-amber-400/60 shadow-lg scale-[1.02]'
-              : 'opacity-75 hover:opacity-100 hover:scale-[1.01] hover:border-white/30'
+              ? '!bg-[#162033] !border-blue-500 ring-1 ring-blue-500/30 shadow-md'
+              : 'hover:border-slate-700'
           }`}
           title="Click to view CUJ Quality Report"
         >
           <div>
-            <div className="text-[11px] font-extrabold text-slate-300 flex items-center gap-1.5">
+            <div className={`text-xs font-semibold ${activeTab === 'features' ? 'text-slate-200' : 'text-slate-400'} flex items-center gap-1.5`}>
               <span>CUJ Report</span>
-              {activeTab === 'features' && <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>}
+              {activeTab === 'features' && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
             </div>
-            <div className="text-xl font-black text-amber-300 mt-1 font-mono tracking-tight">{featureMetricsList.length} CUJs</div>
+            <div className="text-xl font-bold text-slate-50 mt-1 font-mono tracking-tight">{featureMetricsList.length} CUJs</div>
             {goldenRunsAnalysis.totalCount > 0 && (
-              <div className="text-[10px] text-amber-300 font-mono font-bold mt-0.5 flex items-center gap-1">
-                <span>🏆</span>
-                <span>{goldenRunsAnalysis.goldenCount} Golden</span>
+              <div className="text-[11px] text-slate-400 font-mono font-medium mt-0.5">
+                {goldenRunsAnalysis.goldenCount} Golden
               </div>
             )}
           </div>
-          <div className={`p-2.5 rounded-xl border transition-all ${
+          <div className={`p-2.5 rounded-2xl border transition-all ${
             activeTab === 'features'
-              ? 'bg-amber-500 text-white border-amber-300 shadow-md shadow-amber-500/50'
-              : 'bg-amber-500/20 text-amber-300 border-amber-400/30 backdrop-blur-md'
+              ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
+              : 'bg-slate-800/90 text-slate-400 border-slate-700/80'
           }`}>
             <Activity className="w-4 h-4" />
           </div>
@@ -1604,24 +1603,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
         {/* Card 5: Bugs Feed */}
         <div
           onClick={() => setActiveTab('bugs')}
-          className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-300 ${
+          className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-200 ${
             activeTab === 'bugs'
-              ? 'bg-rose-500/25 border-rose-400/80 ring-2 ring-rose-400/60 shadow-lg scale-[1.02]'
-              : 'opacity-75 hover:opacity-100 hover:scale-[1.01] hover:border-white/30'
+              ? '!bg-[#162033] !border-blue-500 ring-1 ring-blue-500/30 shadow-md'
+              : 'hover:border-slate-700'
           }`}
           title="Click to view Reported Bugs"
         >
           <div>
-            <div className="text-[11px] font-extrabold text-slate-300 flex items-center gap-1.5">
+            <div className={`text-xs font-semibold ${activeTab === 'bugs' ? 'text-slate-200' : 'text-slate-400'} flex items-center gap-1.5`}>
               <span>Bugs Feed</span>
-              {activeTab === 'bugs' && <span className="w-2 h-2 rounded-full bg-rose-400 animate-pulse"></span>}
+              {activeTab === 'bugs' && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
             </div>
-            <div className="text-xl font-black text-rose-300 mt-1 font-mono tracking-tight">{totalBugs} Bugs</div>
+            <div className="text-xl font-bold text-slate-50 mt-1 font-mono tracking-tight">{totalBugs} Bugs</div>
           </div>
-          <div className={`p-2.5 rounded-xl border transition-all ${
+          <div className={`p-2.5 rounded-2xl border transition-all ${
             activeTab === 'bugs'
-              ? 'bg-rose-500 text-white border-rose-300 shadow-md shadow-rose-500/50'
-              : 'bg-rose-500/20 text-rose-300 border-rose-400/30 backdrop-blur-md'
+              ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
+              : 'bg-slate-800/90 text-slate-400 border-slate-700/80'
           }`}>
             <Bug className="w-4 h-4" />
           </div>
@@ -1634,23 +1633,23 @@ export const Dashboard: React.FC<DashboardProps> = ({
         <div className="space-y-8">
           
           {/* Fleet Daily Quota Overview Badge Banner */}
-          <div className="liquid-glass-panel rounded-3xl p-6 bg-gradient-to-r from-purple-950/70 via-slate-900/80 to-indigo-950/70 border-purple-500/20 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div className="liquid-glass-panel rounded-3xl p-6 bg-[#111827] border-slate-800 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-6">
             <div className="space-y-1">
               <div className="flex items-center gap-2">
-                <Smartphone className="w-5 h-5 text-purple-400" />
-                <h3 className="text-lg font-black text-white tracking-tight">Fleet Daily Quota Progress</h3>
+                <Smartphone className="w-5 h-5 text-blue-400" />
+                <h3 className="text-lg font-bold text-slate-50 tracking-tight">Fleet Daily Quota Progress</h3>
               </div>
-              <p className="text-xs text-slate-300">
+              <p className="text-xs text-slate-400">
                 Preset device targets enforce daily test run quotas on mobile devices.
               </p>
             </div>
 
             <div className="flex items-center gap-4 flex-wrap justify-end">
               <div className="text-right">
-                <div className="text-2xl font-black text-purple-300 font-mono">
+                <div className="text-2xl font-bold text-slate-50 font-mono">
                   {fleetProgress.totalCompleted} / {fleetProgress.totalTarget} <span className="text-xs text-slate-400 font-sans font-normal">runs completed</span>
                 </div>
-                <div className="text-xs font-bold text-slate-400">{fleetProgress.pct}% Fleet Goal Reached</div>
+                <div className="text-xs font-semibold text-slate-400">{fleetProgress.pct}% Fleet Goal Reached</div>
               </div>
               
               <button
@@ -1660,9 +1659,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     if (onResetActiveDay) onResetActiveDay(getLocalDateStr(new Date()));
                   }
                 }}
-                className="px-3.5 py-2 bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 border border-purple-400/40 rounded-2xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
+                className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-2xl text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
               >
-                <RefreshCw className="w-3.5 h-3.5 text-purple-400" />
+                <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
                 <span>Reset Counters</span>
               </button>
 
@@ -1674,7 +1673,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       onResetDailyQuotas();
                     }
                   }}
-                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-2xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
+                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-2xl text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
                   title="Clear all device assignments to No Plan Assigned"
                 >
                   <Layers className="w-3.5 h-3.5 text-slate-400" />
@@ -1683,12 +1682,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
               )}
 
               {onUpdateMinAppVersion && (
-                <div className="flex items-center gap-1.5 bg-slate-900/90 border border-slate-700/70 px-3 py-1.5 rounded-2xl text-xs">
+                <div className="flex items-center gap-1.5 bg-[#0f172a] border border-slate-700/80 px-3 py-1.5 rounded-2xl text-xs">
                   <span className="text-[11px] text-slate-400 font-semibold">Required APK:</span>
                   <select
                     value={minAppVersion || 1}
                     onChange={(e) => onUpdateMinAppVersion(parseInt(e.target.value, 10))}
-                    className="bg-purple-950/80 text-purple-300 font-bold border border-purple-500/40 rounded-lg px-2 py-0.5 text-xs focus:outline-none cursor-pointer"
+                    className="bg-slate-800 text-blue-300 font-bold border border-slate-700 rounded-lg px-2 py-0.5 text-xs focus:outline-none cursor-pointer"
                   >
                     <option value={1}>v1.0 (Allow All)</option>
                     <option value={2}>v2.0+ (Enforce v2)</option>
@@ -1700,20 +1699,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
           <div className="space-y-6">
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-extrabold text-white flex items-center gap-2">
-                <Smartphone className="w-4 h-4 text-purple-400" />
+              <h3 className="text-base font-bold text-slate-50 flex items-center gap-2">
+                <Smartphone className="w-4 h-4 text-blue-400" />
                 <span>Registered Devices ({devices.length})</span>
               </h3>
             </div>
 
             {/* Add Device Form */}
-            <div className="liquid-glass-card rounded-2xl p-4 border border-white/10 flex items-center gap-3">
+            <div className="liquid-glass-card rounded-2xl p-4 border border-slate-800 flex items-center gap-3">
               <input
                 type="text"
                 placeholder="Enter device model or name (e.g. Google Pixel 8)..."
                 value={newDeviceName}
                 onChange={e => setNewDeviceName(e.target.value)}
-                className="flex-1 bg-slate-950/80 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 font-medium"
+                className="flex-1 bg-[#0f172a] border border-slate-700/80 rounded-2xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-medium"
               />
               <button
                 type="button"
@@ -1728,7 +1727,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   if (onSaveDevice) onSaveDevice(newDev);
                   setNewDeviceName('');
                 }}
-                className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md active:scale-95"
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white border border-blue-500 rounded-2xl text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm active:scale-95"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Add Device</span>
@@ -1758,19 +1757,19 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   const inUseTesterName = activeRunForDevice?.testerName || device.activeTesterName || 'Tester';
 
                   return (
-                    <div key={device.id} className="liquid-glass-panel rounded-2xl p-5 border border-white/10 space-y-4 bg-slate-900/60 shadow-lg">
+                    <div key={device.id} className="liquid-glass-panel rounded-2xl p-5 border border-slate-800 space-y-4 bg-[#111827] shadow-lg">
                       
                       {/* Device Card Header */}
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
-                          <div className="p-2.5 rounded-xl bg-purple-500/20 text-purple-300 border border-purple-400/30">
+                          <div className="p-2.5 rounded-2xl bg-slate-800/90 text-blue-400 border border-slate-700/80">
                             <Smartphone className="w-5 h-5" />
                           </div>
                           <div>
                             <div className="flex items-center gap-2">
-                              <h4 className="text-sm font-extrabold text-white">{device.name}</h4>
+                              <h4 className="text-sm font-bold text-slate-50">{device.name}</h4>
                               {isInUse ? (
-                                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold flex items-center gap-1.5 ${
+                                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1.5 ${
                                   activeTesterMap.get(inUseTesterName.toLowerCase().trim())?.isAway
                                     ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                                     : 'bg-rose-500/20 text-rose-300 border border-rose-500/30 animate-pulse'
@@ -1791,7 +1790,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   </span>
                                 </span>
                               ) : !device.isReady && assignedQuota && doneToday >= targetRuns ? (
-                                <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-extrabold flex items-center gap-1">
+                                <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-bold flex items-center gap-1">
                                   <XCircle className="w-3 h-3 text-amber-400" />
                                   <span>Quota Met</span>
                                 </span>
@@ -1811,7 +1810,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               const updated: DeviceProfile = { ...device, isReady: !device.isReady };
                               if (onSaveDevice) onSaveDevice(updated);
                             }}
-                            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 border transition-all ${
+                            className={`px-3 py-1.5 rounded-2xl text-xs font-bold flex items-center gap-1.5 border transition-all ${
                               device.isReady
                                 ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
                                 : 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
@@ -1847,13 +1846,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       </div>
 
                       {/* Dedicated Single Test Plan Configuration */}
-                      <div className="bg-slate-950/70 rounded-2xl p-4 border border-slate-800 space-y-3.5">
+                      <div className="bg-[#0f172a] rounded-2xl p-4 border border-slate-800 space-y-3.5">
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-                            <Layers className="w-3.5 h-3.5 text-purple-400" />
+                            <Layers className="w-3.5 h-3.5 text-blue-400" />
                             <span>Configured Test Plan</span>
                           </span>
-                          <span className="text-[10px] text-purple-400 font-mono">1 Plan Per Device</span>
+                          <span className="text-[10px] text-slate-400 font-mono">1 Plan Per Device</span>
                         </div>
 
                         {/* Plan Selector */}
@@ -1872,7 +1871,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 if (onSaveDevice) onSaveDevice({ ...device, quotas: [{ planId: newPlanId, targetRunsPerDay: currentTarget }] });
                               }
                             }}
-                            className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none focus:border-purple-500 cursor-pointer shadow-inner"
+                            className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none focus:border-blue-500 cursor-pointer shadow-inner"
                           >
                             <option value="">-- No Test Plan Assigned --</option>
                             {testPlans.map(p => (
@@ -1903,7 +1902,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                       });
                                     }
                                   }}
-                                  className="w-14 bg-slate-900 border border-slate-700 text-xs text-purple-300 font-mono font-bold rounded-lg px-2 py-1 text-center focus:outline-none focus:border-purple-500"
+                                  className="w-14 bg-slate-900 border border-slate-700 text-xs text-blue-300 font-mono font-bold rounded-lg px-2 py-1 text-center focus:outline-none focus:border-blue-500"
                                   title="Edit daily quota"
                                 />
                                 <span className="text-[11px] text-slate-500 font-mono">runs/day</span>
@@ -1912,24 +1911,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               <div className="flex items-center gap-1.5 font-mono text-xs">
                                 <span className="text-slate-300 font-bold">{doneToday} / {targetRuns}</span>
                                 {remaining > 0 ? (
-                                  <span className="text-purple-400 font-sans font-extrabold text-[11px]">({remaining} left today ⚡)</span>
+                                  <span className="text-blue-400 font-sans font-bold text-[11px]">({remaining} left today)</span>
                                 ) : (
-                                  <span className="text-emerald-400 font-sans font-extrabold text-[11px]">(Target Reached ✅)</span>
+                                  <span className="text-emerald-400 font-sans font-bold text-[11px]">(Target Reached)</span>
                                 )}
                               </div>
                             </div>
 
                             {/* Progress Bar */}
-                            <div className="w-full h-2 bg-slate-950 rounded-full overflow-hidden border border-white/5">
+                            <div className="w-full h-2 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
                               <div
-                                className={`h-full transition-all duration-500 ${remaining === 0 ? 'bg-emerald-400' : 'bg-gradient-to-r from-purple-500 to-indigo-500'}`}
+                                className={`h-full transition-all duration-500 ${remaining === 0 ? 'bg-emerald-500' : 'bg-blue-600'}`}
                                 style={{ width: `${pct}%` }}
                               />
                             </div>
                           </div>
                         ) : (
                           <div className="pt-2 border-t border-slate-800/80 text-[11px] text-amber-300/80 font-medium flex items-center gap-1.5">
-                            <span>⚠️ Assign a test plan above to make this device active for testing on the mobile app.</span>
+                            <span>Assign a test plan above to make this device active for testing on the mobile app.</span>
                           </div>
                         )}
                       </div>
@@ -1949,18 +1948,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
         <div className="space-y-4">
           
           {/* Unified Compact Header, Filter & Date Control Bar */}
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 liquid-glass-panel rounded-2xl p-3.5 shadow-xl border border-white/10">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 liquid-glass-panel rounded-2xl p-3.5 shadow-xl border border-slate-800">
             {/* Left: Title + Active Badge + View Toggle */}
             <div className="flex flex-wrap items-center gap-3">
               <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                <div className="p-2 rounded-xl bg-slate-800/90 border border-slate-700/80 text-blue-400">
                   <UserCheck className="w-4 h-4" />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <h2 className="text-sm font-black text-white tracking-tight">Testers & Performance</h2>
+                    <h2 className="text-sm font-bold text-slate-50 tracking-tight">Testers & Performance</h2>
                     {activeTesterMap.size > 0 && (
-                      <span className="text-[10px] font-extrabold text-emerald-400 font-mono flex items-center gap-1 bg-emerald-500/15 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                      <span className="text-[10px] font-bold text-emerald-400 font-mono flex items-center gap-1 bg-emerald-500/15 px-2 py-0.5 rounded-full border border-emerald-500/30">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
                         {activeTesterMap.size} Active
                       </span>
@@ -1973,13 +1972,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </div>
 
               {/* All / Active Toggle Pills */}
-              <div className="flex items-center bg-slate-950/90 border border-slate-800 rounded-xl p-0.5 text-[11px]">
+              <div className="flex items-center bg-[#0f172a] border border-slate-800 rounded-xl p-0.5 text-[11px]">
                 <button
                   type="button"
                   onClick={() => setTesterViewMode('all')}
-                  className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer ${
+                  className={`px-2.5 py-1 rounded-lg font-semibold transition cursor-pointer ${
                     testerViewMode === 'all'
-                      ? 'bg-emerald-600 text-white shadow-sm'
+                      ? 'bg-blue-600 text-white shadow-sm'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
@@ -1988,13 +1987,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <button
                   type="button"
                   onClick={() => setTesterViewMode('active')}
-                  className={`px-2.5 py-1 rounded-lg font-bold transition flex items-center gap-1 cursor-pointer ${
+                  className={`px-2.5 py-1 rounded-lg font-semibold transition flex items-center gap-1 cursor-pointer ${
                     testerViewMode === 'active'
-                      ? 'bg-emerald-600 text-white shadow-sm'
+                      ? 'bg-blue-600 text-white shadow-sm'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
                   <span>Active ({activeTesterMap.size})</span>
                 </button>
               </div>
@@ -2010,7 +2009,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   placeholder="Search tester..."
                   value={searchTesterQuery}
                   onChange={e => setSearchTesterQuery(e.target.value)}
-                  className="w-full bg-slate-950/90 border border-slate-800 rounded-xl pl-7 pr-6 py-1 text-[11px] text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                  className="w-full bg-[#0f172a] border border-slate-700/80 rounded-xl pl-7 pr-6 py-1 text-[11px] text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
                 />
                 {searchTesterQuery && (
                   <button
@@ -2023,14 +2022,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </div>
 
               {/* Date Selector */}
-              <div className="flex items-center gap-1.5 bg-slate-950/90 border border-slate-800 rounded-xl px-2.5 py-1">
-                <Calendar className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+              <div className="flex items-center gap-1.5 bg-[#0f172a] border border-slate-700/80 rounded-xl px-2.5 py-1">
+                <Calendar className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
                 <span className="text-[10px] font-bold text-slate-400 uppercase">Date:</span>
                 <select
                   value={selectedQaDate}
                   onChange={e => setSelectedQaDate(e.target.value)}
-                  style={{ backgroundColor: '#0b101d', color: '#e0e7ff', WebkitAppearance: 'none' }}
-                  className="bg-slate-950 text-indigo-200 border border-slate-800 rounded-lg px-2 py-0.5 text-[11px] font-bold focus:outline-none cursor-pointer"
+                  style={{ backgroundColor: '#0f172a', color: '#f1f5f9', WebkitAppearance: 'none' }}
+                  className="bg-[#0f172a] text-slate-100 border border-slate-800 rounded-lg px-2 py-0.5 text-[11px] font-semibold focus:outline-none cursor-pointer"
                 >
                   <option value={todayStr}>Today ({todayStr})</option>
                   {allQaDatesList.filter(d => d !== todayStr).map(dateStr => (
@@ -2046,7 +2045,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <button
                 type="button"
                 onClick={() => setShowCreateTesterForm(prev => !prev)}
-                className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-[11px] font-extrabold flex items-center gap-1 transition-all shadow-sm active:scale-95 cursor-pointer"
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white border border-blue-500 rounded-xl text-[11px] font-semibold flex items-center gap-1 transition-all shadow-sm active:scale-95 cursor-pointer"
               >
                 <Plus className={`w-3.5 h-3.5 transition-transform duration-200 ${showCreateTesterForm ? 'rotate-45' : ''}`} />
                 <span>{showCreateTesterForm ? 'Close' : 'New Tester'}</span>
@@ -2056,10 +2055,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
           {/* Compact Collapsible Create Tester Profile Form */}
           {showCreateTesterForm && (
-            <div className="liquid-glass-panel rounded-2xl p-4 border border-emerald-500/30 bg-slate-900/90 shadow-xl space-y-3 animate-in fade-in zoom-in-95 duration-200">
-              <div className="flex items-center justify-between pb-2 border-b border-white/10">
-                <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
-                  <User className="w-3.5 h-3.5 text-emerald-400" />
+            <div className="liquid-glass-panel rounded-2xl p-4 border border-slate-700 bg-[#111827] shadow-xl space-y-3 animate-in fade-in zoom-in-95 duration-200">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                <h3 className="text-xs font-bold text-slate-50 flex items-center gap-1.5">
+                  <User className="w-3.5 h-3.5 text-blue-400" />
                   <span>Create New QA Tester Profile</span>
                 </h3>
                 <button
@@ -2079,7 +2078,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     placeholder="e.g. Kevin Huang..."
                     value={newPersonName}
                     onChange={e => setNewPersonName(e.target.value)}
-                    className="w-full bg-slate-950/90 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
+                    className="w-full bg-[#0f172a] border border-slate-700/80 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-medium"
                   />
                 </div>
 
@@ -2090,7 +2089,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     placeholder="e.g. Lead QA / Mobile Specialist..."
                     value={newPersonRole}
                     onChange={e => setNewPersonRole(e.target.value)}
-                    className="w-full bg-slate-950/90 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
+                    className="w-full bg-[#0f172a] border border-slate-700/80 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-medium"
                   />
                 </div>
 
@@ -2108,7 +2107,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       setNewPersonName('');
                       setShowCreateTesterForm(false);
                     }}
-                    className="w-full sm:w-auto px-4 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
+                    className="w-full sm:w-auto px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white border border-blue-500 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>Save Profile</span>
@@ -2131,7 +2130,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
             if (displayed.length === 0) {
               return (
-                <div className="liquid-glass-panel rounded-2xl p-8 text-center space-y-2 border border-white/10">
+                <div className="liquid-glass-panel rounded-2xl p-8 text-center space-y-2 border border-slate-800">
                   <UserCheck className="w-6 h-6 text-slate-500 mx-auto" />
                   <h4 className="text-sm font-bold text-white">
                     {testerViewMode === 'active' ? 'No Testers Currently Active' : 'No Testers Found'}
@@ -2185,23 +2184,23 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       key={tester.id || tester.name}
                       className={`liquid-glass-panel rounded-2xl p-3.5 border transition-all duration-200 shadow-lg ${
                         isActive
-                          ? 'border-emerald-500/40 bg-slate-900/95 ring-1 ring-emerald-500/25'
-                          : 'border-white/10 bg-slate-900/65 hover:border-white/15'
+                          ? 'border-blue-500/40 bg-[#162033] ring-1 ring-blue-500/25'
+                          : 'border-slate-800 bg-[#111827] hover:border-slate-700'
                       }`}
                     >
                       {/* Compact Card Row 1: Avatar + Name/Role + Live Status Badge & Actions */}
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2.5 min-w-0">
-                          <div className={`w-8 h-8 rounded-xl font-black text-xs flex items-center justify-center border flex-shrink-0 ${
+                          <div className={`w-8 h-8 rounded-xl font-bold text-xs flex items-center justify-center border flex-shrink-0 ${
                             isActive
-                              ? 'bg-gradient-to-br from-emerald-500 to-teal-600 text-white border-emerald-400/50 shadow-sm'
+                              ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
                               : 'bg-slate-800 text-slate-200 border-slate-700'
                           }`}>
                             {tester.name.charAt(0).toUpperCase()}
                           </div>
                           <div className="truncate">
                             <div className="flex items-center gap-1.5">
-                              <h4 className="text-xs font-black text-white truncate">{tester.name}</h4>
+                              <h4 className="text-xs font-bold text-slate-50 truncate">{tester.name}</h4>
                               <span className="text-[10px] text-slate-400 font-medium truncate hidden sm:inline">• {tester.role || 'QA'}</span>
                             </div>
                             {/* Active or Idle Status Line */}
@@ -2222,7 +2221,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 <span className="text-[10px] font-medium text-slate-500">Idle</span>
                               )}
                               {isActive && activeInfo?.startedAt && (
-                                <span className="text-[10px] font-mono font-bold text-indigo-300 bg-indigo-950/60 px-1.5 py-0.2 rounded border border-indigo-500/30">
+                                <span className="text-[10px] font-mono font-bold text-blue-300 bg-blue-950/60 px-1.5 py-0.2 rounded border border-blue-500/30">
                                   {formatOngoingDuration(activeInfo.startedAt)}
                                 </span>
                               )}
@@ -2240,7 +2239,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   onBootTester(activeInfo?.runId || '', activeInfo?.deviceId, tester.name, activeInfo?.deviceName);
                                 }
                               }}
-                              className="px-2 py-1 rounded-lg text-[10px] font-extrabold bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 flex items-center gap-1 transition cursor-pointer"
+                              className="px-2 py-1 rounded-lg text-[10px] font-bold bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 flex items-center gap-1 transition cursor-pointer"
                               title={`Remote boot ${tester.name} off session`}
                             >
                               <Trash2 className="w-2.5 h-2.5 text-rose-400" />
@@ -2273,19 +2272,19 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                       {/* Compact Live Active Test Walkthrough Strip (Only when actively testing) */}
                       {isActive && activeInfo && (
-                        <div className="mt-2.5 bg-slate-950/80 border border-emerald-500/30 rounded-xl p-2 space-y-1.5">
+                        <div className="mt-2.5 bg-[#0f172a] border border-slate-800 rounded-xl p-2 space-y-1.5">
                           <div className="flex items-center justify-between text-[10px] gap-2">
-                            <span className="text-emerald-300 font-bold truncate flex items-center gap-1">
-                              <Layers className="w-3 h-3 text-emerald-400 shrink-0" />
+                            <span className="text-blue-300 font-bold truncate flex items-center gap-1">
+                              <Layers className="w-3 h-3 text-blue-400 shrink-0" />
                               <span className="truncate">{activeInfo.planName || 'Walkthrough'}</span>
                             </span>
-                            <span className="font-mono font-extrabold text-slate-300 shrink-0">
+                            <span className="font-mono font-bold text-slate-300 shrink-0">
                               Step {activeInfo.currentStepIndex}/{activeInfo.totalSteps} ({activeInfo.progressPct || 0}%)
                             </span>
                           </div>
 
                           {activeInfo.currentStepTitle && (
-                            <div className="text-[10px] text-indigo-300 font-medium truncate" title={activeInfo.currentStepTitle}>
+                            <div className="text-[10px] text-slate-300 font-medium truncate" title={activeInfo.currentStepTitle}>
                               ↳ {activeInfo.currentStepTitle}
                             </div>
                           )}
@@ -2298,7 +2297,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             </div>
                             <div className="flex-1 bg-slate-900 h-1.5 rounded-full overflow-hidden">
                               <div
-                                className="bg-gradient-to-r from-emerald-500 to-indigo-500 h-full transition-all duration-300"
+                                className="bg-blue-500 h-full transition-all duration-300"
                                 style={{ width: `${activeInfo.progressPct || 0}%` }}
                               />
                             </div>
@@ -2307,54 +2306,54 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       )}
 
                       {/* Compact Inline KPI & Accordion Trigger Strip */}
-                      <div className="mt-2.5 pt-2 border-t border-white/10 flex items-center justify-between gap-2 text-[11px]">
+                      <div className="mt-2.5 pt-2 border-t border-slate-800 flex items-center justify-between gap-2 text-[11px]">
                         <div className="flex items-center gap-3 min-w-0 flex-1">
                           <div className="flex items-center gap-1">
                             <span className="text-[10px] text-slate-400 font-semibold">Plans:</span>
-                            <span className="font-black text-emerald-400 font-mono">{dayData.completedCount}</span>
+                            <span className="font-bold text-slate-100 font-mono">{dayData.completedCount}</span>
                           </div>
 
                           <div className="flex items-center gap-1">
                             <span className="text-[10px] text-slate-400 font-semibold">Avg:</span>
-                            <span className="font-bold text-indigo-300 font-mono">{avgFormatted}</span>
+                            <span className="font-bold text-blue-300 font-mono">{avgFormatted}</span>
                           </div>
 
                           <div className="flex items-center gap-1 truncate min-w-0">
                             <span className="text-[10px] text-slate-400 font-semibold">Dev:</span>
-                            <span className="font-bold text-purple-300 font-mono truncate" title={devicesStr}>{devicesStr}</span>
+                            <span className="font-bold text-slate-300 font-mono truncate" title={devicesStr}>{devicesStr}</span>
                           </div>
                         </div>
 
                         <button
                           type="button"
                           onClick={() => toggleTesterExpand(tester.name)}
-                          className="px-2 py-0.5 bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg border border-slate-800 text-[10px] font-bold flex items-center gap-1 transition cursor-pointer shrink-0"
+                          className="px-2 py-0.5 bg-[#0f172a] hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg border border-slate-800 text-[10px] font-bold flex items-center gap-1 transition cursor-pointer shrink-0"
                         >
                           <span>{isExpanded ? 'Hide' : `Runs (${completedRunsList.length})`}</span>
-                          <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isExpanded ? 'rotate-180 text-emerald-400' : ''}`} />
+                          <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isExpanded ? 'rotate-180 text-blue-400' : ''}`} />
                         </button>
                       </div>
 
                       {/* Expandable Compact Accordion: Completed Test Runs Breakdown */}
                       <div className={`liquid-accordion-wrapper ${isExpanded ? 'expanded' : ''}`}>
                         <div className="liquid-accordion-inner">
-                          <div className="mt-2 pt-2 border-t border-white/10 space-y-1.5">
+                          <div className="mt-2 pt-2 border-t border-slate-800 space-y-1.5">
                             {completedRunsList.length === 0 ? (
-                              <div className="bg-slate-950/40 py-2 px-3 rounded-lg text-center text-[11px] text-slate-500">
+                              <div className="bg-[#0f172a] py-2 px-3 rounded-lg text-center text-[11px] text-slate-500">
                                 No runs recorded for {selectedQaDate === todayStr ? 'today' : selectedQaDate}.
                               </div>
                             ) : (
                               <div className="space-y-1 max-h-44 overflow-y-auto pr-1">
                                 {completedRunsList.map((runItem, idx) => (
-                                  <div key={runItem.runId + idx} className="bg-slate-950/80 px-2.5 py-1.5 rounded-lg border border-white/5 flex items-center justify-between text-[11px] gap-2">
+                                  <div key={runItem.runId + idx} className="bg-[#0f172a] px-2.5 py-1.5 rounded-lg border border-slate-800/80 flex items-center justify-between text-[11px] gap-2">
                                     <div className="truncate flex-1">
                                       <div className="font-bold text-slate-200 truncate">{runItem.planName}</div>
                                       <div className="flex items-center gap-1.5 text-[10px] text-slate-400 font-mono">
-                                        <span className="text-purple-300">{runItem.deviceName}</span>
+                                        <span className="text-slate-300">{runItem.deviceName}</span>
                                         <span>•</span>
                                         <span>{runItem.completedAtFormatted}</span>
                                         <span>•</span>
-                                        <span className="text-indigo-300">{runItem.durationFormatted}</span>
+                                        <span className="text-blue-300">{runItem.durationFormatted}</span>
                                       </div>
                                     </div>
 
@@ -2404,10 +2403,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
         <div className="space-y-6">
           
           {/* Test Plans Area Header Banner */}
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 liquid-glass-panel rounded-3xl p-6 shadow-2xl relative overflow-hidden">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 liquid-glass-panel rounded-3xl p-6 shadow-xl relative overflow-hidden">
             <div className="relative z-10">
-              <h2 className="text-2xl font-black text-white tracking-tight">Test Plans & Feature Health Monitor</h2>
-              <p className="text-xs text-slate-300 mt-1 font-medium">
+              <h2 className="text-xl font-bold text-slate-50 tracking-tight">Test Plans & Feature Health Monitor</h2>
+              <p className="text-xs text-slate-400 mt-1 font-medium">
                 Design test templates, track individual feature health metrics, and organize bug logs by device model.
               </p>
             </div>
@@ -2416,7 +2415,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <button
                 type="button"
                 onClick={onSelectPlanToBuild}
-                className="px-4 py-2 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-400 hover:to-pink-400 text-white text-xs font-extrabold rounded-2xl shadow-xl shadow-purple-500/30 border border-white/30 flex items-center gap-1.5 transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer"
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-2xl shadow-sm border border-blue-500 flex items-center gap-1.5 transition-all duration-200 active:scale-[0.98] cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Create Plan</span>
@@ -2429,7 +2428,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           {/* Test Plans List */}
           <div className="lg:col-span-2 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <h3 className="text-base font-bold text-slate-50 flex items-center gap-2">
                 <span>Configured QA Test Plans</span>
                 <span className="text-xs text-slate-400 font-normal">({filteredPlans.length} / {testPlans.length} plans)</span>
               </h3>
@@ -2442,7 +2441,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     placeholder="Search test plans..."
                     value={searchPlanQuery}
                     onChange={e => setSearchPlanQuery(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-[#0f172a] border border-slate-700/80 rounded-2xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
                   />
                   {searchPlanQuery && (
                     <button
@@ -2457,8 +2456,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </div>
 
             {testPlans.length === 0 ? (
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center space-y-4">
-                <div className="p-3 bg-slate-950 rounded-full border border-slate-800 text-slate-500 w-fit mx-auto">
+              <div className="bg-[#111827] border border-slate-800 rounded-2xl p-8 text-center space-y-4">
+                <div className="p-3 bg-[#0f172a] rounded-full border border-slate-800 text-slate-500 w-fit mx-auto">
                   <ListChecks className="w-6 h-6" />
                 </div>
                 <div>
@@ -2470,7 +2469,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <div className="flex items-center justify-center gap-3">
                   <button
                     onClick={onSelectPlanToBuild}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl shadow inline-flex items-center gap-1.5"
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-2xl shadow-sm inline-flex items-center gap-1.5"
                   >
                     <Plus className="w-4 h-4" />
                     Create Test Plan
@@ -2478,23 +2477,23 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </div>
               </div>
             ) : filteredPlans.length === 0 ? (
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center text-xs text-slate-400">
+              <div className="bg-[#111827] border border-slate-800 rounded-2xl p-6 text-center text-xs text-slate-400">
                 No test plans matching "{searchPlanQuery}".
               </div>
             ) : (
               <div className="space-y-4">
                 {filteredPlans.map(plan => (
-                  <div key={plan.id} className="glass-card rounded-3xl p-6 space-y-4 transition-all duration-300 hover:-translate-y-0.5">
+                  <div key={plan.id} className="liquid-glass-card rounded-3xl p-6 space-y-4 transition-all duration-200">
                     <div className="flex items-start justify-between gap-4">
                       <div>
-                        <h4 className="text-lg font-bold text-white tracking-tight">{plan.name}</h4>
+                        <h4 className="text-lg font-bold text-slate-50 tracking-tight">{plan.name}</h4>
                         <p className="text-xs text-slate-400 mt-1">{plan.description}</p>
                       </div>
                       <div className="flex items-center gap-1.5">
                         {onEditPlan && (
                           <button
                             onClick={() => onEditPlan(plan)}
-                            className="p-2 text-slate-400 hover:text-purple-300 glass-button rounded-xl transition-all"
+                            className="p-2 text-slate-400 hover:text-blue-300 liquid-glass-button rounded-xl transition-all"
                             title="Edit Test Plan & Steps"
                           >
                             <Edit className="w-3.5 h-3.5" />
@@ -2502,14 +2501,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         )}
                         <button
                           onClick={() => onClonePlan(plan.id)}
-                          className="p-2 text-slate-400 hover:text-indigo-300 glass-button rounded-xl transition-all"
+                          className="p-2 text-slate-400 hover:text-blue-300 liquid-glass-button rounded-xl transition-all"
                           title="Duplicate / Clone Test Plan"
                         >
                           <Copy className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => onDeletePlan(plan.id)}
-                          className="p-2 text-slate-500 hover:text-rose-400 glass-button hover:bg-rose-500/10 rounded-xl transition-all"
+                          className="p-2 text-slate-500 hover:text-rose-400 liquid-glass-button hover:bg-rose-500/10 rounded-xl transition-all"
                           title="Delete Test Plan"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -2518,14 +2517,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     </div>
 
                     {/* Step Count & Action Buttons */}
-                    <div className="flex items-center justify-between pt-3.5 border-t border-white/10 text-xs text-slate-400 font-medium">
+                    <div className="flex items-center justify-between pt-3.5 border-t border-slate-800 text-xs text-slate-400 font-medium">
                       <div className="flex items-center gap-3">
                         <button
                           type="button"
                           onClick={() => setExpandedPlanSteps(prev => ({ ...prev, [plan.id]: !prev[plan.id] }))}
-                          className="font-bold text-indigo-300 hover:text-white flex items-center gap-1.5 transition-colors cursor-pointer"
+                          className="font-semibold text-blue-400 hover:text-blue-300 flex items-center gap-1.5 transition-colors cursor-pointer"
                         >
-                          <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-300 ${expandedPlanSteps[plan.id] ? 'rotate-180 text-purple-400' : ''}`} />
+                          <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-300 ${expandedPlanSteps[plan.id] ? 'rotate-180 text-blue-400' : ''}`} />
                           <span>{plan.steps.length} Steps {expandedPlanSteps[plan.id] ? '(Collapse)' : '(View Steps)'}</span>
                         </button>
                         <span>•</span>
@@ -2539,22 +2538,22 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             onClick={() => {
                               onRunSubagentTest(plan.id);
                               setActiveTab('features');
-                              setSubagentToast(`🤖 Subagent executed all ${plan.steps.length} steps in "${plan.name}" for Today! Features populated.`);
+                              setSubagentToast(`Subagent executed all ${plan.steps.length} steps in "${plan.name}" for Today! Features populated.`);
                               setTimeout(() => setSubagentToast(null), 5000);
                             }}
-                            className="px-3.5 py-2 bg-gradient-to-r from-emerald-500/20 to-teal-500/20 hover:from-emerald-500/30 hover:to-teal-500/30 border border-emerald-400/40 text-emerald-300 text-xs font-bold rounded-2xl flex items-center gap-1.5 transition-all duration-300 shadow-md shadow-emerald-500/10 backdrop-blur-md hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+                            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold rounded-2xl flex items-center gap-1.5 transition-all duration-200 shadow-sm active:scale-[0.98] cursor-pointer"
                             title="Run autonomous subagent to execute all steps in this test flow and record data for Today"
                           >
-                            <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>Run Subagent Test (Today)</span>
+                            <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+                            <span>Auto-Test (Today)</span>
                           </button>
                         )}
 
                         <button
                           onClick={() => onOpenMobileView(plan.id)}
-                          className="px-4 py-2 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-400/40 text-purple-200 text-xs font-bold rounded-2xl flex items-center gap-1.5 transition-all duration-300 shadow-md shadow-purple-500/10 backdrop-blur-md hover:scale-[1.02] active:scale-[0.98]"
+                          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 border border-blue-500 text-white text-xs font-semibold rounded-2xl flex items-center gap-1.5 transition-all duration-200 shadow-sm active:scale-[0.98]"
                         >
-                          <Smartphone className="w-3.5 h-3.5 text-purple-300" />
+                          <Smartphone className="w-3.5 h-3.5 text-white" />
                           Test on Phone App
                         </button>
                       </div>
@@ -2562,9 +2561,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                     {/* Expandable Step Walkthrough Table/List */}
                     {expandedPlanSteps[plan.id] && (
-                      <div className="mt-3 pt-3 border-t border-white/10 space-y-2 animate-in fade-in duration-200">
+                      <div className="mt-3 pt-3 border-t border-slate-800 space-y-2 animate-in fade-in duration-200">
                         <div className="flex items-center justify-between text-[11px] font-bold text-slate-300 pb-1">
-                          <span className="uppercase tracking-wider text-purple-300">Test Flow Step Sequence ({plan.steps.length} Steps)</span>
+                          <span className="uppercase tracking-wider text-blue-400">Test Flow Step Sequence ({plan.steps.length} Steps)</span>
                           <span className="text-slate-400 font-mono text-[10px]">Verify Step Order</span>
                         </div>
                         <div className="space-y-2">
@@ -2575,23 +2574,23 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 key={step.id || `plan-step-${sIdx}`}
                                 className={`p-3 rounded-xl border text-xs space-y-1.5 transition-all ${
                                   isLastStep
-                                    ? 'bg-amber-950/20 border-amber-500/40 shadow-sm'
-                                    : 'bg-slate-950/60 border-white/10'
+                                    ? 'bg-blue-950/20 border-blue-500/40 shadow-sm'
+                                    : 'bg-[#0f172a] border-slate-800'
                                 }`}
                               >
                                 <div className="flex items-center justify-between">
                                   <div className="flex items-center gap-2">
-                                    <span className="font-mono font-bold text-indigo-300 text-[11px] bg-indigo-500/20 px-2 py-0.5 rounded-lg border border-indigo-400/30">
+                                    <span className="font-mono font-bold text-blue-300 text-[11px] bg-blue-500/15 px-2 py-0.5 rounded-lg border border-blue-500/30">
                                       Step #{sIdx + 1}
                                     </span>
                                     {isLastStep && (
-                                      <span className="font-bold text-amber-300 text-[10px] bg-amber-500/20 px-2 py-0.5 rounded-lg border border-amber-400/40 uppercase tracking-wide flex items-center gap-1">
-                                        🏁 Final Step
+                                      <span className="font-bold text-amber-300 text-[10px] bg-amber-500/15 px-2 py-0.5 rounded-lg border border-amber-500/30 uppercase tracking-wide flex items-center gap-1">
+                                        Final Step
                                       </span>
                                     )}
                                     <span className="font-bold text-white text-xs">{step.title}</span>
                                   </div>
-                                  <span className="text-[10px] font-mono text-purple-300 bg-purple-500/20 px-2 py-0.5 rounded border border-purple-500/30">
+                                  <span className="text-[10px] font-mono text-slate-300 bg-slate-800 px-2 py-0.5 rounded border border-slate-700">
                                     {step.feature || 'General'}
                                   </span>
                                 </div>
@@ -2621,7 +2620,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           {/* Active Testing Runs Live Monitor Card */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <h3 className="text-base font-bold text-slate-50 flex items-center gap-2">
                 <Activity className="w-4 h-4 text-emerald-400" />
                 <span>Live Test Runs</span>
               </h3>
@@ -2659,23 +2658,23 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <div key={run.id} className="liquid-glass-card rounded-2xl p-4 space-y-3 shadow-md">
                       <div className="flex items-center justify-between text-xs">
                         <span className="font-bold text-white flex items-center gap-1.5">
-                          <User className="w-3.5 h-3.5 text-indigo-400" />
+                          <User className="w-3.5 h-3.5 text-blue-400" />
                           {run.testerName || 'Unassigned Tester'}
                         </span>
                         <div className="flex items-center gap-1.5">
                           {run.startedAt && (
-                            <span className="px-2 py-0.5 rounded-full font-mono text-[10px] font-bold bg-slate-900/90 text-indigo-300 border border-indigo-500/30 flex items-center gap-1 shadow-sm">
-                              <Timer className="w-3 h-3 text-indigo-400" />
+                            <span className="px-2 py-0.5 rounded-full font-mono text-[10px] font-bold bg-[#0f172a] text-blue-300 border border-blue-500/30 flex items-center gap-1 shadow-sm">
+                              <Timer className="w-3 h-3 text-blue-400" />
                               <span>{formatOngoingDuration(run.startedAt)}</span>
                             </span>
                           )}
                           {isAway ? (
-                            <span className="px-2.5 py-0.5 rounded-full font-mono text-[10px] font-extrabold border bg-amber-500/20 text-amber-300 border-amber-400/30 flex items-center gap-1">
+                            <span className="px-2.5 py-0.5 rounded-full font-mono text-[10px] font-bold border bg-amber-500/20 text-amber-300 border-amber-400/30 flex items-center gap-1">
                               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
                               Away / In Background
                             </span>
                           ) : (
-                            <span className="px-2.5 py-0.5 rounded-full font-mono text-[10px] font-extrabold border bg-purple-500/20 text-purple-300 border-purple-400/30 animate-pulse">
+                            <span className="px-2.5 py-0.5 rounded-full font-mono text-[10px] font-bold border bg-blue-500/20 text-blue-300 border-blue-400/30">
                               In Progress
                             </span>
                           )}
@@ -2684,8 +2683,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                       <div className="flex items-center justify-between text-[11px] text-slate-400 border-b border-slate-800/60 pb-2">
                         <span className="truncate max-w-[140px] text-slate-300 font-medium">{run.planName}</span>
-                        <span className="bg-purple-950 text-purple-300 px-2 py-0.5 rounded font-mono border border-purple-800/40 flex items-center gap-1">
-                          <Smartphone className="w-3 h-3 text-purple-400" />
+                        <span className="bg-slate-800 text-slate-200 px-2 py-0.5 rounded font-mono border border-slate-700 flex items-center gap-1">
+                          <Smartphone className="w-3 h-3 text-blue-400" />
                           {run.deviceName || 'Device Unset'}
                         </span>
                       </div>
@@ -2700,12 +2699,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         const redCount = completedResults.filter((r: any) => r.status === 'red').length;
                         return (
                           <>
-                            <div className="bg-slate-900/60 rounded-xl px-2.5 py-1.5 border border-white/5 flex items-center justify-between text-[11px]">
+                            <div className="bg-[#0f172a] rounded-xl px-2.5 py-1.5 border border-slate-800 flex items-center justify-between text-[11px]">
                               <span className="text-slate-400 font-mono text-[10px]">
                                 Step {Math.min(currentStepIdx + 1, totalSteps)} of {totalSteps}
                               </span>
                               {stepTitle && (
-                                <span className="text-indigo-300 font-semibold truncate max-w-[170px]" title={stepTitle}>
+                                <span className="text-blue-300 font-semibold truncate max-w-[170px]" title={stepTitle}>
                                   {stepTitle}
                                 </span>
                               )}
@@ -2733,7 +2732,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         </div>
                         <div className="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden">
                           <div
-                            className="bg-indigo-500 h-full transition-all"
+                            className="bg-blue-500 h-full transition-all"
                             style={{ width: `${progressPct}%` }}
                           ></div>
                         </div>
@@ -2774,46 +2773,48 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
 
 
-      {/* Tab 2: Feature Health Metrics */}
+      {/* Tab 4: Feature Health Metrics & CUJ Quality Report */}
       {activeTab === 'features' && (
-        <div className="space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 liquid-glass-panel rounded-3xl px-5 py-3.5 shadow-2xl">
-            <h3 className="text-base font-extrabold text-white flex items-center gap-2 tracking-tight flex-shrink-0">
-              <Tag className="w-4 h-4 text-purple-400" />
-              Feature Health
-            </h3>
+        <div className="space-y-5">
+          {/* Condensed Feature Health Toolbar */}
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 liquid-glass-panel rounded-3xl px-4 py-3 shadow-lg">
+            {/* Left group: Title + Day & Plan filter pills */}
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-sm font-bold text-slate-50 flex items-center gap-2 tracking-tight mr-1 flex-shrink-0">
+                <Tag className="w-4 h-4 text-blue-400" />
+                <span>Feature Health</span>
+              </h3>
 
-            <div className="flex flex-wrap items-center gap-2.5">
               {/* Day Selector Dropdown */}
-              <div className="flex items-center gap-2 liquid-glass-input px-3.5 h-9 rounded-2xl text-xs shadow-inner w-full sm:w-auto min-w-0">
-                <Calendar className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
-                <span className="text-slate-300 font-semibold text-[11px] whitespace-nowrap">Session Day:</span>
+              <div className="flex items-center gap-1.5 liquid-glass-input px-3 h-8 rounded-2xl text-xs min-w-0">
+                <Calendar className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                <span className="text-slate-400 font-medium text-xs whitespace-nowrap">Day:</span>
                 <select
                   value={selectedDailySessionDate}
                   onChange={e => setSelectedDailySessionDate(e.target.value)}
-                  className="bg-transparent text-purple-200 font-extrabold focus:outline-none cursor-pointer text-xs h-full flex items-center min-w-0 flex-1 sm:flex-none"
+                  className="bg-transparent text-slate-100 font-semibold focus:outline-none cursor-pointer text-xs h-full flex items-center min-w-0"
                 >
                   {recordedDailySessions.map(session => (
                     <option key={session.dateStr} value={session.dateStr} className="bg-slate-900 text-slate-200">
-                      📅 {session.label} {session.dateStr === todayStr ? '' : `(${session.stepCount} steps)`}
+                      {session.label} {session.dateStr === todayStr ? '' : `(${session.stepCount} steps)`}
                     </option>
                   ))}
-                  <option value="all" className="bg-slate-900 text-purple-300 font-bold">
-                    🌐 All Historical Days Combined
+                  <option value="all" className="bg-slate-900 text-blue-300 font-semibold">
+                    All Historical Days Combined
                   </option>
                 </select>
               </div>
 
-              {/* Test Plan Selector Dropdown - scopes the whole CUJ report (always opens on All plans) */}
-              <div className="flex items-center gap-2 liquid-glass-input px-3.5 h-9 rounded-2xl text-xs shadow-inner w-full sm:w-auto min-w-0">
-                <ListChecks className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
-                <span className="text-slate-300 font-semibold text-[11px] whitespace-nowrap">Test Plan:</span>
+              {/* Test Plan Selector Dropdown */}
+              <div className="flex items-center gap-1.5 liquid-glass-input px-3 h-8 rounded-2xl text-xs min-w-0">
+                <ListChecks className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                <span className="text-slate-400 font-medium text-xs whitespace-nowrap">Plan:</span>
                 <select
                   value={reportPlanId}
                   onChange={e => setSelectedReportPlanId(e.target.value)}
                   title={`Test plan: ${reportPlanLabel}`}
                   aria-label="Test plan"
-                  className="bg-transparent text-purple-200 font-extrabold focus:outline-none cursor-pointer text-xs h-full flex items-center min-w-0 flex-1 sm:flex-none sm:max-w-[16rem] truncate"
+                  className="bg-transparent text-slate-100 font-semibold focus:outline-none cursor-pointer text-xs h-full flex items-center min-w-0 sm:max-w-[14rem] truncate"
                 >
                   <option value={ALL_PLANS} className="bg-slate-900 text-slate-200">
                     All plans ({allPlansRunCount} {allPlansRunCount === 1 ? 'run' : 'runs'})
@@ -2825,6 +2826,50 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   ))}
                 </select>
               </div>
+            </div>
+
+            {/* Right group: Condensed action controls */}
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Inline Feature Creation Form */}
+              <form onSubmit={handleCreateFeatureSubmit} className="flex items-center gap-1.5">
+                <div className="relative flex items-center">
+                  <Tag className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none" />
+                  <input
+                    type="text"
+                    placeholder="Add feature..."
+                    value={newFeatureInput}
+                    onChange={e => setNewFeatureInput(e.target.value)}
+                    className="liquid-glass-input rounded-2xl pl-7 pr-2.5 h-8 text-xs text-slate-100 placeholder-slate-500 font-medium w-32 sm:w-40 focus:outline-none"
+                    required
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="px-3 h-8 bg-blue-600 hover:bg-blue-500 text-white border border-blue-500 rounded-2xl text-xs font-semibold flex items-center justify-center gap-1 transition-all shadow-sm"
+                >
+                  <Plus className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span className="leading-none">Add</span>
+                </button>
+              </form>
+
+              {/* Run Subagent QA Test Flow Button */}
+              {onRunSubagentTest && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (testPlans.length === 0) onLoadSampleData();
+                    const targetId = testPlans[0]?.id || 'plan-demo-1';
+                    onRunSubagentTest(targetId);
+                    setSubagentToast(`Autonomous Subagent tested all steps for Today (${todayStr})! Live feature metrics populated below.`);
+                    setTimeout(() => setSubagentToast(null), 5000);
+                  }}
+                  className="px-3 h-8 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-2xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                  title="Run autonomous QA subagent to execute full test flow and record data for Today"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
+                  <span className="leading-none">Auto-Test</span>
+                </button>
+              )}
 
               {/* Reset Active Day Datapoints Button (Active only on Today) */}
               {(() => {
@@ -2839,76 +2884,54 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         onResetActiveDay(todayStr);
                       }
                     }}
-                    className={`px-3.5 h-9 rounded-2xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all border ${
+                    className={`px-3 h-8 rounded-2xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all border ${
                       isTodayActive
-                        ? 'bg-rose-500/20 text-rose-300 hover:bg-rose-500/30 border-rose-400/40 shadow-md cursor-pointer hover:scale-[1.02] active:scale-[0.98]'
-                        : 'bg-slate-900/40 text-slate-500 border-slate-800 opacity-40 cursor-not-allowed'
+                        ? 'bg-slate-800/90 hover:bg-rose-950/50 text-slate-300 hover:text-rose-300 border-slate-700 hover:border-rose-800/60 cursor-pointer'
+                        : 'bg-slate-900/40 text-slate-600 border-slate-800 opacity-40 cursor-not-allowed'
                     }`}
                     title={isTodayActive ? "Reset test step results & bugs for Today (all plans)" : "Reset is only available when viewing Today's active session."}
                   >
-                    <RefreshCw className={`w-3.5 h-3.5 flex-shrink-0 ${isTodayActive ? 'text-rose-400' : 'text-slate-600'}`} />
-                    <span className="leading-none">Reset Active Day</span>
+                    <RefreshCw className={`w-3.5 h-3.5 flex-shrink-0 ${isTodayActive ? 'text-slate-400' : 'text-slate-600'}`} />
+                    <span className="leading-none">Reset Day</span>
                   </button>
                 );
               })()}
-
-              {/* Run Subagent QA Test Flow Button */}
-              {onRunSubagentTest && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (testPlans.length === 0) onLoadSampleData();
-                    const targetId = testPlans[0]?.id || 'plan-demo-1';
-                    onRunSubagentTest(targetId);
-                    setSubagentToast(`🤖 Autonomous Subagent tested all steps for Today (${todayStr})! Live feature metrics populated below.`);
-                    setTimeout(() => setSubagentToast(null), 5000);
-                  }}
-                  className="px-3.5 h-9 bg-gradient-to-r from-emerald-500/20 to-teal-500/20 hover:from-emerald-500/30 hover:to-teal-500/30 text-emerald-300 border border-emerald-400/40 rounded-2xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all shadow-md hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
-                  title="Run autonomous QA subagent to execute full test flow and record data for Today"
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0 animate-pulse" />
-                  <span className="leading-none">Run Subagent Test Flow (Today)</span>
-                </button>
-              )}
-
-              {/* Inline Feature Creation Form */}
-              <form onSubmit={handleCreateFeatureSubmit} className="flex items-center gap-2">
-                <div className="relative flex items-center">
-                  <Tag className="w-3.5 h-3.5 text-purple-400 absolute left-3 pointer-events-none" />
-                  <input
-                    type="text"
-                    placeholder="New feature name..."
-                    value={newFeatureInput}
-                    onChange={e => setNewFeatureInput(e.target.value)}
-                    className="liquid-glass-input rounded-2xl pl-8 pr-3 h-9 text-xs text-white placeholder-slate-400 font-medium w-36 sm:w-44 focus:outline-none"
-                    required
-                  />
-                </div>
-                <button
-                  type="submit"
-                  className="px-4 h-9 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-400 hover:to-pink-400 text-white text-xs font-extrabold rounded-2xl shadow-lg shadow-purple-500/25 border border-white/20 flex items-center justify-center gap-1 transition-all duration-300 hover:scale-[1.02]"
-                >
-                  <Plus className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span className="leading-none">Add</span>
-                </button>
-              </form>
             </div>
           </div>
 
           {/* Feature Quality & Risk Profile Card */}
           {(featureMetricsList.length > 0 || bugOnlyMetrics.length > 0) && (
-            <div ref={visualCardRef} data-visual-card="true" className="liquid-glass-panel rounded-3xl p-6 pb-10 shadow-2xl space-y-6 bg-gradient-to-br from-slate-950/90 via-slate-900/70 to-purple-950/40 border-white/15">
+            <div ref={visualCardRef} data-visual-card="true" className="liquid-glass-panel rounded-3xl p-5 sm:p-6 shadow-xl space-y-5 bg-[#111827] border border-slate-800">
               
               {/* Header */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-800 pb-4">
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-slate-400 font-mono">{reportDayDisplayLabel}</span>
+                    {hasCurrentReport && generatedReport && !isGeneratingSummary && (
+                      generatedReport.modelUsed ? (
+                        <span
+                          className="no-capture text-[11px] font-medium px-2 py-0.5 rounded-full border bg-slate-900 text-slate-300 border-slate-700 inline-flex items-center gap-1.5 whitespace-nowrap"
+                          title={`AI summary by ${generatedReport.modelUsed} - generated at ${new Date(generatedReport.generatedAt).toLocaleTimeString()}`}
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                          Ready · AI
+                        </span>
+                      ) : (
+                        <span
+                          className="no-capture text-[11px] font-medium px-2 py-0.5 rounded-full border bg-slate-900 text-slate-300 border-slate-700 inline-flex items-center gap-1.5 whitespace-nowrap cursor-help"
+                          title={`AI summary unavailable${generatedReport.aiError ? ` (${generatedReport.aiError})` : ''} - a basic offline summary was used. Generated at ${new Date(generatedReport.generatedAt).toLocaleTimeString()}`}
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                          Ready · Offline
+                        </span>
+                      )
+                    )}
                   </div>
-                  <h3 className="text-xl font-extrabold text-white mt-1 flex flex-wrap items-center gap-2 tracking-tight">
-                    CUJ Quality Report
+                  <h3 className="text-lg sm:text-xl font-bold text-slate-50 mt-0.5 flex flex-wrap items-center gap-2 tracking-tight">
+                    <span>CUJ Quality Report</span>
                     <span
-                      className="text-[11px] font-bold text-purple-200 bg-purple-500/15 border border-purple-400/30 px-2.5 py-0.5 rounded-full max-w-[16rem] truncate"
+                      className="bg-blue-500/10 text-blue-300 border border-blue-500/25 px-2.5 py-0.5 rounded-full text-xs font-semibold max-w-[16rem] truncate"
                       title={`Test plan: ${reportPlanLabel}`}
                     >
                       {reportPlanLabel}
@@ -2916,212 +2939,193 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </h3>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2.5">
-                  {/* Generate AI Summary Button - runs the Gemini subtask only, never touches the clipboard */}
-                  <button
-                    type="button"
-                    disabled={isGeneratingSummary}
-                    onClick={handleGenerateSummary}
-                    className={`no-capture px-3.5 h-9 rounded-2xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all shadow-md border ${
-                      isGeneratingSummary
-                        ? 'bg-purple-600/30 text-purple-200 border-purple-400/60 cursor-wait animate-pulse'
-                        : 'bg-gradient-to-r from-purple-500/20 to-indigo-500/20 hover:from-purple-500/30 hover:to-indigo-500/30 text-purple-200 border-purple-400/40 hover:scale-[1.02] active:scale-[0.98]'
-                    }`}
-                    title="Extract bugs and generate the AI summary report. Safe to tab away - the result is saved until you copy it."
-                  >
-                    {isGeneratingSummary ? (
-                      <>
-                        <Sparkles className="w-3.5 h-3.5 text-purple-300 animate-spin flex-shrink-0" />
-                        <span className="leading-none text-purple-200">AI Summarizing...</span>
-                      </>
-                    ) : hasCurrentReport ? (
-                      <>
-                        <RefreshCw className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
-                        <span className="leading-none">Regenerate</span>
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
-                        <span className="leading-none">Generate Summary</span>
-                      </>
-                    )}
-                  </button>
+                {/* Condensed Header Right Action Groups + Quality Status Pill */}
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* 1. Report Actions Segmented Pill Group */}
+                  <div className="no-capture inline-flex items-center bg-[#0f172a] border border-slate-800 rounded-2xl p-0.5 gap-0.5 h-8">
+                    <button
+                      type="button"
+                      disabled={isGeneratingSummary}
+                      onClick={handleGenerateSummary}
+                      className={`px-2.5 h-7 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition ${
+                        isGeneratingSummary
+                          ? 'bg-blue-600/20 text-blue-300 cursor-wait animate-pulse'
+                          : 'text-slate-200 hover:bg-slate-800 hover:text-white cursor-pointer'
+                      }`}
+                      title="Extract bugs and generate the AI summary report. Safe to tab away - the result is saved until you copy it."
+                    >
+                      {isGeneratingSummary ? (
+                        <>
+                          <Sparkles className="w-3.5 h-3.5 text-blue-400 animate-spin flex-shrink-0" />
+                          <span className="leading-none">Summarizing...</span>
+                        </>
+                      ) : hasCurrentReport ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
+                          <span className="leading-none">Regenerate</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
+                          <span className="leading-none">Summarize</span>
+                        </>
+                      )}
+                    </button>
 
-                  {/* Copy Report Button - instant, reads the stored result with zero regeneration */}
-                  <button
-                    type="button"
-                    disabled={!hasCurrentReport || isGeneratingSummary}
-                    onClick={handleCopyGeneratedReport}
-                    className={`no-capture px-3.5 h-9 rounded-2xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all shadow-md border ${
-                      !hasCurrentReport || isGeneratingSummary
-                        ? 'bg-slate-900/50 text-slate-500 border-white/5 cursor-not-allowed'
-                        : copiedReport
-                        ? 'bg-emerald-500/20 text-emerald-200 border-emerald-400/50'
-                        : 'bg-gradient-to-r from-indigo-500/20 to-cyan-500/20 hover:from-indigo-500/30 hover:to-cyan-500/30 text-indigo-200 border-indigo-400/40 hover:scale-[1.02] active:scale-[0.98]'
-                    }`}
-                    title={
-                      hasCurrentReport
-                        ? 'Copy the generated report to your clipboard (rich text + plain text)'
-                        : 'Generate a summary first, then copy it here'
-                    }
-                  >
-                    {copiedReport ? (
-                      <>
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
-                        <span className="text-emerald-300 font-bold leading-none">Copied!</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5 flex-shrink-0" />
-                        <span className="leading-none">Copy Report</span>
-                      </>
-                    )}
-                  </button>
+                    <button
+                      type="button"
+                      disabled={!hasCurrentReport || isGeneratingSummary}
+                      onClick={handleCopyGeneratedReport}
+                      className={`px-2.5 h-7 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition ${
+                        !hasCurrentReport || isGeneratingSummary
+                          ? 'text-slate-500 cursor-not-allowed'
+                          : copiedReport
+                          ? 'bg-emerald-500/20 text-emerald-300'
+                          : 'bg-blue-600 hover:bg-blue-500 text-white shadow-sm cursor-pointer'
+                      }`}
+                      title={
+                        hasCurrentReport
+                          ? 'Copy the generated report to your clipboard (rich text + plain text)'
+                          : 'Generate a summary first, then copy it here'
+                      }
+                    >
+                      {copiedReport ? (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+                          <span className="leading-none">Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5 flex-shrink-0" />
+                          <span className="leading-none">Copy</span>
+                        </>
+                      )}
+                    </button>
 
-                  {/* Ready-to-copy indicator - shows whether the AI or the offline fallback wrote the summary */}
-                  {hasCurrentReport && generatedReport && !isGeneratingSummary && (
-                    generatedReport.modelUsed ? (
-                      <span
-                        className="no-capture text-[10px] font-bold text-emerald-300/90 bg-emerald-500/10 border border-emerald-400/30 px-2 py-1 rounded-full flex items-center gap-1 whitespace-nowrap"
-                        title={`AI summary by ${generatedReport.modelUsed} - generated at ${new Date(generatedReport.generatedAt).toLocaleTimeString()}`}
-                      >
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                        Ready · AI
-                      </span>
-                    ) : (
-                      <span
-                        className="no-capture text-[10px] font-bold text-amber-300/90 bg-amber-500/10 border border-amber-400/30 px-2 py-1 rounded-full flex items-center gap-1 whitespace-nowrap cursor-help"
-                        title={`AI summary unavailable${generatedReport.aiError ? ` (${generatedReport.aiError})` : ''} - a basic offline summary was used. Generated at ${new Date(generatedReport.generatedAt).toLocaleTimeString()}`}
-                      >
-                        <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                        Ready · Offline
-                      </span>
-                    )
-                  )}
-
-                  {/* Gemini API Key Config Button */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setTempApiKey(getStoredGeminiApiKey());
-                      setTempModel(getStoredGeminiModel());
-                      setIsApiKeyModalOpen(true);
-                    }}
-                    className="no-capture px-2.5 h-9 bg-slate-900/60 hover:bg-slate-800/80 text-slate-300 hover:text-white border border-white/10 rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm"
-                    title="Configure Gemini API Key for AI Summaries"
-                  >
-                    <Sparkles className={`w-3 h-3 ${getStoredGeminiApiKey() ? 'text-emerald-400' : 'text-amber-400'}`} />
-                    <span className="hidden sm:inline text-[11px] font-mono">Gemini AI</span>
-                    <span className={`w-1.5 h-1.5 rounded-full ${getStoredGeminiApiKey() ? 'bg-emerald-400 shadow-sm shadow-emerald-400/50' : 'bg-amber-400'}`} />
-                  </button>
-
-                  {/* AI Chat - summarize with any AI chat, no API key needed */}
-                  <button
-                    type="button"
-                    onClick={() => openChatSummary()}
-                    disabled={isGeneratingSummary}
-                    className="no-capture px-2.5 h-9 bg-slate-900/60 hover:bg-slate-800/80 text-slate-300 hover:text-white border border-white/10 rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                    title="No API key? Summarize with any AI chat: copy a prompt, paste the reply back"
-                  >
-                    <MessageSquareText className="w-3 h-3 text-cyan-300" />
-                    <span className="hidden sm:inline text-[11px] font-mono">AI Chat</span>
-                  </button>
-
-                  {/* Export PNG Image Button */}
-                  <button
-                    type="button"
-                    onClick={handleCopyVisualImageToClipboard}
-                    className="no-capture px-3.5 h-9 bg-gradient-to-r from-pink-500/20 to-purple-500/20 hover:from-pink-500/30 hover:to-purple-500/30 text-pink-200 border border-pink-400/40 rounded-2xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all shadow-md hover:scale-[1.02] active:scale-[0.98]"
-                    title="Export 1400px wide crisp PNG image to file and clipboard"
-                  >
-                    {copiedImage ? (
-                      <>
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
-                        <span className="text-emerald-300 font-bold leading-none">PNG Exported!</span>
-                      </>
-                    ) : (
-                      <>
-                        <Download className="w-3.5 h-3.5 text-pink-400 flex-shrink-0" />
-                        <span className="leading-none">Export PNG Image</span>
-                      </>
-                    )}
-                  </button>
-
-                  <div className="flex items-center gap-2 bg-slate-950/80 px-3.5 h-9 rounded-2xl border border-white/10 shadow-inner whitespace-nowrap flex-shrink-0">
-                    <span className="text-[11px] text-slate-400 font-medium whitespace-nowrap flex-shrink-0">Overall Quality:</span>
-                    <span className="text-sm font-black font-mono text-white flex-shrink-0">{avgHealthScore === null ? '—' : `${avgHealthScore}%`}</span>
-                    {avgHealthScore !== null && (
-                    <span className={`text-[10px] px-2.5 py-1 rounded-full font-extrabold uppercase whitespace-nowrap flex-shrink-0 inline-flex items-center gap-1 leading-none ${
-                      criticalFeaturesCount > 0 || avgHealthScore < 80
-                        ? 'bg-rose-950/80 text-rose-300 border border-rose-800/80'
-                        : warningFeaturesCount > 0 || avgHealthScore < 95
-                        ? 'bg-amber-950/80 text-amber-300 border border-amber-800/80'
-                        : 'bg-emerald-950/80 text-emerald-300 border border-emerald-800/80'
-                    }`}>
-                      {criticalFeaturesCount > 0 || avgHealthScore < 80
-                        ? '🔴 High Risk'
-                        : warningFeaturesCount > 0 || avgHealthScore < 95
-                        ? '🟡 Moderate Risk'
-                        : '🟢 System Healthy'}
-                    </span>
-                    )}
+                    <button
+                      type="button"
+                      onClick={handleCopyVisualImageToClipboard}
+                      className="px-2.5 h-7 rounded-xl text-xs font-semibold flex items-center gap-1.5 text-slate-200 hover:bg-slate-800 hover:text-white transition cursor-pointer"
+                      title="Export 1400px wide crisp PNG image to file and clipboard"
+                    >
+                      {copiedImage ? (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+                          <span className="text-emerald-300 leading-none">Exported!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Download className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                          <span className="leading-none">Export PNG</span>
+                        </>
+                      )}
+                    </button>
                   </div>
 
-                  {/* Golden Runs Header Badge */}
-                  <div className="flex items-center gap-2 bg-gradient-to-r from-amber-500/15 to-yellow-500/15 border border-amber-400/30 px-3.5 h-9 rounded-2xl shadow-inner whitespace-nowrap flex-shrink-0" title="Golden Runs: Fully completed runs with 0 reds and at most 1 yellow">
-                    <span className="text-xs">🏆</span>
-                    <span className="text-[11px] text-amber-300 font-bold whitespace-nowrap">Golden Runs:</span>
-                    <span className="text-sm font-black font-mono text-amber-200">{goldenRunsAnalysis.goldenCount}</span>
+                  {/* 2. AI Configuration Segmented Pill Group */}
+                  <div className="no-capture inline-flex items-center bg-[#0f172a] border border-slate-800 rounded-2xl p-0.5 gap-0.5 h-8">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTempApiKey(getStoredGeminiApiKey());
+                        setTempModel(getStoredGeminiModel());
+                        setIsApiKeyModalOpen(true);
+                      }}
+                      className="px-2.5 h-7 rounded-xl text-xs font-medium text-slate-300 hover:bg-slate-800 hover:text-white flex items-center gap-1.5 transition cursor-pointer"
+                      title="Configure Gemini API Key for AI Summaries"
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full ${getStoredGeminiApiKey() ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+                      <span className="leading-none">Gemini</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => openChatSummary()}
+                      disabled={isGeneratingSummary}
+                      className="px-2.5 h-7 rounded-xl text-xs font-medium text-slate-300 hover:bg-slate-800 hover:text-white flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="No API key? Summarize with any AI chat: copy a prompt, paste the reply back"
+                    >
+                      <MessageSquareText className="w-3.5 h-3.5 text-blue-400" />
+                      <span className="leading-none">AI Chat</span>
+                    </button>
+                  </div>
+
+                  {/* 3. Overall Quality Status Pill */}
+                  <div className="flex items-center gap-2 bg-[#0f172a] px-3 h-8 rounded-2xl border border-slate-800 whitespace-nowrap flex-shrink-0">
+                    <span className="text-xs text-slate-400 font-medium">Quality:</span>
+                    <span className="text-xs font-bold font-mono text-slate-50">{avgHealthScore === null ? '—' : `${avgHealthScore}%`}</span>
+                    {avgHealthScore !== null && (
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase whitespace-nowrap inline-flex items-center gap-1.5 leading-none border ${
+                        criticalFeaturesCount > 0 || avgHealthScore < 80
+                          ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                          : warningFeaturesCount > 0 || avgHealthScore < 95
+                          ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                          : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                      }`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          criticalFeaturesCount > 0 || avgHealthScore < 80
+                            ? 'bg-rose-400'
+                            : warningFeaturesCount > 0 || avgHealthScore < 95
+                            ? 'bg-amber-400'
+                            : 'bg-emerald-400'
+                        }`} />
+                        <span>
+                          {criticalFeaturesCount > 0 || avgHealthScore < 80
+                            ? 'High Risk'
+                            : warningFeaturesCount > 0 || avgHealthScore < 95
+                            ? 'Moderate Risk'
+                            : 'Healthy'}
+                        </span>
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
 
               {/* KPI Summary Cards */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-                <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3.5">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
+                <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-3.5">
                   <div className="text-[11px] text-slate-400 font-medium">Total Features Tracked</div>
-                  <div className="text-2xl font-extrabold text-white mt-1 font-mono">{totalFeaturesCount}</div>
+                  <div className="text-2xl font-bold text-slate-50 mt-1 font-mono">{totalFeaturesCount}</div>
                   <div className="text-[10px] text-slate-500 mt-0.5">{totalStepsAcrossFeatures} Total Test Steps</div>
                 </div>
 
-                <div className="bg-rose-950/40 border border-rose-800/50 rounded-xl p-3.5">
+                <div className="bg-rose-950/30 border border-rose-800/40 rounded-2xl p-3.5">
                   <div className="text-[11px] text-rose-400 font-semibold uppercase flex items-center justify-between">
                     <span>Critical (Red)</span>
                     <span className="font-mono text-xs">{criticalPct}%</span>
                   </div>
-                  <div className="text-2xl font-extrabold text-rose-300 mt-1 font-mono">{criticalFeaturesCount}</div>
+                  <div className="text-2xl font-bold text-rose-300 mt-1 font-mono">{criticalFeaturesCount}</div>
                   <div className="text-[10px] text-rose-400/80 mt-0.5">Requires immediate attention</div>
                 </div>
 
-                <div className="bg-amber-950/40 border border-amber-800/50 rounded-xl p-3.5">
+                <div className="bg-amber-950/30 border border-amber-800/40 rounded-2xl p-3.5">
                   <div className="text-[11px] text-amber-400 font-semibold uppercase flex items-center justify-between">
                     <span>Degraded (Yellow)</span>
                     <span className="font-mono text-xs">{warningPct}%</span>
                   </div>
-                  <div className="text-2xl font-extrabold text-amber-300 mt-1 font-mono">{warningFeaturesCount}</div>
+                  <div className="text-2xl font-bold text-amber-300 mt-1 font-mono">{warningFeaturesCount}</div>
                   <div className="text-[10px] text-amber-400/80 mt-0.5">Minor defects reported</div>
                 </div>
 
-                <div className="bg-emerald-950/40 border border-emerald-800/50 rounded-xl p-3.5">
+                <div className="bg-emerald-950/30 border border-emerald-800/40 rounded-2xl p-3.5">
                   <div className="text-[11px] text-emerald-400 font-semibold uppercase flex items-center justify-between">
                     <span>Healthy (Green)</span>
                     <span className="font-mono text-xs">{healthyPct}%</span>
                   </div>
-                  <div className="text-2xl font-extrabold text-emerald-300 mt-1 font-mono">{healthyFeaturesCount}</div>
+                  <div className="text-2xl font-bold text-emerald-300 mt-1 font-mono">{healthyFeaturesCount}</div>
                   <div className="text-[10px] text-emerald-400/80 mt-0.5">100% Passing test steps</div>
                 </div>
 
-                <div className="bg-gradient-to-br from-amber-950/40 via-yellow-950/30 to-amber-900/20 border border-amber-500/40 rounded-xl p-3.5 relative overflow-hidden shadow-sm hover:border-amber-400/70 transition-all col-span-2 sm:col-span-1">
-                  <div className="text-[11px] text-amber-300 font-semibold uppercase flex items-center justify-between">
-                    <span className="flex items-center gap-1.5">
-                      <span>🏆</span> Golden Runs
-                    </span>
+                <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-3.5 relative overflow-hidden col-span-2 sm:col-span-1">
+                  <div className="text-[11px] text-slate-300 font-semibold uppercase flex items-center justify-between">
+                    <span>Golden Runs</span>
                   </div>
-                  <div className="text-2xl font-extrabold text-amber-200 mt-1 font-mono">
+                  <div className="text-2xl font-bold text-slate-50 mt-1 font-mono">
                     {goldenRunsAnalysis.goldenCount}
                   </div>
-                  <div className="text-[10px] text-amber-400/90 mt-0.5 font-medium">
-                    {goldenRunsAnalysis.goldenCount === 1 ? '1 clean run' : `${goldenRunsAnalysis.goldenCount} clean runs`} (≤1 🟡, 0 🔴)
+                  <div className="text-[10px] text-slate-400 mt-0.5 font-medium">
+                    {goldenRunsAnalysis.goldenCount === 1 ? '1 clean run' : `${goldenRunsAnalysis.goldenCount} clean runs`} (≤1 yellow, 0 red)
                   </div>
                 </div>
               </div>
@@ -3136,15 +3140,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <button
                       type="button"
                       onClick={() => setIsFeatureReportExpanded(!isFeatureReportExpanded)}
-                      className="px-3 py-1.5 bg-purple-500/15 hover:bg-purple-500/25 border border-purple-400/30 text-purple-300 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer shadow-md"
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-2xl text-xs font-semibold transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer shadow-sm"
                     >
-                      <ChevronDown className={`w-3.5 h-3.5 text-purple-400 transition-transform duration-500 ease-out ${isFeatureReportExpanded ? 'rotate-180' : 'rotate-0'}`} />
+                      <ChevronDown className={`w-3.5 h-3.5 text-blue-400 transition-transform duration-500 ease-out ${isFeatureReportExpanded ? 'rotate-180' : 'rotate-0'}`} />
                       <span>{isFeatureReportExpanded ? 'Hide Report Breakdown' : 'Expand Report Breakdown'}</span>
                     </button>
                   </div>
                 </div>
 
-                <div className="w-full bg-slate-950 h-3.5 rounded-xl overflow-hidden border border-slate-800 flex">
+                <div className="w-full bg-[#0f172a] h-3 rounded-xl overflow-hidden border border-slate-800 flex">
                   {criticalPct > 0 && (
                     <div
                       style={{ width: `${criticalPct}%` }}
@@ -3183,8 +3187,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       Healthy: {healthyFeaturesCount} ({healthyPct}%)
                     </span>
                   </div>
-                  <div className="text-[11px] text-amber-300 font-mono font-bold flex items-center gap-1.5">
-                    <span>🏆</span>
+                  <div className="text-[11px] text-slate-300 font-mono font-semibold flex items-center gap-1.5">
                     <span>Golden Runs: {goldenRunsAnalysis.goldenCount}</span>
                   </div>
                 </div>
@@ -3196,14 +3199,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   <div className="pt-4 pb-4 border-t border-slate-800 space-y-6">
                     <div className="space-y-3">
                       <div className="flex items-center justify-between">
-                        <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
-                          <Tag className="w-3.5 h-3.5 text-purple-400" />
+                        <h4 className="text-xs font-bold text-slate-50 uppercase tracking-wider flex items-center gap-2">
+                          <Tag className="w-3.5 h-3.5 text-blue-400" />
                           Feature Health Breakdown Report ({featureMetricsList.length + bugOnlyMetrics.length} Features)
                         </h4>
                         <span className="text-[10px] font-mono text-slate-400">Live Snapshot Table</span>
                       </div>
 
-                      <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/90 shadow-inner">
+                      <div className="overflow-x-auto rounded-xl border border-slate-800 bg-[#0f172a] shadow-inner">
                         <table className="w-full text-left text-xs font-sans">
                           <thead className="bg-slate-900/90 border-b border-slate-800 text-[11px] text-slate-200 uppercase font-bold tracking-wider">
                             <tr>
@@ -3232,12 +3235,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   <td className="py-2.5 px-4 font-bold text-white whitespace-nowrap">{metric.featureName}</td>
                                   <td className="py-2.5 px-4 whitespace-nowrap">
                                     {metric.status === 'no_steps' ? (
-                                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase border bg-slate-500/15 text-slate-300 border-slate-500/30">
+                                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase border bg-slate-500/15 text-slate-300 border-slate-500/30">
                                         <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
                                         No completed steps
                                       </span>
                                     ) : (
-                                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase border ${
+                                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase border ${
                                       metric.status === 'healthy'
                                         ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
                                         : metric.status === 'warning'
@@ -3251,7 +3254,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                     </span>
                                     )}
                                   </td>
-                                  <td className="py-2.5 px-4 font-bold text-purple-300 font-mono whitespace-nowrap">{metric.status === 'no_steps' ? '—' : `${metric.healthScorePct}%`}</td>
+                                  <td className="py-2.5 px-4 font-bold text-slate-100 font-mono whitespace-nowrap">{metric.status === 'no_steps' ? '—' : `${metric.healthScorePct}%`}</td>
                                   <td className="py-2.5 px-4 font-mono font-semibold whitespace-nowrap">{metric.totalStepsExecuted}</td>
                                   <td className="py-2.5 px-4 text-emerald-400 font-bold font-mono whitespace-nowrap">{metric.greenCount}</td>
                                   <td className="py-2.5 px-4 text-amber-400 font-bold font-mono whitespace-nowrap">{metric.yellowCount}</td>
@@ -3260,7 +3263,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   <td className="py-2.5 px-4 text-xs font-sans text-slate-100 min-w-[18rem] max-w-md whitespace-normal break-words leading-snug" title={issueSummary ? `${issueSummary}${isAiIssueSummary ? ' (AI summary)' : ''}` : 'No issues encountered'}>
                                     {issueSummary ? (
                                       <span className="text-amber-200 font-semibold">
-                                        {isAiIssueSummary && <Sparkles className="inline w-3 h-3 mr-1 -mt-0.5 text-purple-300" />}
+                                        {isAiIssueSummary && <Sparkles className="inline w-3 h-3 mr-1 -mt-0.5 text-blue-400" />}
                                         {issueSummary}
                                       </span>
                                     ) : (
@@ -3278,9 +3281,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     {/* Golden Runs Execution Tracker Panel */}
                     <div className="pt-4 border-t border-slate-800/80 space-y-3">
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-                        <h4 className="text-xs font-bold text-amber-300 uppercase tracking-wider flex items-center gap-2">
-                          <span>🏆</span>
-                          Golden Runs Tracker ({goldenRunsAnalysis.goldenCount} Qualified)
+                        <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                          <span>Golden Runs Tracker ({goldenRunsAnalysis.goldenCount} Qualified)</span>
                         </h4>
                         <span className="text-[10px] font-mono text-slate-400">
                           Criterion: 100% completed execution • ≤1 Yellow • 0 Reds
@@ -3288,11 +3291,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       </div>
 
                       {goldenRunsAnalysis.runs.length === 0 ? (
-                        <div className="p-4 rounded-xl border border-slate-800 bg-slate-950/60 text-center text-xs text-slate-400 font-medium">
+                        <div className="p-4 rounded-xl border border-slate-800 bg-[#0f172a] text-center text-xs text-slate-400 font-medium">
                           No completed test runs recorded for {reportPlanLabel} {reportDayPhrase}.
                         </div>
                       ) : (
-                        <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/90 shadow-inner">
+                        <div className="overflow-x-auto rounded-xl border border-slate-800 bg-[#0f172a] shadow-inner">
                           <table className="w-full text-left text-xs font-sans">
                             <thead className="bg-slate-900/90 border-b border-slate-800 text-[11px] text-slate-200 uppercase font-bold tracking-wider">
                               <tr>
@@ -3314,23 +3317,25 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   ? new Date(run.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                                   : '-';
                                 return (
-                                  <tr key={run.id} className={`transition ${isGolden ? 'bg-amber-500/5 hover:bg-amber-500/10' : 'hover:bg-slate-900/50'}`}>
+                                  <tr key={run.id} className={`transition ${isGolden ? 'bg-emerald-500/5 hover:bg-emerald-500/10' : 'hover:bg-slate-900/50'}`}>
                                     <td className="py-2.5 px-4 font-bold text-white whitespace-nowrap">
                                       <div className="flex items-center gap-2">
-                                        {isGolden ? <span className="text-amber-400">🏆</span> : <span className="text-slate-500">•</span>}
+                                        <span className={`w-1.5 h-1.5 rounded-full ${isGolden ? 'bg-emerald-400' : 'bg-slate-500'}`} />
                                         <span>{plan?.name || run.planName || 'Test Run'}</span>
                                       </div>
                                     </td>
                                     <td className="py-2.5 px-4 text-slate-300 whitespace-nowrap">{run.testerName || 'Anonymous'}</td>
-                                    <td className="py-2.5 px-4 text-purple-300 font-mono whitespace-nowrap">{run.deviceName || 'Web/Desktop'}</td>
+                                    <td className="py-2.5 px-4 text-slate-300 font-mono whitespace-nowrap">{run.deviceName || 'Web/Desktop'}</td>
                                     <td className="py-2.5 px-4 whitespace-nowrap">
                                       {isGolden ? (
-                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                                          <span>🏆</span> Golden Run {yellowCount === 0 ? '(Clean 100%)' : '(1 Yellow allowed)'}
+                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                                          <span>Golden Run {yellowCount === 0 ? '(Clean 100%)' : '(1 Yellow allowed)'}</span>
                                         </span>
                                       ) : (
                                         <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold text-slate-400 bg-slate-800/60 border border-slate-700">
-                                          {redCount > 0 ? `🔴 Non-Golden (${redCount} Red)` : `🟡 Non-Golden (${yellowCount} Yellows)`}
+                                          <span className={`w-1.5 h-1.5 rounded-full ${redCount > 0 ? 'bg-rose-400' : 'bg-amber-400'}`} />
+                                          <span>{redCount > 0 ? `Non-Golden (${redCount} Red)` : `Non-Golden (${yellowCount} Yellows)`}</span>
                                         </span>
                                       )}
                                     </td>
@@ -3355,49 +3360,49 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
           {/* Separate Standalone Card: Historical Quality Evolution Timeline */}
           {historicalTimelinePoints.length > 0 && (
-            <div className="liquid-glass-panel rounded-3xl p-6 shadow-2xl space-y-4 border-white/15 bg-gradient-to-br from-slate-950/90 via-slate-900/80 to-indigo-950/30">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-3.5">
+            <div className="liquid-glass-panel rounded-3xl p-5 sm:p-6 shadow-xl space-y-4 border border-slate-800 bg-[#111827]">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3.5">
                 <div>
-                  <h4 className="text-base font-extrabold text-white flex items-center gap-2 tracking-tight">
-                    <History className="w-4.5 h-4.5 text-purple-400" />
+                  <h4 className="text-base font-bold text-slate-50 flex items-center gap-2 tracking-tight">
+                    <History className="w-4 h-4 text-blue-400" />
                     Historical Quality Evolution Timeline
                   </h4>
-                  <p className="text-xs text-slate-300 font-medium mt-0.5">
+                  <p className="text-xs text-slate-400 font-medium mt-0.5">
                     Click any date bar below to time-travel snapshot and view that day's QA metrics.
                   </p>
                 </div>
-                <span className="text-[11px] text-purple-300 font-mono bg-purple-500/20 px-3 py-1 rounded-xl border border-purple-500/30 font-bold w-fit">
+                <span className="text-[11px] text-blue-300 font-mono bg-blue-500/10 px-3 py-1 rounded-xl border border-blue-500/25 font-semibold w-fit">
                   {historicalTimelinePoints.length} Recorded Sessions
                 </span>
               </div>
 
               {/* Sparkline / Bar chart per date */}
-              <div className="flex items-end gap-3 overflow-x-auto pb-2 pt-3 px-3 bg-slate-950/60 rounded-2xl border border-white/10 min-h-[120px]">
+              <div className="flex items-end gap-3 overflow-x-auto pb-2 pt-3 px-3 bg-[#0f172a] rounded-2xl border border-slate-800 min-h-[120px]">
                 {historicalTimelinePoints.map(point => (
                   <div
                     key={point.dateStr}
                     onClick={() => setSelectedDailySessionDate(point.dateStr)}
-                    className={`flex-1 min-w-[85px] max-w-[120px] flex flex-col items-center gap-1.5 group cursor-pointer transition-all duration-300 p-2.5 rounded-2xl border ${
+                    className={`flex-1 min-w-[85px] max-w-[120px] flex flex-col items-center gap-1.5 group cursor-pointer transition-all duration-200 p-2.5 rounded-2xl border ${
                       selectedDailySessionDate === point.dateStr
-                        ? 'bg-purple-500/20 border-purple-400 shadow-xl shadow-purple-500/20 font-bold scale-[1.02] ring-2 ring-purple-400/40'
-                        : 'liquid-glass-button hover:bg-slate-900/80 border-white/10'
+                        ? 'bg-[#162033] border-blue-500 shadow-md font-bold ring-1 ring-blue-500/30'
+                        : 'liquid-glass-button hover:bg-slate-800/80 border-slate-800'
                     }`}
                     title={`Click to inspect ${point.displayDate}: ${point.scorePct}% Score, ${point.totalSteps} Steps, ${point.bugs} Bugs`}
                   >
-                    <div className="text-[11px] font-bold font-mono text-purple-300 group-hover:text-white">
+                    <div className="text-[11px] font-bold font-mono text-slate-200 group-hover:text-white">
                       {point.scorePct}%
                     </div>
 
                     {/* Vertical Bar Representation */}
-                    <div className="w-full bg-slate-950 h-16 rounded-xl overflow-hidden flex flex-col justify-end p-0.5 border border-white/10 shadow-inner">
+                    <div className="w-full bg-slate-950 h-16 rounded-xl overflow-hidden flex flex-col justify-end p-0.5 border border-slate-800 shadow-inner">
                       <div
                         style={{ height: `${point.scorePct}%` }}
                         className={`w-full rounded-lg transition-all duration-300 ${
                           point.scorePct >= 95
-                            ? 'bg-emerald-400 shadow-md shadow-emerald-500/30'
+                            ? 'bg-emerald-500'
                             : point.scorePct >= 80
-                            ? 'bg-amber-400 shadow-md shadow-amber-500/30'
-                            : 'bg-rose-400 shadow-md shadow-rose-500/30'
+                            ? 'bg-amber-500'
+                            : 'bg-rose-500'
                         }`}
                       ></div>
                     </div>
@@ -3412,12 +3417,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
           )}
 
           {featureMetricsList.length === 0 && bugOnlyMetrics.length === 0 ? (
-            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-10 text-center space-y-4 shadow-xl">
-              <div className="p-3 bg-purple-950/60 rounded-full border border-purple-800/40 text-purple-400 w-fit mx-auto">
+            <div className="bg-[#111827] border border-slate-800 rounded-3xl p-10 text-center space-y-4 shadow-xl">
+              <div className="p-3 bg-slate-800/90 rounded-full border border-slate-700 text-blue-400 w-fit mx-auto">
                 <Tag className="w-6 h-6" />
               </div>
               <div>
-                <h4 className="text-base font-bold text-white">No completed runs for {reportPlanLabel} {reportDayPhrase}</h4>
+                <h4 className="text-base font-bold text-slate-50">No completed runs for {reportPlanLabel} {reportDayPhrase}</h4>
                 <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
                   Execute test runs or click below to have the autonomous QA subagent test a flow and populate live feature data for today.
                 </p>
@@ -3427,9 +3432,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   <button
                     type="button"
                     onClick={() => setSelectedDailySessionDate(latestReportDate)}
-                    className="px-4 py-2 bg-purple-500/15 hover:bg-purple-500/25 border border-purple-400/40 text-purple-200 font-extrabold text-xs rounded-2xl shadow-md flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs rounded-2xl shadow-sm flex items-center gap-2 transition-all cursor-pointer"
                   >
-                    <Calendar className="w-3.5 h-3.5 text-purple-300 flex-shrink-0" />
+                    <Calendar className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
                     <span>Jump to {formatReportDateLabel(latestReportDate)} (latest day with data)</span>
                   </button>
                 </div>
@@ -3442,10 +3447,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       if (testPlans.length === 0) onLoadSampleData();
                       const targetId = testPlans[0]?.id || 'plan-demo-1';
                       onRunSubagentTest(targetId);
-                      setSubagentToast(`🤖 Autonomous Subagent tested all steps for Today (${todayStr})! Live feature metrics populated below.`);
+                      setSubagentToast(`Autonomous Subagent tested all steps for Today (${todayStr})! Live feature metrics populated below.`);
                       setTimeout(() => setSubagentToast(null), 5000);
                     }}
-                    className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-extrabold text-xs rounded-2xl shadow-xl shadow-emerald-500/25 border border-white/20 flex items-center gap-2 transition-all hover:scale-105 active:scale-95 cursor-pointer"
+                    className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs rounded-2xl shadow-sm border border-blue-500 flex items-center gap-2 transition-all active:scale-95 cursor-pointer"
                   >
                     <Sparkles className="w-4 h-4 text-white" />
                     <span>Run Subagent Test Flow for Today</span>
@@ -3460,39 +3465,43 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   key={metric.featureName}
                   className={`liquid-glass-card rounded-3xl p-4 flex flex-col justify-between space-y-3 relative group ${
                     metric.status === 'critical'
-                      ? 'border-rose-500/40 bg-rose-950/20'
+                      ? 'border-rose-500/40 bg-rose-950/15'
                       : metric.status === 'warning'
-                      ? 'border-amber-500/40 bg-amber-950/20'
+                      ? 'border-amber-500/40 bg-amber-950/15'
                       : metric.status === 'no_steps'
-                      ? 'border-violet-500/30 bg-violet-950/10'
+                      ? 'border-slate-700 bg-slate-900/40'
                       : ''
                   }`}
                 >
                   {/* Top Header: Full Title & Status Badge */}
                   <div className="flex items-start justify-between gap-2 border-b border-slate-800/80 pb-2.5">
                     <div className="flex items-start gap-2 min-w-0 flex-1">
-                      <span className="p-1.5 bg-purple-500/10 text-purple-400 rounded-lg border border-purple-500/20 shrink-0 mt-0.5">
+                      <span className="p-1.5 bg-slate-800 text-blue-400 rounded-lg border border-slate-700 shrink-0 mt-0.5">
                         <Tag className="w-3.5 h-3.5" />
                       </span>
-                      <h4 className="text-sm font-bold text-white break-words leading-snug">
+                      <h4 className="text-sm font-bold text-slate-50 break-words leading-snug">
                         {metric.featureName}
                       </h4>
                     </div>
 
                     <div className="flex items-center gap-1.5 shrink-0">
                       {metric.status === 'no_steps' ? (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border bg-slate-900 text-slate-300 border-slate-700" title="Bugs were logged, but no completed test steps were recorded in this view">
-                          🐛 No completed steps
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border bg-slate-900 text-slate-300 border-slate-700 inline-flex items-center gap-1.5" title="Bugs were logged, but no completed test steps were recorded in this view">
+                          <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                          <span>No completed steps</span>
                         </span>
                       ) : (
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border inline-flex items-center gap-1.5 ${
                         metric.status === 'healthy'
-                          ? 'bg-emerald-950 text-emerald-400 border-emerald-800'
+                          ? 'bg-emerald-950/80 text-emerald-400 border-emerald-800/80'
                           : metric.status === 'warning'
-                          ? 'bg-amber-950 text-amber-400 border-amber-800'
-                          : 'bg-rose-950 text-rose-400 border-rose-800'
+                          ? 'bg-amber-950/80 text-amber-400 border-amber-800/80'
+                          : 'bg-rose-950/80 text-rose-400 border-rose-800/80'
                       }`}>
-                        {metric.status === 'healthy' ? '🟢 Healthy' : metric.status === 'warning' ? '🟡 Degraded' : '🔴 Critical'}
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          metric.status === 'healthy' ? 'bg-emerald-400' : metric.status === 'warning' ? 'bg-amber-400' : 'bg-rose-400'
+                        }`} />
+                        <span>{metric.status === 'healthy' ? 'Healthy' : metric.status === 'warning' ? 'Degraded' : 'Critical'}</span>
                       </span>
                       )}
 
@@ -3517,9 +3526,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   <div className="space-y-1">
                     <div className="flex justify-between text-[11px] font-medium">
                       <span className="text-slate-400">Health Score</span>
-                      <span className="text-white font-mono font-bold">{metric.healthScorePct}%</span>
+                      <span className="text-slate-50 font-mono font-bold">{metric.healthScorePct}%</span>
                     </div>
-                    <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden border border-slate-800">
+                    <div className="w-full bg-[#0f172a] h-1.5 rounded-full overflow-hidden border border-slate-800">
                       <div
                         className={`h-full transition-all duration-300 ${
                           metric.healthScorePct >= 90
@@ -3536,17 +3545,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                   {/* Inline Execution Stats & Bugs pill */}
                   <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-800/80 font-mono">
-                    <div className="flex items-center gap-2 text-[11px]">
-                      <span className="text-emerald-400 font-semibold" title={`${metric.greenCount} Green Steps`}>🟢 {metric.greenCount}</span>
-                      <span className="text-amber-400 font-semibold" title={`${metric.yellowCount} Yellow Steps`}>🟡 {metric.yellowCount}</span>
-                      <span className="text-rose-400 font-semibold" title={`${metric.redCount} Red Steps`}>🔴 {metric.redCount}</span>
+                    <div className="flex items-center gap-3 text-[11px]">
+                      <span className="text-emerald-400 font-semibold inline-flex items-center gap-1" title={`${metric.greenCount} Green Steps`}>
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                        <span>{metric.greenCount} Pass</span>
+                      </span>
+                      <span className="text-amber-400 font-semibold inline-flex items-center gap-1" title={`${metric.yellowCount} Yellow Steps`}>
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                        <span>{metric.yellowCount} Warn</span>
+                      </span>
+                      <span className="text-rose-400 font-semibold inline-flex items-center gap-1" title={`${metric.redCount} Red Steps`}>
+                        <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+                        <span>{metric.redCount} Fail</span>
+                      </span>
                     </div>
-                    <span className={`text-[10px] px-2 py-0.5 rounded font-bold border ${
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
                       metric.bugCount > 0
                         ? 'bg-rose-950/80 text-rose-300 border-rose-800/60'
-                        : 'bg-slate-950 text-slate-400 border-slate-800'
+                        : 'bg-[#0f172a] text-slate-400 border-slate-800'
                     }`}>
-                      🐛 {metric.bugCount} {metric.bugCount === 1 ? 'bug' : 'bugs'}
+                      {metric.bugCount} {metric.bugCount === 1 ? 'bug' : 'bugs'}
                     </span>
                   </div>
                 </div>
@@ -3592,7 +3610,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <h3 className="text-lg font-bold text-slate-50 flex items-center gap-2">
                 <Bug className="w-5 h-5 text-rose-400" />
                 Bugs
               </h3>
@@ -3601,8 +3619,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </p>
             </div>
 
-            {/* Filter & Sort Controls Bar (Condensed Liquid Glass Menu UI) */}
-            <div className="flex items-center gap-3">
+            {/* Filter & Sort Controls Bar */}
+            <div className="flex flex-wrap items-center gap-2.5">
               
               {/* Keyword Search Input */}
               <div className="relative flex-1 sm:w-64">
@@ -3628,17 +3646,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <button
                 type="button"
                 onClick={handleCopyBugsToClipboard}
-                className="px-3.5 py-1.5 bg-gradient-to-r from-purple-600 via-indigo-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white rounded-2xl text-xs font-bold transition flex items-center gap-1.5 shadow-lg border border-white/20 active:scale-95 cursor-pointer"
+                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl text-xs font-semibold transition flex items-center gap-1.5 shadow-sm border border-blue-500 active:scale-95 cursor-pointer"
                 title="Copy filtered bugs list with inline screenshots formatted for Google Docs, Word, Slack, or Email"
               >
                 {copiedBugs ? (
                   <>
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                    <span className="text-emerald-300 font-extrabold">Bugs Copied!</span>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-300" />
+                    <span className="text-emerald-200 font-bold">Bugs Copied!</span>
                   </>
                 ) : (
                   <>
-                    <Copy className="w-3.5 h-3.5 text-purple-200" />
+                    <Copy className="w-3.5 h-3.5 text-white" />
                     <span>Copy Bugs (Google Docs)</span>
                   </>
                 )}
@@ -3648,13 +3666,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <button
                 type="button"
                 onClick={() => setIsSheetModalOpen(true)}
-                className="px-3.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-2xl text-xs font-bold transition flex items-center gap-1.5 shadow-lg border border-white/20 active:scale-95 cursor-pointer"
+                className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-2xl text-xs font-semibold transition flex items-center gap-1.5 shadow-sm border border-slate-700 active:scale-95 cursor-pointer"
                 title="Google Sheets automatic sync and spreadsheet integration settings"
               >
-                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-200" />
+                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
                 <span>Google Sheets Sync</span>
                 {autoSyncSheet && (
-                  <span className="w-2 h-2 rounded-full bg-emerald-300 animate-pulse ml-0.5" title="Auto-sync is enabled"></span>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse ml-0.5" title="Auto-sync is enabled"></span>
                 )}
               </button>
 
@@ -3667,7 +3685,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       onWipeAllBugs();
                     }
                   }}
-                  className="px-3.5 py-1.5 bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 rounded-2xl text-xs font-bold transition flex items-center gap-1.5 shadow-md active:scale-95 cursor-pointer"
+                  className="px-3.5 py-1.5 bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 rounded-2xl text-xs font-semibold transition flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
                   title="Permanently wipe all logged bugs"
                 >
                   <Trash2 className="w-3.5 h-3.5 text-rose-400" />
@@ -3680,16 +3698,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsBugFilterMenuOpen(!isBugFilterMenuOpen)}
-                  className={`px-3.5 py-1.5 liquid-glass-button rounded-2xl text-xs font-bold flex items-center gap-2 transition-all duration-300 ${
+                  className={`px-3.5 py-1.5 liquid-glass-button rounded-2xl text-xs font-semibold flex items-center gap-2 transition-all duration-200 ${
                     (selectedDateFilter !== 'all' || selectedFeatureFilter !== 'all' || selectedDeviceFilter !== 'all' || sortByDevice !== 'newest')
-                      ? 'bg-purple-500/30 border-purple-400/50 text-purple-200 shadow-lg shadow-purple-500/20'
+                      ? '!bg-blue-600/20 !border-blue-500/50 text-blue-200 shadow-sm'
                       : 'text-slate-300 hover:text-white'
                   }`}
                 >
-                  <Filter className="w-3.5 h-3.5 text-purple-400" />
+                  <Filter className="w-3.5 h-3.5 text-blue-400" />
                   <span>Filter & Sort</span>
                   {((selectedDateFilter !== 'all' ? 1 : 0) + (selectedFeatureFilter !== 'all' ? 1 : 0) + (selectedDeviceFilter !== 'all' ? 1 : 0) + (sortByDevice !== 'newest' ? 1 : 0)) > 0 && (
-                    <span className="bg-purple-500 text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold font-mono">
+                    <span className="bg-blue-600 text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold font-mono">
                       {(selectedDateFilter !== 'all' ? 1 : 0) + (selectedFeatureFilter !== 'all' ? 1 : 0) + (selectedDeviceFilter !== 'all' ? 1 : 0) + (sortByDevice !== 'newest' ? 1 : 0)}
                     </span>
                   )}
@@ -3698,10 +3716,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                 {/* Popover Menu Dropdown */}
                 {isBugFilterMenuOpen && (
-                  <div className="absolute right-0 mt-2 w-72 liquid-glass-panel rounded-3xl p-4 space-y-4 shadow-2xl z-50 border-white/20">
-                    <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
+                  <div className="absolute right-0 mt-2 w-72 liquid-glass-panel rounded-3xl p-4 space-y-4 shadow-2xl z-50 border-slate-700">
+                    <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
                       <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                        <Filter className="w-3.5 h-3.5 text-purple-400" />
+                        <Filter className="w-3.5 h-3.5 text-blue-400" />
                         Filter & Sort Menu
                       </span>
                       {(selectedDateFilter !== 'all' || selectedFeatureFilter !== 'all' || selectedDeviceFilter !== 'all' || sortByDevice !== 'newest') && (
@@ -3713,7 +3731,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             setSortByDevice('newest');
                             setCustomDateInput('');
                           }}
-                          className="text-[10px] text-purple-300 hover:text-white font-bold bg-purple-500/20 px-2 py-0.5 rounded-lg border border-purple-500/30 transition"
+                          className="text-[10px] text-blue-300 hover:text-white font-bold bg-blue-500/20 px-2 py-0.5 rounded-lg border border-blue-500/30 transition"
                         >
                           Reset All
                         </button>
@@ -3723,7 +3741,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     {/* Date Filter */}
                     <div className="space-y-1">
                       <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1">
-                        <Calendar className="w-3 h-3 text-indigo-400" /> Date Range
+                        <Calendar className="w-3 h-3 text-blue-400" /> Date Range
                       </label>
                       <select
                         value={selectedDateFilter}
@@ -3742,7 +3760,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           type="date"
                           value={customDateInput}
                           onChange={e => setCustomDateInput(e.target.value)}
-                          className="w-full liquid-glass-input rounded-xl px-3 py-1 text-xs text-indigo-200 focus:outline-none mt-1 font-mono"
+                          className="w-full liquid-glass-input rounded-xl px-3 py-1 text-xs text-blue-200 focus:outline-none mt-1 font-mono"
                         />
                       )}
                     </div>
@@ -3750,7 +3768,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     {/* Feature Filter */}
                     <div className="space-y-1">
                       <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1">
-                        <Tag className="w-3 h-3 text-purple-400" /> Feature Tag
+                        <Tag className="w-3 h-3 text-blue-400" /> Feature Tag
                       </label>
                       <select
                         value={selectedFeatureFilter}
@@ -3760,7 +3778,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         <option value="all" className="bg-slate-900">All Features</option>
                         {uniqueFeatures.map(feat => (
                           <option key={feat} value={feat} className="bg-slate-900">
-                            🏷️ {feat}
+                            {feat}
                           </option>
                         ))}
                       </select>
@@ -3769,7 +3787,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     {/* Device Filter */}
                     <div className="space-y-1">
                       <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1">
-                        <Smartphone className="w-3 h-3 text-purple-400" /> Device Model
+                        <Smartphone className="w-3 h-3 text-blue-400" /> Device Model
                       </label>
                       <select
                         value={selectedDeviceFilter}
@@ -3779,7 +3797,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         <option value="all" className="bg-slate-900">All Devices ({bugLogs.length})</option>
                         {uniqueDevices.map(dev => (
                           <option key={dev} value={dev} className="bg-slate-900">
-                            📱 {dev}
+                            {dev}
                           </option>
                         ))}
                       </select>
@@ -3788,7 +3806,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     {/* Sort Order */}
                     <div className="space-y-1">
                       <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1">
-                        <ArrowUpDown className="w-3 h-3 text-indigo-400" /> Sort Order
+                        <ArrowUpDown className="w-3 h-3 text-blue-400" /> Sort Order
                       </label>
                       <select
                         value={sortByDevice}
@@ -3803,7 +3821,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       </select>
                     </div>
 
-                    <div className="pt-2 border-t border-white/10 space-y-2 text-center">
+                    <div className="pt-2 border-t border-slate-800 space-y-2 text-center">
                       <button
                         type="button"
                         onClick={() => exportBugsToCSV(processedBugs)}
@@ -3816,7 +3834,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       <button
                         type="button"
                         onClick={() => setIsBugFilterMenuOpen(false)}
-                        className="w-full py-1.5 bg-white/10 hover:bg-white/20 text-white text-xs font-bold rounded-xl transition"
+                        className="w-full py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl transition"
                       >
                         Done
                       </button>
@@ -3849,41 +3867,39 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 return (
                   <div 
                     key={bug.id} 
-                    className="liquid-glass-panel rounded-3xl border border-white/15 overflow-hidden transition-all duration-300 shadow-xl hover:border-purple-500/40"
+                    className="liquid-glass-panel rounded-3xl border border-slate-800 overflow-hidden transition-all duration-200 shadow-xl hover:border-slate-700"
                   >
-                    {/* Liquid Glass Header Bar (Always Visible) */}
+                    {/* Header Bar (Always Visible) */}
                     <div 
                       onClick={() => toggleBugExpand(bug.id)}
-                      className="p-4 flex flex-wrap items-center justify-between gap-3 cursor-pointer bg-slate-900/40 hover:bg-slate-850/60 transition"
+                      className="p-4 flex flex-wrap items-center justify-between gap-3 cursor-pointer bg-[#111827] hover:bg-[#162033] transition"
                     >
                       <div className="flex items-center gap-3 flex-wrap">
                         <button 
                           type="button"
-                          className="p-1 rounded-lg bg-white/5 hover:bg-white/10 text-indigo-300 transition"
+                          className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-blue-300 transition"
                         >
-                          <ChevronDown className={`w-4 h-4 transition-transform duration-300 ${isBugExpanded ? 'rotate-180 text-purple-400' : 'text-slate-400'}`} />
+                          <ChevronDown className={`w-4 h-4 transition-transform duration-300 ${isBugExpanded ? 'rotate-180 text-blue-400' : 'text-slate-400'}`} />
                         </button>
 
-
-
-                        <div className="flex items-center gap-1.5 font-mono text-xs text-indigo-300 font-bold bg-indigo-950/60 px-3 py-1 rounded-xl border border-indigo-800/40">
-                          <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                        <div className="flex items-center gap-1.5 font-mono text-xs text-slate-200 font-bold bg-[#0f172a] px-3 py-1 rounded-xl border border-slate-800">
+                          <Clock className="w-3.5 h-3.5 text-blue-400" />
                           <span>{formatted12HrTime}</span>
                           <span className="text-[10px] text-slate-400 font-normal ml-0.5">({new Date(bug.timestamp).toLocaleDateString()})</span>
                         </div>
 
-                        <span className="bg-purple-950/80 text-purple-300 font-mono text-xs px-3 py-1 rounded-xl border border-purple-800/40 flex items-center gap-1.5 font-bold">
-                          <Tag className="w-3.5 h-3.5 text-purple-400" />
+                        <span className="bg-blue-500/15 text-blue-300 font-mono text-xs px-3 py-1 rounded-xl border border-blue-500/30 flex items-center gap-1.5 font-bold">
+                          <Tag className="w-3.5 h-3.5 text-blue-400" />
                           {bug.feature || 'General'}
                         </span>
 
-                        <span className="bg-slate-950/80 text-slate-300 font-mono text-xs px-3 py-1 rounded-xl border border-slate-800 flex items-center gap-1.5 font-medium">
-                          <Smartphone className="w-3.5 h-3.5 text-indigo-400" />
+                        <span className="bg-[#0f172a] text-slate-300 font-mono text-xs px-3 py-1 rounded-xl border border-slate-800 flex items-center gap-1.5 font-medium">
+                          <Smartphone className="w-3.5 h-3.5 text-slate-400" />
                           {bug.deviceName || 'Unspecified'}
                         </span>
 
-                        <span className="bg-slate-950/80 text-indigo-200 font-mono text-xs px-3 py-1 rounded-xl border border-slate-800 flex items-center gap-1.5 font-medium">
-                          <User className="w-3.5 h-3.5 text-indigo-400" />
+                        <span className="bg-[#0f172a] text-slate-200 font-mono text-xs px-3 py-1 rounded-xl border border-slate-800 flex items-center gap-1.5 font-medium">
+                          <User className="w-3.5 h-3.5 text-blue-400" />
                           {bug.testerName}
                         </span>
                       </div>
@@ -3894,8 +3910,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         </div>
 
                         {bug.imageUrl && (
-                          <span className="px-2.5 py-1 bg-purple-500/20 text-purple-200 border border-purple-500/30 rounded-xl text-[11px] font-mono font-bold flex items-center gap-1">
-                            <ImageIcon className="w-3 h-3 text-purple-300" /> Photo
+                          <span className="px-2.5 py-1 bg-blue-500/15 text-blue-200 border border-blue-500/30 rounded-xl text-[11px] font-mono font-bold flex items-center gap-1">
+                            <ImageIcon className="w-3 h-3 text-blue-300" /> Photo
                           </span>
                         )}
 
@@ -3908,7 +3924,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           className={`p-2 rounded-xl border transition flex items-center gap-1 text-xs font-medium cursor-pointer ${
                             copiedSingleBugId === bug.id
                               ? 'text-emerald-300 bg-emerald-950/60 border-emerald-500/40'
-                              : 'text-slate-400 hover:text-indigo-300 hover:bg-indigo-950/40 border-transparent hover:border-indigo-800/50'
+                              : 'text-slate-400 hover:text-blue-300 hover:bg-slate-800 border-transparent hover:border-slate-700'
                           }`}
                           title="Copy this bug & screenshot formatted for Google Docs"
                         >
@@ -3933,16 +3949,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       </div>
                     </div>
 
-                    {/* Fluid Liquid Glass Accordion Content */}
+                    {/* Accordion Content */}
                     <div className={`liquid-accordion-wrapper ${isBugExpanded ? 'expanded' : ''}`}>
                       <div className="liquid-accordion-inner">
-                        <div className="p-4 pt-0 border-t border-white/10 bg-slate-950/60">
-                          <div className="liquid-glass-card rounded-2xl p-5 space-y-4 border-purple-500/30 text-left bg-slate-950/80 shadow-2xl mt-3">
+                        <div className="p-4 pt-0 border-t border-slate-800 bg-[#0b0f19]">
+                          <div className="liquid-glass-card rounded-2xl p-5 space-y-4 border-slate-800 text-left bg-[#111827] shadow-2xl mt-3">
                             
-                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
                               <span className="text-xs font-bold text-white flex items-center gap-2 font-mono">
-                                <Tag className="w-4 h-4 text-purple-400" />
-                                Feature Category: <span className="text-purple-300">{bug.feature || 'General'}</span>
+                                <Tag className="w-4 h-4 text-blue-400" />
+                                Feature Category: <span className="text-blue-300">{bug.feature || 'General'}</span>
                               </span>
                               <div className="flex items-center gap-2">
                                 <button
@@ -3951,7 +3967,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   className={`px-3 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5 transition active:scale-95 border cursor-pointer ${
                                     copiedSingleBugId === bug.id
                                       ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/50 shadow-lg'
-                                      : 'bg-indigo-950/80 hover:bg-indigo-900/90 text-indigo-200 border-indigo-700/50 hover:border-indigo-500'
+                                      : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
                                   }`}
                                   title="Copy this bug & screenshot formatted for Google Docs, Word, or Email"
                                 >
@@ -3962,13 +3978,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                     </>
                                   ) : (
                                     <>
-                                      <Copy className="w-3.5 h-3.5 text-indigo-300" />
+                                      <Copy className="w-3.5 h-3.5 text-blue-300" />
                                       <span>Copy for Google Docs</span>
                                     </>
                                   )}
                                 </button>
-                                <span className="text-xs font-mono text-indigo-300 flex items-center gap-1.5 bg-indigo-950/80 px-3 py-1 rounded-xl border border-indigo-800/40">
-                                  <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                                <span className="text-xs font-mono text-slate-300 flex items-center gap-1.5 bg-[#0f172a] px-3 py-1 rounded-xl border border-slate-800">
+                                  <Clock className="w-3.5 h-3.5 text-blue-400" />
                                   Logged at {formatted12HrTime} on {new Date(bug.timestamp).toLocaleDateString()}
                                 </span>
                               </div>
@@ -3977,7 +3993,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-5 text-xs">
                               <div className="md:col-span-2 space-y-3">
                                 <div>
-                                  <span className="text-[11px] uppercase font-mono text-purple-300 block font-bold mb-1.5 flex items-center gap-1.5">
+                                  <span className="text-[11px] uppercase font-mono text-slate-300 block font-bold mb-1.5 flex items-center gap-1.5">
                                     Observation / Bug Description Log:
                                   </span>
                                   <div className="liquid-glass-input p-4 rounded-2xl text-slate-100 text-xs leading-relaxed whitespace-pre-wrap font-medium shadow-inner">
@@ -3986,36 +4002,36 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 </div>
 
                                 <div className="grid grid-cols-2 gap-3 text-xs font-mono">
-                                  <div className="liquid-glass-panel p-3 rounded-2xl border border-white/10">
+                                  <div className="liquid-glass-panel p-3 rounded-2xl border border-slate-800">
                                     <span className="text-[10px] uppercase text-slate-400 block font-semibold">Step Target</span>
                                     <span className="text-white font-bold">{bug.stepTitle || 'N/A'}</span>
                                   </div>
-                                  <div className="liquid-glass-panel p-3 rounded-2xl border border-white/10">
+                                  <div className="liquid-glass-panel p-3 rounded-2xl border border-slate-800">
                                     <span className="text-[10px] uppercase text-slate-400 block font-semibold">Reporter & Device</span>
-                                    <span className="text-indigo-300 font-bold">{bug.testerName} ({bug.deviceName})</span>
+                                    <span className="text-blue-300 font-bold">{bug.testerName} ({bug.deviceName})</span>
                                   </div>
                                 </div>
                               </div>
 
                               {/* Evidence Image Preview Box */}
                               <div>
-                                <span className="text-[11px] uppercase font-mono text-purple-300 block font-bold mb-1.5">
+                                <span className="text-[11px] uppercase font-mono text-slate-300 block font-bold mb-1.5">
                                   Evidence Photo:
                                 </span>
                                 {bug.imageUrl ? (
                                   <div 
                                     onClick={() => setSelectedImagePreviewUrl(bug.imageUrl!)}
-                                    className="relative group rounded-2xl overflow-hidden border border-white/20 cursor-pointer bg-slate-900 max-h-56 flex items-center justify-center shadow-2xl"
+                                    className="relative group rounded-2xl overflow-hidden border border-slate-700 cursor-pointer bg-slate-900 max-h-56 flex items-center justify-center shadow-2xl"
                                   >
                                     <img src={bug.imageUrl} alt="Bug screenshot" className="w-full object-cover max-h-52 group-hover:scale-105 transition duration-300" />
-                                    <div className="absolute inset-0 bg-slate-950/50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center backdrop-blur-[3px]">
-                                      <span className="px-4 py-2 bg-slate-950/90 text-purple-200 border border-purple-400/50 rounded-2xl text-xs font-bold font-mono flex items-center gap-2 shadow-2xl">
-                                        <ImageIcon className="w-4 h-4 text-purple-400" /> Click for Full Image
+                                    <div className="absolute inset-0 bg-slate-950/60 opacity-0 group-hover:opacity-100 transition flex items-center justify-center backdrop-blur-[3px]">
+                                      <span className="px-4 py-2 bg-slate-900/95 text-slate-100 border border-blue-500/50 rounded-2xl text-xs font-bold font-mono flex items-center gap-2 shadow-2xl">
+                                        <ImageIcon className="w-4 h-4 text-blue-400" /> Click for Full Image
                                       </span>
                                     </div>
                                   </div>
                                 ) : (
-                                  <div className="h-36 rounded-2xl border border-white/10 bg-slate-900/40 flex items-center justify-center text-xs text-slate-500 font-mono">
+                                  <div className="h-36 rounded-2xl border border-slate-800 bg-[#0f172a] flex items-center justify-center text-xs text-slate-500 font-mono">
                                     No Photo Attached
                                   </div>
                                 )}
@@ -4064,7 +4080,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               alignItems: 'center',
               justifyContent: 'space-between',
               backgroundColor: 'rgba(15, 23, 42, 0.95)',
-              border: '1px solid rgba(255, 255, 255, 0.2)',
+              border: '1px solid rgba(51, 65, 85, 0.8)',
               borderRadius: '1rem',
               padding: '0.75rem 1.25rem',
               boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)',
@@ -4074,13 +4090,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <button
               type="button"
               onClick={() => setSelectedImagePreviewUrl(null)}
-              className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-extrabold flex items-center gap-1.5 cursor-pointer shadow-lg active:scale-95 transition-all"
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-sm active:scale-95 transition-all"
             >
               <span>← Back to Dashboard</span>
             </button>
 
             <span className="text-xs font-bold text-slate-200 flex items-center gap-2">
-              <ImageIcon className="w-4 h-4 text-purple-400" /> Bug Screenshot Preview
+              <ImageIcon className="w-4 h-4 text-blue-400" /> Bug Screenshot Preview
             </span>
 
             <button
@@ -4144,7 +4160,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               alignItems: 'center',
               justifyContent: 'space-between',
               backgroundColor: 'rgba(15, 23, 42, 0.95)',
-              border: '1px solid rgba(255, 255, 255, 0.2)',
+              border: '1px solid rgba(51, 65, 85, 0.8)',
               borderRadius: '1rem',
               padding: '0.75rem 1.25rem',
               boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)',
@@ -4184,17 +4200,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     console.error('Failed to copy image to clipboard:', err);
                   }
                 }}
-                className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold rounded-xl border border-white/20 cursor-pointer transition active:scale-95 flex items-center gap-1.5 shadow-md"
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl border border-blue-500 cursor-pointer transition active:scale-95 flex items-center gap-1.5 shadow-sm"
                 title="Copy raw image to clipboard"
               >
                 {copiedImage ? (
                   <>
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                    <span className="text-emerald-300">Image Copied!</span>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-300" />
+                    <span className="text-emerald-200">Image Copied!</span>
                   </>
                 ) : (
                   <>
-                    <Copy className="w-3.5 h-3.5 text-purple-200" />
+                    <Copy className="w-3.5 h-3.5 text-white" />
                     <span>Copy Image</span>
                   </>
                 )}
@@ -4202,7 +4218,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectedImagePreviewUrl(null)}
-                className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-extrabold rounded-xl border border-white/15 cursor-pointer transition active:scale-95"
+                className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl border border-slate-700 cursor-pointer transition active:scale-95"
               >
                 ← Back
               </button>
@@ -4220,15 +4236,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
         >
           <div
             onClick={e => e.stopPropagation()}
-            className="liquid-glass-panel rounded-3xl p-6 max-w-md w-full border border-purple-500/30 shadow-2xl bg-slate-900/95 space-y-4 text-left animate-in fade-in zoom-in-95 duration-200"
+            className="liquid-glass-panel rounded-3xl p-6 max-w-md w-full border border-slate-700 shadow-2xl bg-[#111827] space-y-4 text-left animate-in fade-in zoom-in-95 duration-200"
           >
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-purple-500/20 text-purple-300 rounded-xl border border-purple-500/30">
-                  <Sparkles className="w-4 h-4 text-purple-400" />
+                <div className="p-2 bg-blue-500/15 text-blue-300 rounded-xl border border-blue-500/30">
+                  <Sparkles className="w-4 h-4 text-blue-400" />
                 </div>
                 <div>
-                  <h4 className="text-sm font-black text-white">Gemini AI Summarization Key</h4>
+                  <h4 className="text-sm font-bold text-white">Gemini AI Summarization Key</h4>
                   <p className="text-[11px] text-slate-400 font-medium">Power executive QA summaries with Gemini</p>
                 </div>
               </div>
@@ -4246,12 +4262,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 To generate accurate executive defect summaries without conversational noise, enter your Gemini API Key.
               </p>
               <p className="text-[11px] text-slate-400">
-                Keys are stored locally in your browser (<code className="text-purple-300 font-mono">localStorage</code>). You can generate a free key at{' '}
+                Keys are stored locally in your browser (<code className="text-blue-300 font-mono">localStorage</code>). You can generate a free key at{' '}
                 <a
                   href="https://aistudio.google.com/"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-purple-400 underline font-semibold hover:text-purple-300"
+                  className="text-blue-400 underline font-semibold hover:text-blue-300"
                 >
                   Google AI Studio
                 </a>.
@@ -4262,7 +4278,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   setIsApiKeyModalOpen(false);
                   openChatSummary();
                 }}
-                className="text-[11px] text-cyan-300 hover:text-cyan-200 font-semibold underline underline-offset-2 transition"
+                className="text-[11px] text-blue-300 hover:text-blue-200 font-semibold underline underline-offset-2 transition"
               >
                 Can't get a key? Summarize with an AI chat instead →
               </button>
@@ -4311,9 +4327,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       setIsTestingKey(false);
                     }
                   }}
-                  className="text-[10px] text-purple-400 hover:text-purple-300 font-semibold flex items-center gap-1 disabled:opacity-50 transition cursor-pointer"
+                  className="text-[10px] text-blue-400 hover:text-blue-300 font-semibold flex items-center gap-1 disabled:opacity-50 transition cursor-pointer"
                 >
-                  <RefreshCw className={`w-3 h-3 ${isTestingKey ? 'animate-spin text-purple-300' : ''}`} />
+                  <RefreshCw className={`w-3 h-3 ${isTestingKey ? 'animate-spin text-blue-300' : ''}`} />
                   <span>{isTestingKey ? 'Testing...' : 'Test Key & Detect Models'}</span>
                 </button>
               </div>
@@ -4325,7 +4341,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   setTempApiKey(e.target.value);
                   setTestKeyStatus(null);
                 }}
-                className="w-full bg-slate-950 border border-slate-800 focus:border-purple-500 rounded-xl px-3 py-2 text-xs text-white font-mono placeholder-slate-600 focus:outline-none"
+                className="w-full bg-[#0f172a] border border-slate-700 focus:border-blue-500 rounded-xl px-3 py-2 text-xs text-white font-mono placeholder-slate-500 focus:outline-none"
               />
               {testKeyStatus && (
                 <div className={`p-2 rounded-lg text-[10.5px] border leading-relaxed ${
@@ -4342,7 +4358,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <div className="space-y-1.5">
               <label className="text-[11px] font-bold text-slate-300 flex items-center justify-between">
                 <span>Gemini Model</span>
-                <span className="text-[10px] text-purple-400 font-semibold">Customizable</span>
+                <span className="text-[10px] text-blue-400 font-semibold">Customizable</span>
               </label>
               <div className="flex gap-2">
                 <input
@@ -4350,12 +4366,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   placeholder={`e.g. ${DEFAULT_GEMINI_MODEL}`}
                   value={tempModel}
                   onChange={e => setTempModel(e.target.value)}
-                  className="flex-1 bg-slate-950 border border-slate-800 focus:border-purple-500 rounded-xl px-3 py-2 text-xs text-white font-mono placeholder-slate-600 focus:outline-none"
+                  className="flex-1 bg-[#0f172a] border border-slate-700 focus:border-blue-500 rounded-xl px-3 py-2 text-xs text-white font-mono placeholder-slate-500 focus:outline-none"
                 />
                 <select
                   value={tempModel}
                   onChange={e => setTempModel(e.target.value)}
-                  className="bg-slate-900 border border-slate-800 focus:border-purple-500 rounded-xl px-2.5 py-2 text-xs text-purple-300 font-medium focus:outline-none cursor-pointer max-w-[150px] truncate"
+                  className="bg-slate-900 border border-slate-700 focus:border-blue-500 rounded-xl px-2.5 py-2 text-xs text-blue-300 font-medium focus:outline-none cursor-pointer max-w-[150px] truncate"
                 >
                   {testKeyStatus?.models && testKeyStatus.models.length > 0 ? (
                     testKeyStatus.models.map(m => (
@@ -4373,7 +4389,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </select>
               </div>
               <p className="text-[10.5px] text-slate-400">
-                Default: <code className="text-purple-300 font-mono">{DEFAULT_GEMINI_MODEL}</code>. You can select an auto-detected model or type any model ID. Retired models (Gemini 1.5 / 2.0) are switched to the default automatically.
+                Default: <code className="text-blue-300 font-mono">{DEFAULT_GEMINI_MODEL}</code>. You can select an auto-detected model or type any model ID. Retired models (Gemini 1.5 / 2.0) are switched to the default automatically.
               </p>
             </div>
 
@@ -4388,11 +4404,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   setReportDisclaimer(e.target.value);
                   localStorage.setItem('qa_report_disclaimer', e.target.value);
                 }}
-                className="w-full bg-slate-950 border border-slate-800 focus:border-purple-500 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none"
+                className="w-full bg-[#0f172a] border border-slate-700 focus:border-blue-500 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none"
               />
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-3 border-t border-white/10">
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
               <button
                 type="button"
                 onClick={() => {
@@ -4413,7 +4429,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   setIsApiKeyModalOpen(false);
                   handleExecuteCopyReport(false);
                 }}
-                className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-extrabold shadow-lg shadow-purple-500/20 active:scale-95 transition"
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-sm border border-blue-500 active:scale-95 transition"
               >
                 Save & Run AI Summary
               </button>
@@ -4431,15 +4447,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
         >
           <div
             onClick={e => e.stopPropagation()}
-            className="liquid-glass-panel rounded-3xl p-6 max-w-lg w-full border border-cyan-500/30 shadow-2xl bg-slate-900/95 space-y-4 text-left animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto"
+            className="liquid-glass-panel rounded-3xl p-6 max-w-lg w-full border border-slate-700 shadow-2xl bg-[#111827] space-y-4 text-left animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto"
           >
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-cyan-500/20 text-cyan-300 rounded-xl border border-cyan-500/30">
-                  <MessageSquareText className="w-4 h-4 text-cyan-300" />
+                <div className="p-2 bg-blue-500/15 text-blue-300 rounded-xl border border-blue-500/30">
+                  <MessageSquareText className="w-4 h-4 text-blue-400" />
                 </div>
                 <div>
-                  <h4 className="text-sm font-black text-white">Summarize with an AI chat</h4>
+                  <h4 className="text-sm font-bold text-white">Summarize with an AI chat</h4>
                   <p className="text-[11px] text-slate-400 font-medium">No API key needed - use any AI chat you're allowed to use</p>
                 </div>
               </div>
@@ -4464,10 +4480,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <button
                   type="button"
                   onClick={handleCopyChatPrompt}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-extrabold flex items-center gap-1.5 border transition active:scale-95 ${
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition active:scale-95 ${
                     chatPromptCopied
                       ? 'bg-emerald-500/15 text-emerald-200 border-emerald-400/40'
-                      : 'bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-200 border-cyan-400/40'
+                      : 'bg-blue-600/20 hover:bg-blue-600/30 text-blue-200 border-blue-500/40'
                   }`}
                 >
                   {chatPromptCopied ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
@@ -4477,7 +4493,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   href={GEMINI_CHAT_URL}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="px-3.5 py-2 rounded-xl text-xs font-extrabold flex items-center gap-1.5 border bg-slate-800/60 hover:bg-slate-700/60 text-slate-200 border-white/10 transition active:scale-95"
+                  className="px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 border bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700 transition active:scale-95"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                   <span>Open Gemini</span>
@@ -4487,7 +4503,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     type="checkbox"
                     checked={chatAutoOpenGemini}
                     onChange={e => toggleChatAutoOpenGemini(e.target.checked)}
-                    className="accent-cyan-500 w-3.5 h-3.5 cursor-pointer"
+                    className="accent-blue-500 w-3.5 h-3.5 cursor-pointer"
                   />
                   <span>Open Gemini automatically</span>
                 </label>
@@ -4507,7 +4523,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <button
                   type="button"
                   onClick={handlePasteChatReplyFromClipboard}
-                  className="text-[10px] text-cyan-300 hover:text-cyan-200 font-semibold flex items-center gap-1 transition"
+                  className="text-[10px] text-blue-300 hover:text-blue-200 font-semibold flex items-center gap-1 transition"
                 >
                   <ClipboardPaste className="w-3 h-3" />
                   <span>Paste from clipboard</span>
@@ -4524,7 +4540,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 }}
                 placeholder='Or paste the reply here: {"reportId": "QA-...", "features": [...], "overallSummary": "..."}'
                 rows={4}
-                className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-3 py-2 text-[11px] text-white font-mono placeholder-slate-600 focus:outline-none resize-y"
+                className="w-full bg-[#0f172a] border border-slate-700 focus:border-blue-500 rounded-xl px-3 py-2 text-[11px] text-white font-mono placeholder-slate-500 focus:outline-none resize-y"
               />
             </div>
 
@@ -4538,7 +4554,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </div>
             )}
 
-            <div className="flex items-center justify-between gap-2 pt-3 border-t border-white/10">
+            <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-800">
               <div className="flex items-center gap-3">
                 <button
                   type="button"
@@ -4575,7 +4591,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 type="button"
                 disabled={!chatReplyText.trim() || isGeneratingSummary}
                 onClick={handleBuildReportFromChatReply}
-                className="px-4 py-2 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white rounded-xl text-xs font-extrabold shadow-lg shadow-cyan-500/20 active:scale-95 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-sm border border-blue-500 active:scale-95 transition disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Build Report
               </button>
@@ -4594,15 +4610,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
         >
           <div
             onClick={e => e.stopPropagation()}
-            className="liquid-glass-panel rounded-3xl p-6 max-w-lg w-full border border-emerald-500/30 shadow-2xl bg-slate-900/95 space-y-4 text-left animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto"
+            className="liquid-glass-panel rounded-3xl p-6 max-w-lg w-full border border-slate-700 shadow-2xl bg-[#111827] space-y-4 text-left animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto"
           >
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2.5">
                 <div className="p-2 bg-emerald-500/20 text-emerald-300 rounded-xl border border-emerald-500/30">
                   <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
                 </div>
                 <div>
-                  <h4 className="text-sm font-black text-white flex items-center gap-2">
+                  <h4 className="text-sm font-bold text-white flex items-center gap-2">
                     <span>Google Sheets Bug Integration</span>
                     <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
                       Live
@@ -4651,7 +4667,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </div>
 
             {/* Controls: Auto-Sync Toggle & Sync Now Button */}
-            <div className="p-3.5 rounded-2xl bg-slate-950/70 border border-white/10 space-y-3">
+            <div className="p-3.5 rounded-2xl bg-[#0f172a] border border-slate-800 space-y-3">
               <div className="flex items-center justify-between">
                 <div>
                   <div className="text-xs font-bold text-white">Auto-Sync Every 1 Minute</div>
@@ -4676,12 +4692,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </button>
               </div>
 
-              <div className="pt-2 border-t border-white/5 flex items-center justify-between gap-2 flex-wrap">
+              <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-2 flex-wrap">
                 <a
                   href="https://docs.google.com/spreadsheets/d/1p5VfZLm5w9w5XGtbmKxroWwUxgWNxcwU8a0DnCoqCBk/edit"
                   target="_blank"
                   rel="noreferrer"
-                  className="px-3 py-2 bg-slate-800/90 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 border border-slate-700 active:scale-95"
+                  className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 border border-slate-700 active:scale-95"
                 >
                   <ExternalLink className="w-3.5 h-3.5 text-blue-400" />
                   <span>Open Spreadsheet</span>
@@ -4690,7 +4706,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   type="button"
                   disabled={isSyncingSheet || !googleSheetUrl.trim()}
                   onClick={() => handleSyncToGoogleSheet(processedBugs)}
-                  className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-lg active:scale-95 disabled:opacity-50 cursor-pointer"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm border border-blue-500 active:scale-95 disabled:opacity-50 cursor-pointer"
                 >
                   {isSyncingSheet ? (
                     <>
@@ -4699,7 +4715,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     </>
                   ) : (
                     <>
-                      <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-200" />
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-white" />
                       <span>Sync All {processedBugs.length} Bugs</span>
                     </>
                   )}
@@ -4708,7 +4724,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
               {/* In-Sheet Direct Control Tip */}
               <div className="p-2.5 rounded-xl bg-blue-950/40 border border-blue-500/20 text-[11px] text-blue-200 leading-relaxed">
-                💡 <b>24/7 Cloud Background Sync:</b> Inside your Google Sheet, click the top menu <b>QA Manager</b> &gt; <b>⏱️ Enable Auto-Sync (Every 1 Min)</b>. Google's cloud will automatically pull fresh bugs from the database every 60 seconds even when this app is closed!
+                <b>24/7 Cloud Background Sync:</b> Inside your Google Sheet, click the top menu <b>QA Manager</b> &gt; <b>Enable Auto-Sync (Every 1 Min)</b>. Google's cloud will automatically pull fresh bugs from the database every 60 seconds even when this app is closed!
               </div>
             </div>
 
@@ -4723,7 +4739,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   <span><b>Individual Tester Smart Tables:</b> Creates a separate page for each tester (e.g. Eric, Gianna D, Ed, John) + All Bugs master table.</span>
                 </li>
                 <li className="flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
                   <span><b>Smart Table Features:</b> Interactive filter/sort dropdowns on every column, alternating banded rows, and frozen headers.</span>
                 </li>
                 <li className="flex items-center gap-2">
@@ -4731,14 +4747,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   <span><b>Smart Dropdowns:</b> Pre-configured with Bug Type, Priority (P0, P1, P2 / 0, 1, 2), and Status chips with color pills.</span>
                 </li>
                 <li className="flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-purple-400"></span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
                   <span><b>Clean 10-Column Smart Table:</b> Severity, Screenshot Preview, and Bug ID removed for maximum clarity; screenshots open via clean clickable links.</span>
                 </li>
               </ul>
             </div>
 
             {/* Google Apps Script Code Accordion / Copy */}
-            <div className="pt-2 border-t border-white/10 space-y-2">
+            <div className="pt-2 border-t border-slate-800 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-white">Google Sheet Apps Script (Code.gs)</span>
                 <button
@@ -4757,7 +4773,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     </>
                   ) : (
                     <>
-                      <Copy className="w-3.5 h-3.5 text-purple-300" />
+                      <Copy className="w-3.5 h-3.5 text-blue-300" />
                       <span>Copy Code.gs</span>
                     </>
                   )}
