@@ -36,3 +36,6 @@ twa-manifest.json
 *.apk
 !public/*.apk
 .env*
+
+# Local-only prototype data (never commit)
+public/__local/

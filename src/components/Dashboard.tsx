@@ -8,6 +8,10 @@ import { ALL_PLANS, ALL_DATES, mergeRunsById, getKnownCujNames, computeCujReport
 import type { CujMetric } from '../utils/cujReportUtils';
 import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel, discoverAvailableGeminiModels, rankModelsForSummaries, DEFAULT_GEMINI_MODEL, getGeminiKeyErrorHint, buildChatSummaryPrompt, applyChatSummaryReply, isChatSummaryPrompt, getChatReplyReportId } from '../services/geminiService';
 import { requestRx95Summary, isRx95Available } from '../services/rx95Service';
+import BuganizerTriage from './BuganizerTriage';
+
+/** Local-only Buganizer triage prototype (off unless VITE_BUGANIZER_PROTOTYPE=1). */
+const BUGANIZER_PROTOTYPE = ((import.meta as any).env?.VITE_BUGANIZER_PROTOTYPE || '') === '1';
 import type { ExecutiveQAResult, SummaryScopeContext } from '../services/geminiService';
 import { GOOGLE_APPS_SCRIPT_CODE } from '../googleAppsScriptCode';
 import { toBlob } from 'html-to-image';
@@ -105,6 +109,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 }) => {
   const defaultTodayStr = getLocalDateStr(new Date());
   const [activeTab, setActiveTab] = useState<'overview' | 'devices' | 'testers' | 'features' | 'bugs'>('overview');
+  const [bugsView, setBugsView] = useState<'feed' | 'buganizer'>('feed');
   const [selectedQaDate, setSelectedQaDate] = useState<string>(defaultTodayStr);
   const [expandedTesters, setExpandedTesters] = useState<Record<string, boolean>>({});
   const [expandedPlanSteps, setExpandedPlanSteps] = useState<Record<string, boolean>>({});
@@ -3793,8 +3798,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
 
+      {/* Buganizer triage prototype toggle (local only, behind VITE_BUGANIZER_PROTOTYPE) */}
+      {activeTab === 'bugs' && BUGANIZER_PROTOTYPE && (
+        <div className="inline-flex items-center bg-[#0f172a] border border-slate-800 rounded-2xl p-0.5 gap-0.5 h-8">
+          <button type="button" onClick={() => setBugsView('feed')}
+            className={`px-3 h-7 rounded-xl text-xs font-semibold ${bugsView === 'feed' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}>Bugs Feed</button>
+          <button type="button" data-testid="buganizer-tab" onClick={() => setBugsView('buganizer')}
+            className={`px-3 h-7 rounded-xl text-xs font-semibold ${bugsView === 'buganizer' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}>Buganizer Triage (prototype)</button>
+        </div>
+      )}
+      {activeTab === 'bugs' && BUGANIZER_PROTOTYPE && bugsView === 'buganizer' && (
+        <BuganizerTriage bugs={bugLogs} plans={testPlans} />
+      )}
+
       {/* Tab 3: Bugs Feed */}
-      {activeTab === 'bugs' && (
+      {activeTab === 'bugs' && (!BUGANIZER_PROTOTYPE || bugsView === 'feed') && (
         <div className="space-y-6">
           
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">

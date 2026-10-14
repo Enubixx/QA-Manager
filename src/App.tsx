@@ -906,6 +906,23 @@ export function App() {
     }
   };
 
+  // Local prototype only: seed an offline sandbox from a read-only snapshot file.
+  // Runs only when Supabase is NOT configured and VITE_PROTOTYPE_SEED_URL is set, so the live app never does this.
+  useEffect(() => {
+    const seedUrl = ((import.meta as any).env?.VITE_PROTOTYPE_SEED_URL || '') as string;
+    if (!seedUrl || isSupabaseConfigured) return;
+    if (localStorage.getItem('qa_prototype_seeded') === seedUrl) return;
+    fetch(seedUrl)
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        if (!data) return;
+        handleImportJSONData(data);
+        localStorage.setItem('qa_prototype_seeded', seedUrl);
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleDeletePlan = (planId: string) => {
     markUserMutation();
     lastDeviceEditTimeRef.current = Date.now();
