@@ -881,9 +881,26 @@ export function getPlanPickerOptions(input: { plans: TestPlan[]; runs: TestRun[]
 // Copied report text
 // ---------------------------------------------------------------------------
 
+/** A real Buganizer bug linked into the report (structurally matches geminiService.FiledBug). */
+export interface ReportFiledBug { id: string; title: string; priority?: string; status?: string }
+/** One summarized issue shown as its own line item (structurally matches geminiService.ReportIssue). */
+export interface ReportLineItem { summary: string; count: number; filedBugs: ReportFiledBug[] }
+
+const BUG_URL = (id: string) => `https://issuetracker.google.com/issues/${encodeURIComponent(id)}`;
+/** Drops leading "[Gemini on Glasses] [Bug] [Maps]"-style tags - the CUJ heading already says where it is. */
+const cleanBugTitle = (title: string) => {
+  const stripped = (title || '').replace(/^\s*(\[[^\]]{1,40}\]\s*)+/, '').trim();
+  return stripped || (title || '').trim();
+};
+const priorityTag = (b: ReportFiledBug) => (b.priority && /^P[0-4]$/.test(b.priority) ? `[${b.priority}] ` : '');
+const capFirst = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+const lineItemText = (item: ReportLineItem) => capFirst(item.count > 1 ? `${item.summary} (${item.count}x)` : item.summary);
+
 /**
  * Plain-text and rich-HTML report for one scope (same layout as the original Dashboard report).
  * `getSummary` returns the one-line issue summary for a CUJ ('' = no summary line).
+ * `getIssues` (optional) returns the CUJ's issues as separate line items, each with any linked
+ * Buganizer bugs; when it returns items they replace the one-line summary.
  * Ends with one Demo Flow Quality block per `data.demoFlow` section (nothing when there is none).
  */
 export function buildCujReportText(data: CujReportData, opts: {
@@ -891,15 +908,34 @@ export function buildCujReportText(data: CujReportData, opts: {
   disclaimer?: string;
   overallSummary?: string;
   getSummary: (metric: CujMetric) => string;
+  getIssues?: (metric: CujMetric) => ReportLineItem[] | undefined;
+  getFiledBugs?: (metric: CujMetric) => ReportFiledBug[] | undefined;
+  otherFiledBugs?: ReportFiledBug[];
 }): { plainText: string; htmlText: string } {
   const { totals, golden, testedMetrics, bugOnlyMetrics, plansInScope, planLabel, scope } = data;
   const { dateLabel, disclaimer, overallSummary, getSummary } = opts;
   const demoFlow = Array.isArray(data.demoFlow) ? data.demoFlow : [];
+  const otherFiledBugs = Array.isArray(opts.otherFiledBugs) ? opts.otherFiledBugs : [];
 
   const summaries = new Map<CujMetric, string>();
   const summaryOf = (metric: CujMetric): string => {
     if (!summaries.has(metric)) summaries.set(metric, getSummary(metric) || '');
     return summaries.get(metric) || '';
+  };
+  const issuesOf = (m: CujMetric): ReportLineItem[] => (opts.getIssues?.(m) || []).filter(i => i && i.summary);
+  const filedOf = (m: CujMetric): ReportFiledBug[] => opts.getFiledBugs?.(m) || [];
+  const hasLineItems = (m: CujMetric) => issuesOf(m).length > 0 || filedOf(m).length > 0;
+
+  // Plain text: each issue on its own line, linked Buganizer bugs indented beneath it
+  const plainDetail = (m: CujMetric, summary: string): string => {
+    if (!hasLineItems(m)) return summary ? `↳ Summary: ${summary}\n` : '';
+    let out = '';
+    issuesOf(m).forEach(item => {
+      out += `  • ${lineItemText(item)}\n`;
+      item.filedBugs.forEach(b => { out += `      ↳ b/${b.id} ${priorityTag(b)}${cleanBugTitle(b.title)}\n`; });
+    });
+    filedOf(m).forEach(b => { out += `  • 🐞 Filed: b/${b.id} ${priorityTag(b)}${cleanBugTitle(b.title)}\n`; });
+    return out;
   };
 
   const criticalList = testedMetrics.filter(m => m.status === 'critical');
@@ -949,7 +985,7 @@ export function buildCujReportText(data: CujReportData, opts: {
     criticalList.forEach(m => {
       const summary = summaryOf(m);
       plainText += `${m.featureName}: ${m.healthScorePct}% (${stepDetail(m)}${bugText(m)})\n`;
-      if (summary) plainText += `↳ Summary: ${summary}\n`;
+      plainText += plainDetail(m, summary);
     });
   }
 
@@ -959,7 +995,7 @@ export function buildCujReportText(data: CujReportData, opts: {
     warningList.forEach(m => {
       const summary = summaryOf(m);
       plainText += `${m.featureName}: ${m.healthScorePct}% (${stepDetail(m)}${bugText(m)})\n`;
-      if (summary) plainText += `↳ Summary: ${summary}\n`;
+      plainText += plainDetail(m, summary);
     });
   }
 
@@ -969,7 +1005,8 @@ export function buildCujReportText(data: CujReportData, opts: {
     healthyList.forEach(m => {
       const summary = summaryOf(m);
       plainText += `${m.featureName}: ${m.healthScorePct}% (${stepDetail(m)}${bugText(m)})\n`;
-      if (showHealthySummary(m, summary)) plainText += `↳ Summary: ${summary}\n`;
+      if (hasLineItems(m)) plainText += plainDetail(m, summary);
+      else if (showHealthySummary(m, summary)) plainText += `↳ Summary: ${summary}\n`;
     });
   }
 
@@ -979,8 +1016,14 @@ export function buildCujReportText(data: CujReportData, opts: {
     bugOnlyMetrics.forEach(m => {
       const summary = summaryOf(m);
       plainText += `${m.featureName}: ${bugsLabel(m.bugCount)}\n`;
-      if (summary) plainText += `↳ Summary: ${summary}\n`;
+      plainText += plainDetail(m, summary);
     });
+  }
+
+  if (otherFiledBugs.length > 0) {
+    plainText = plainText.replace(/\n*$/, '\n\n');
+    plainText += `🐞 Other bugs filed today:\n`;
+    otherFiledBugs.forEach(b => { plainText += `  • b/${b.id} ${priorityTag(b)}${cleanBugTitle(b.title)}\n`; });
   }
 
   // Demo Flow Quality, after every other section: one block per plan
@@ -995,8 +1038,22 @@ export function buildCujReportText(data: CujReportData, opts: {
   // Rich HTML format (for Google Chat, Slack, Teams, Google Docs, Word, Apple Notes, Email)
   const summaryHtml = (summary: string) =>
     `<div style="color: #475569; font-size: 12px; margin-top: 1px; margin-left: 12px;">↳ <i>Summary: ${escapeHtml(summary)}</i></div>`;
+  const bugLinkHtml = (b: ReportFiledBug) =>
+    `<a href="${BUG_URL(b.id)}" style="color: #2563eb; text-decoration: none; font-weight: 600;">b/${escapeHtml(b.id)}</a> ${escapeHtml(priorityTag(b))}${escapeHtml(cleanBugTitle(b.title))}`;
+  const lineItemsHtml = (m: CujMetric) => {
+    let out = `<ul style="margin: 2px 0 2px 0; padding-left: 26px; color: #334155; font-size: 12px;">`;
+    issuesOf(m).forEach(item => {
+      out += `<li style="margin: 1px 0;">${escapeHtml(lineItemText(item))}`;
+      item.filedBugs.forEach(b => { out += `<div style="margin: 1px 0 0 2px; color: #475569;">↳ ${bugLinkHtml(b)}</div>`; });
+      out += `</li>`;
+    });
+    filedOf(m).forEach(b => { out += `<li style="margin: 1px 0;">🐞 Filed: ${bugLinkHtml(b)}</li>`; });
+    return out + `</ul>`;
+  };
+  const detailHtml = (m: CujMetric, summary: string) =>
+    hasLineItems(m) ? lineItemsHtml(m) : (summary ? summaryHtml(summary) : '');
   const metricRowHtml = (m: CujMetric, summary: string) =>
-    `<div style="margin-bottom: 4px;"><b>${escapeHtml(m.featureName)}</b>: ${m.healthScorePct}% (${stepDetail(m)}${bugText(m)})${summary ? summaryHtml(summary) : ''}</div>`;
+    `<div style="margin-bottom: 4px;"><b>${escapeHtml(m.featureName)}</b>: ${m.healthScorePct}% (${stepDetail(m)}${bugText(m)})${detailHtml(m, summary)}</div>`;
 
   let htmlText = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; color: #0f172a; line-height: 1.5;">`;
   htmlText += `<p style="margin: 0 0 6px 0; color: #4f46e5; font-weight: 700;">📊 CUJ Report: ${escapeHtml(planLabel)} (${escapeHtml(dateLabel)})</p>`;
@@ -1040,7 +1097,7 @@ export function buildCujReportText(data: CujReportData, opts: {
     htmlText += `<div style="margin: 0;">`;
     healthyList.forEach(m => {
       const summary = summaryOf(m);
-      htmlText += metricRowHtml(m, showHealthySummary(m, summary) ? summary : '');
+      htmlText += metricRowHtml(m, hasLineItems(m) || showHealthySummary(m, summary) ? summary : '');
     });
     htmlText += `</div>`;
   }
@@ -1051,9 +1108,17 @@ export function buildCujReportText(data: CujReportData, opts: {
     htmlText += `<div style="margin: 0;">`;
     bugOnlyMetrics.forEach(m => {
       const summary = summaryOf(m);
-      htmlText += `<div style="margin-bottom: 4px;"><b>${escapeHtml(m.featureName)}</b>: ${bugsLabel(m.bugCount)}${summary ? summaryHtml(summary) : ''}</div>`;
+      htmlText += `<div style="margin-bottom: 4px;"><b>${escapeHtml(m.featureName)}</b>: ${bugsLabel(m.bugCount)}${detailHtml(m, summary)}</div>`;
     });
     htmlText += `</div>`;
+  }
+
+  if (otherFiledBugs.length > 0) {
+    htmlText += `<br>`;
+    htmlText += `<p style="margin: 0 0 4px 0; color: #475569; font-weight: 700;">🐞 Other bugs filed today:</p>`;
+    htmlText += `<ul style="margin: 0; padding-left: 26px; font-size: 12px; color: #334155;">`;
+    otherFiledBugs.forEach(b => { htmlText += `<li style="margin: 1px 0;">${bugLinkHtml(b)}</li>`; });
+    htmlText += `</ul>`;
   }
 
   if (demoFlow.length > 0) {

@@ -1261,9 +1261,32 @@ CRITICAL REQUIREMENTS:
   return fallback;
 }
 
+/** A real Buganizer bug filed on the report day (supplied by the RX95 bridge, never invented by the AI). */
+export interface FiledBug {
+  id: string;
+  title: string;
+  priority?: string;
+  status?: string;
+}
+
+/** One summarized issue for a CUJ: shown as its own line item in the report. */
+export interface ReportIssue {
+  summary: string;
+  /** How many tester bug notes this issue bundles (shown as "(4x)" when > 1). */
+  count: number;
+  /** Buganizer bugs that describe this same issue. */
+  filedBugs: FiledBug[];
+}
+
 export interface ExecutiveQAResult {
   overallSummary: string;
   featureSummaries: Record<string, string>;
+  /** Per-CUJ line items (present when the AI returned structured issues). */
+  featureIssues?: Record<string, ReportIssue[]>;
+  /** Buganizer bugs that belong to a CUJ but match none of its summarized issues. */
+  featureFiledBugs?: Record<string, FiledBug[]>;
+  /** Buganizer bugs related to this report that fit no CUJ. */
+  otherFiledBugs?: FiledBug[];
   modelUsed?: string;
   error?: string;
   fromCache?: boolean;
@@ -1408,10 +1431,50 @@ function cleanIssuePhrase(raw: string): string {
  * that every bug is covered: issues citing no real bug are dropped as unsupported,
  * and any bug the model skipped is appended in condensed form.
  */
+/** Reads the Buganizer catalog the RX95 bridge attached to a reply (id -> bug). Untrusted: sanitized. */
+function readFiledBugsCatalog(parsed: any): Map<string, FiledBug> {
+  const catalog = new Map<string, FiledBug>();
+  const list: any[] = Array.isArray(parsed?.filedBugsCatalog) ? parsed.filedBugsCatalog : [];
+  for (const b of list) {
+    const id = String(b?.id ?? '').replace(/[^\d]/g, '');
+    if (!id || id.length > 12) continue;
+    catalog.set(id, {
+      id,
+      title: String(b?.title ?? '').replace(/\s+/g, ' ').trim().slice(0, 300),
+      priority: typeof b?.priority === 'string' ? b.priority.slice(0, 4) : undefined,
+      status: typeof b?.status === 'string' ? b.status.slice(0, 30) : undefined,
+    });
+  }
+  return catalog;
+}
+
+/** Keeps only Buganizer IDs that are in the catalog (drops anything the AI made up), de-duplicated. */
+function pickFiledBugs(raw: unknown, catalog: Map<string, FiledBug>, used?: Set<string>): FiledBug[] {
+  if (catalog.size === 0 || !Array.isArray(raw)) return [];
+  const out: FiledBug[] = [];
+  for (const v of raw) {
+    const id = String(typeof v === 'object' && v !== null ? (v as any).id : v).replace(/[^\d]/g, '');
+    const bug = catalog.get(id);
+    if (!bug || out.some(b => b.id === id) || used?.has(id)) continue;
+    out.push(bug);
+    used?.add(id);
+  }
+  return out;
+}
+
 function assembleBatchResult(
   parsed: any,
   labeledFeatures: LabeledFeature[]
-): { featureSummaries: Record<string, string>; overallSummary: string; matchedCount: number; uncoveredCount: number } {
+): {
+  featureSummaries: Record<string, string>;
+  featureIssues: Record<string, ReportIssue[]>;
+  featureFiledBugs: Record<string, FiledBug[]>;
+  otherFiledBugs: FiledBug[];
+  overallSummary: string;
+  matchedCount: number;
+  uncoveredCount: number;
+} {
+  const catalog = readFiledBugsCatalog(parsed);
   const entries: any[] = Array.isArray(parsed?.features) ? parsed.features : [];
   const byIndex = new Map<number, any>();
   const byName = new Map<string, any>();
@@ -1427,6 +1490,8 @@ function assembleBatchResult(
   }
 
   const featureSummaries: Record<string, string> = {};
+  const featureIssues: Record<string, ReportIssue[]> = {};
+  const featureFiledBugs: Record<string, FiledBug[]> = {};
   let matchedCount = 0;
   let uncoveredCount = 0;
 
@@ -1436,7 +1501,8 @@ function assembleBatchResult(
 
     const validIds = new Set(feature.bugs.map(b => b.n));
     const covered = new Set<number>();
-    const merged = new Map<string, { summary: string; ids: Set<number> }>();
+    const merged = new Map<string, { summary: string; ids: Set<number>; filed: FiledBug[] }>();
+    const usedInFeature = new Set<string>();
 
     const issues: any[] = Array.isArray(entry?.issues) ? entry.issues : [];
     for (const issue of issues) {
@@ -1449,17 +1515,23 @@ function assembleBatchResult(
       // An issue that cites no real bug is not supported by today's data - drop it
       if (ids.length === 0) continue;
       ids.forEach(n => covered.add(n));
+      const filed = pickFiledBugs(issue?.filedBugs, catalog, usedInFeature);
       const key = dedupeKey(summary);
       const existing = merged.get(key);
       if (existing) {
         ids.forEach(n => existing.ids.add(n));
+        existing.filed.push(...filed);
       } else {
-        merged.set(key, { summary, ids: new Set(ids) });
+        merged.set(key, { summary, ids: new Set(ids), filed });
       }
     }
 
     const phrases: string[] = [];
-    merged.forEach(({ summary, ids }) => phrases.push(ids.size > 1 ? `${summary} (${ids.size}x)` : summary));
+    const lineItems: ReportIssue[] = [];
+    merged.forEach(({ summary, ids, filed }) => {
+      phrases.push(ids.size > 1 ? `${summary} (${ids.size}x)` : summary);
+      lineItems.push({ summary, count: ids.size, filedBugs: filed });
+    });
 
     // Guarantee coverage: any bug the model skipped is added from the tester's own note
     const skipped = new Map<string, { phrase: string; count: number }>();
@@ -1476,16 +1548,39 @@ function assembleBatchResult(
         skipped.set(key, { phrase, count: 1 });
       }
     }
-    skipped.forEach(({ phrase, count }) => phrases.push(count > 1 ? `${phrase} (${count}x)` : phrase));
+    skipped.forEach(({ phrase, count }) => {
+      phrases.push(count > 1 ? `${phrase} (${count}x)` : phrase);
+      lineItems.push({ summary: phrase, count, filedBugs: [] });
+    });
 
     const sentence = joinIssuePhrases(phrases);
     if (sentence) featureSummaries[feature.featureName] = sentence;
+    if (lineItems.length > 0) featureIssues[feature.featureName] = lineItems;
+
+    // Filed bugs that belong to this CUJ but match none of its issues
+    const extra = pickFiledBugs(entry?.filedBugs, catalog, usedInFeature);
+    if (extra.length > 0) featureFiledBugs[feature.featureName] = extra;
   });
+
+  // Filed bugs for CUJs that had no tester notes (keyed by CUJ name)
+  const cujFiled = parsed?.cujFiledBugs;
+  if (cujFiled && typeof cujFiled === 'object' && !Array.isArray(cujFiled)) {
+    for (const [name, ids] of Object.entries(cujFiled)) {
+      const cleanName = String(name).replace(/\s+/g, ' ').trim().slice(0, 200);
+      if (!cleanName) continue;
+      const bugs = pickFiledBugs(ids, catalog);
+      if (bugs.length === 0) continue;
+      const existing = featureFiledBugs[cleanName] || [];
+      featureFiledBugs[cleanName] = [...existing, ...bugs.filter(b => !existing.some(e => e.id === b.id))];
+    }
+  }
+
+  const otherFiledBugs = pickFiledBugs(parsed?.otherFiledBugs, catalog);
 
   const overallSummary = typeof parsed?.overallSummary === 'string'
     ? parsed.overallSummary.replace(/\s+/g, ' ').trim()
     : '';
-  return { featureSummaries, overallSummary, matchedCount, uncoveredCount };
+  return { featureSummaries, featureIssues, featureFiledBugs, otherFiledBugs, overallSummary, matchedCount, uncoveredCount };
 }
 
 /** Everything needed to ask an AI for the batch report and to read its answer back. */
@@ -1653,6 +1748,7 @@ export async function generateBatchExecutiveSummaryWithGemini(
     return {
       overallSummary: cached.overallSummary,
       featureSummaries: cached.featureSummaries || {},
+      featureIssues: cached.featureIssues && typeof cached.featureIssues === 'object' ? cached.featureIssues : undefined,
       modelUsed: cached.modelUsed,
       fromCache: true
     };
@@ -1694,6 +1790,7 @@ export async function generateBatchExecutiveSummaryWithGemini(
       return {
         overallSummary: assembled.overallSummary || buildOfflineOverall(),
         featureSummaries: assembled.featureSummaries,
+        featureIssues: assembled.featureIssues,
         modelUsed: modelName
       };
     };
@@ -1863,6 +1960,9 @@ export function applyChatSummaryReply(
   return {
     overallSummary: assembled.overallSummary || request.buildOfflineOverall(),
     featureSummaries: assembled.featureSummaries,
+    featureIssues: assembled.featureIssues,
+    featureFiledBugs: assembled.featureFiledBugs,
+    otherFiledBugs: assembled.otherFiledBugs,
     modelUsed: CHAT_REPLY_MODEL_LABEL
   };
 }

@@ -1130,11 +1130,22 @@ export const Dashboard: React.FC<DashboardProps> = ({
         console.warn('Gemini executive summary notice:', result.error);
       }
 
+      const lookupByCuj = <T,>(map: Record<string, T> | undefined, name: string): T | undefined => {
+        if (!map) return undefined;
+        if (map[name] !== undefined) return map[name];
+        const key = name.trim().toLowerCase();
+        const match = Object.entries(map).find(([k]) => k.trim().toLowerCase() === key);
+        return match ? match[1] : undefined;
+      };
+
       const { plainText, htmlText } = buildCujReportText(cujReport, {
         dateLabel: reportDateLabel,
         disclaimer: reportDisclaimer,
         overallSummary: overallGeminiSummary,
-        getSummary: getFeatureSummary
+        getSummary: getFeatureSummary,
+        getIssues: metric => (metric.associatedBugs.length > 0 ? lookupByCuj(result.featureIssues, metric.featureName) : undefined),
+        getFiledBugs: metric => lookupByCuj(result.featureFiledBugs, metric.featureName),
+        otherFiledBugs: result.otherFiledBugs
       });
 
       const aiFeatureSummaries: Record<string, { summary: string; bugsKey: string }> = {};
@@ -1207,7 +1218,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const scopeAtStart = reportScopeKey;
     setRx95Elapsed(0);
     try {
-      const { reply } = await requestRx95Summary(featuresPayload, scopeContext, s => setRx95Elapsed(s));
+      const { reply } = await requestRx95Summary(featuresPayload, scopeContext, s => setRx95Elapsed(s), undefined, { planId: reportScope.planId, date: reportScope.date });
       if (reportScopeKeyRef.current !== scopeAtStart) {
         setSummaryToast({ type: 'warning', message: '⚠️ The test plan or day changed while RX95 was writing, so its summary was discarded. Ask RX95 again for the current view.' });
         setTimeout(() => setSummaryToast(null), 7000);

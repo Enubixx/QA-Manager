@@ -38,10 +38,14 @@ const slimBug = (b: BugLog) => ({
   timestamp: b.timestamp,
 });
 
-export function buildRx95Payload(features: FeaturePayload[], scopeContext: SummaryScopeContext) {
+/** Which plan and day the report covers - lets the bridge pull that day's Buganizer bugs. */
+export interface Rx95ReportScope { planId: string; date: string }
+
+export function buildRx95Payload(features: FeaturePayload[], scopeContext: SummaryScopeContext, reportScope?: Rx95ReportScope) {
   return {
     featuresPayload: features.map(f => ({ ...f, bugs: (f.bugs || []).map(slimBug) })),
     scopeContext: { scopeKey: scopeContext.scopeKey, scopeLabel: scopeContext.scopeLabel },
+    ...(reportScope ? { reportScope: { planId: String(reportScope.planId || ''), date: String(reportScope.date || '') } } : {}),
   };
 }
 
@@ -55,9 +59,10 @@ export async function requestRx95Summary(
   features: FeaturePayload[],
   scopeContext: SummaryScopeContext,
   onProgress?: (elapsedSec: number) => void,
-  signal?: { cancelled: boolean }
+  signal?: { cancelled: boolean },
+  reportScope?: Rx95ReportScope
 ): Promise<Rx95Result> {
-  const payload = buildRx95Payload(features, scopeContext);
+  const payload = buildRx95Payload(features, scopeContext, reportScope);
   const started = Date.now();
   const tick = () => onProgress?.(Math.round((Date.now() - started) / 1000));
 
