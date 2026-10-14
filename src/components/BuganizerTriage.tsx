@@ -69,7 +69,7 @@ export default function BuganizerTriage({ bugs, plans }: Props) {
   useEffect(() => saveDrafts(drafts), [drafts]);
 
   const draftFor = (bug: BugLog): BuganizerDraft =>
-    drafts[bug.id] || buildDefaultDraft(bug, { planId: bug.planId, planName: planName(bug.planId), cujName: bug.feature || 'General' });
+    (drafts[bug.id] && { ...drafts[bug.id], foundIn: drafts[bug.id].foundIn ?? (bug.environment?.glassesFirmware || '') }) || buildDefaultDraft(bug, { planId: bug.planId, planName: planName(bug.planId), cujName: bug.feature || 'General' });
 
   const updateDraft = (bug: BugLog, patch: Partial<BuganizerDraft>) =>
     setDrafts(prev => ({ ...prev, [bug.id]: { ...(prev[bug.id] || draftFor(bug)), ...patch, updatedAt: Date.now() } }));
@@ -355,6 +355,11 @@ export default function BuganizerTriage({ bugs, plans }: Props) {
                         <input aria-label="CC" className={inputCls} value={d.cc} placeholder="ldap1, ldap2" onChange={e => updateDraft(bug, { cc: e.target.value })} />
                       </div>
                     </div>
+                    <div>
+                      <label className={labelCls}>Found in</label>
+                      <input aria-label="Found in" className={inputCls} value={d.foundIn || ''} placeholder="Glasses firmware build (scanned in QA Tester)"
+                        onChange={e => updateDraft(bug, { foundIn: e.target.value })} />
+                    </div>
                     {isOpen && (
                       <div>
                         <label className={labelCls}>Description (Markdown)</label>
@@ -427,7 +432,7 @@ export default function BuganizerTriage({ bugs, plans }: Props) {
                         <span className="block font-semibold text-slate-100 truncate" title={d.title}>{d.title}</span>
                         <span className="block text-[11px] text-slate-400 truncate">
                           <b className="text-slate-300">{c ? c.name : d.componentId}</b> · {d.priority}{d.severity ? ` · ${d.severity}` : ''} · {d.type === 'BUG' ? 'Bug' : d.type}
-                          {d.hotlistIds.length ? ` · hotlist ${d.hotlistIds.join(', ')}` : ''}{d.cc ? ` · cc ${d.cc}` : ''}
+                          {d.hotlistIds.length ? ` · hotlist ${d.hotlistIds.join(', ')}` : ''}{d.foundIn ? ` · found in ${d.foundIn}` : ''}{d.cc ? ` · cc ${d.cc}` : ''}
                         </span>
                       </span>
                       {tooLong && <span className="text-[10px] text-amber-300 flex-shrink-0">long link</span>}

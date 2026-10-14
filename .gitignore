@@ -40,3 +40,4 @@ twa-manifest.json
 # Local-only prototype data (never commit)
 public/__local/
 vite.prototype.local.ts
+dist-apk/

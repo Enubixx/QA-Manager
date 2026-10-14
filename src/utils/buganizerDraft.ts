@@ -24,6 +24,8 @@ export interface BuganizerDraft {
   hotlistIds: string[];
   cc: string;
   assignee: string;
+  /** Buganizer "Found in" (defaults to the glasses firmware build). */
+  foundIn: string;
   state: DraftState;
   issueId?: string;
   updatedAt: number;
@@ -66,6 +68,19 @@ export function titleFromNote(note: string, max = 110): string {
   return t ? t.charAt(0).toUpperCase() + t.slice(1) : 'Untitled bug';
 }
 
+/** Build lines for the Environment section (only what was captured; "Not captured" otherwise). */
+export function environmentLines(bug: BugLog): string[] {
+  const e = bug.environment;
+  if (!e) return ['- Builds: not captured (log the bug from the QA Tester app with the glasses build scanned)'];
+  const phone = [e.phoneManufacturer, e.phoneModel].filter(Boolean).join(' ');
+  return [
+    `- Glasses firmware: ${e.glassesFirmware || 'not captured'}${e.glassesSerial ? ` · serial ${e.glassesSerial}` : ''}`,
+    `- Phone: ${phone || 'unknown'}${e.androidVersion ? ` · Android ${e.androidVersion}` : ''}${e.phoneBuild ? ` · build ${e.phoneBuild}` : ''}`,
+    `- Glasses Core: ${e.glassesCoreVersion || 'not installed'}`,
+    `- Glasses Companion: ${e.glassesCompanionVersion || 'not installed'}`,
+  ];
+}
+
 export function defaultDescription(bug: BugLog, ctx: DraftContext): string {
   const lines = [
     '**What happened**',
@@ -77,10 +92,9 @@ export function defaultDescription(bug: BugLog, ctx: DraftContext): string {
     `- CUJ: ${ctx.cujName || bug.feature || 'General'}`,
     '',
     '**Environment**',
-    `- Device: ${bug.deviceName || 'Unknown'}`,
-    `- Tester: ${bug.testerName || 'Unknown'}`,
-    `- Logged: ${bug.formattedTime || bug.timestamp || 'Unknown'}`,
-    `- QA Manager bug ID: ${bug.id}`,
+    ...environmentLines(bug),
+    '',
+    `_Logged by ${bug.testerName || 'Unknown'} on ${bug.deviceName || 'Unknown device'} · ${bug.formattedTime || bug.timestamp || 'Unknown time'} · QA Manager ${bug.id}_`,
   ];
   if (bug.imageUrl) lines.push('', '_A screenshot was captured in QA Manager - attach it here if useful._');
   return lines.join('\n');
@@ -100,6 +114,7 @@ export function buildDefaultDraft(bug: BugLog, ctx: DraftContext): BuganizerDraf
     hotlistIds: hotlist ? [hotlist] : [],
     cc: '',
     assignee: '',
+    foundIn: bug.environment?.glassesFirmware || '',
     state: 'draft',
     updatedAt: Date.now(),
   };
@@ -128,6 +143,8 @@ export function buildBuganizerUrl(d: BuganizerDraft): string {
   const cc = usernames(d.cc).map(u => `${u}@google.com`);
   if (cc.length) add('cc', cc.join(','));
   d.hotlistIds.filter(h => /^\d{1,12}$/.test(h)).forEach(h => add('hotlistIds', h));
+  const foundIn = (d.foundIn || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 200);
+  if (foundIn) add('foundIn', foundIn);
   const query = params.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
   return `${BUGANIZER_NEW_ISSUE_URL}?${query}`;
 }

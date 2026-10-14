@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import GlassesBuildCapture from './GlassesBuildCapture';
+import { buildEnvironment, getCurrentGlassesBuild, getPhoneBuildInfo, type GlassesBuild, type PhoneBuildInfo } from '../services/deviceBuilds';
 import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile } from '../types';
 import { CheckCircle2, Clock, Bug, Smartphone, RefreshCw, Send, Check, Layers, ChevronDown, AlertTriangle, XCircle, ArrowRight, ArrowLeft, ChevronLeft, ChevronRight, Undo2, Sparkles, User, Download, Edit3, Trash2, Tag, Image, X, Mic, WifiOff } from 'lucide-react';
@@ -348,6 +350,11 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   const [activeMobileTab, setActiveMobileTab] = useState<'plans' | 'bugs'>('plans');
 
   // Pre-test Session Setup state: only display if tester name or device is completely unconfigured
+  // Builds of the phone + glasses pair (phone/app versions read natively; glasses firmware scanned from Companion > About)
+  const buildEnvRef = useRef<{ phone: PhoneBuildInfo | null; glasses?: GlassesBuild }>({ phone: null, glasses: getCurrentGlassesBuild() });
+  useEffect(() => { getPhoneBuildInfo().then(p => { buildEnvRef.current.phone = p; }); }, []);
+  const currentBuildEnvironment = () => buildEnvironment(buildEnvRef.current.phone, buildEnvRef.current.glasses ?? getCurrentGlassesBuild());
+
   const [showSetupModal, setShowSetupModal] = useState<boolean>(() => {
     const savedName = getStoredTesterName();
     const savedDevice = getStoredDeviceName();
@@ -710,7 +717,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       currentStepIndex: isBrandNew ? 0 : (activeRun.currentStepIndex || 0),
       results: isBrandNew ? {} : (activeRun.results || {}),
       bugLogs: activeRun.bugLogs || [],
-      startedAt: isBrandNew ? new Date().toISOString() : (activeRun.startedAt || new Date().toISOString())
+      startedAt: isBrandNew ? new Date().toISOString() : (activeRun.startedAt || new Date().toISOString()),
+      environment: currentBuildEnvironment() || activeRun.environment
     };
 
     if (isBrandNew) {
@@ -1263,7 +1271,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       note: bugNote.trim(),
       imageUrl: bugImageUrl.trim() || undefined,
       timestamp: isoTimestamp,
-      formattedTime: formattedTime
+      formattedTime: formattedTime,
+      environment: currentBuildEnvironment()
     };
 
     try {
@@ -2231,6 +2240,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                 </div>
 
               </div>
+
+              <GlassesBuildCapture onChange={(glasses, phone) => { buildEnvRef.current = { phone, glasses }; }} />
 
               <button
                 type="submit"

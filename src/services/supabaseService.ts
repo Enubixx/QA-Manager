@@ -117,6 +117,7 @@ export const fetchAllSupabaseData = async () => {
         imageUrl: item.image_url,
         timestamp: item.timestamp || new Date().toISOString(),
         formattedTime: item.formatted_time || new Date().toLocaleTimeString(),
+        environment: item.environment && typeof item.environment === 'object' ? item.environment : undefined,
       });
     });
 
@@ -128,6 +129,9 @@ export const fetchAllSupabaseData = async () => {
           if (bugsWipedAt > 0 && bTs > 0 && bTs <= bugsWipedAt) return;
           if (!bugMap.has(b.id)) {
             bugMap.set(b.id, b);
+          } else if (b.environment && !bugMap.get(b.id)!.environment) {
+            // Builds ride along in the run's JSON even before bug_logs.environment exists
+            bugMap.set(b.id, { ...bugMap.get(b.id)!, environment: b.environment });
           }
         }
       });
@@ -297,6 +301,9 @@ export const deleteArchivedRunFromSupabase = async (runId: string) => {
   }
 };
 
+/** Flips to false if the bug_logs.environment column hasn't been added yet. */
+let bugEnvironmentColumnAvailable = true;
+
 export const syncBugLogToSupabase = async (bug: BugLog) => {
   if (!supabase || !isSupabaseConfigured) return;
   try {
@@ -308,7 +315,7 @@ export const syncBugLogToSupabase = async (bug: BugLog) => {
         return;
       }
     }
-    const { error } = await supabase.from('bug_logs').upsert({
+    const row: Record<string, any> = {
       id: bug.id,
       test_run_id: bug.testRunId,
       plan_id: bug.planId,
@@ -322,7 +329,16 @@ export const syncBugLogToSupabase = async (bug: BugLog) => {
       image_url: bug.imageUrl,
       timestamp: bug.timestamp,
       formatted_time: bug.formattedTime,
-    });
+    };
+    if (bug.environment && bugEnvironmentColumnAvailable) row.environment = bug.environment;
+    let { error } = await supabase.from('bug_logs').upsert(row);
+    // The optional `environment` jsonb column may not exist yet - retry without it (the builds still
+    // travel inside the run's bug_logs JSON) and stop sending it for this session.
+    if (error && 'environment' in row && /environment/i.test(String((error as any).message || ''))) {
+      bugEnvironmentColumnAvailable = false;
+      delete row.environment;
+      ({ error } = await supabase.from('bug_logs').upsert(row));
+    }
     if (error) {
       console.error('syncBugLogToSupabase error:', error);
       throw error;

@@ -14,6 +14,24 @@ export interface TestPlan {
   createdAt: string;
 }
 
+/** Builds of the phone + glasses pair a bug was logged on (captured by the QA Tester Android app). */
+export interface BuildEnvironment {
+  phoneManufacturer?: string;
+  phoneModel?: string;
+  androidVersion?: string;
+  phoneBuild?: string;
+  glassesCoreVersion?: string;
+  glassesCompanionVersion?: string;
+  /** Glasses firmware, from Glasses Companion > System > About > Version */
+  glassesFirmware?: string;
+  glassesSerial?: string;
+  glassesProduct?: string;
+  /** When the glasses fields were last captured (ISO) */
+  glassesCapturedAt?: string;
+  /** When this snapshot was taken (ISO) */
+  capturedAt?: string;
+}
+
 export interface BugLog {
   id: string;
   testRunId: string;
@@ -31,6 +49,7 @@ export interface BugLog {
   bugType?: 'Bug' | 'Setup Issue' | 'Known Issue' | 'Feature Request' | 'Misc Issue';
   priority?: 'P0' | 'P1' | 'P2' | '0' | '1' | '2';
   status?: 'Filed' | 'New' | "Repro'd Issue";
+  environment?: BuildEnvironment;
 }
 
 export interface StepResult {
@@ -56,6 +75,7 @@ export interface TestRun {
   completedAt?: string;
   durationMs?: number;
   lastActivityTimestamp?: number;
+  environment?: BuildEnvironment;
 }
 
 export interface DevicePlanQuota {
