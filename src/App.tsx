@@ -1117,16 +1117,24 @@ export function App() {
       } catch (e) {}
     }, 10000);
 
-    // 3. Mark matching non-completed runs as 'terminated' in state & Supabase using exact matching
+    // 3. Mark ONLY the booted run as 'terminated' in state & Supabase.
+    // When a runId is given, terminate exactly that run. Without a runId, fall back to the
+    // tester's live in_progress run on that device (tester AND device must both match).
+    // Never sweep up the tester's other runs or other runs on the same device.
     setTestRuns(prev => {
       let matchedAny = false;
       const next = prev.map(r => {
-        if (r.status === 'completed') return r;
-        const matchesRun = Boolean(runId && r.id === runId);
-        const matchesTester = Boolean(trimmedTester && r.testerName && r.testerName.toLowerCase().trim() === trimmedTester.toLowerCase());
-        const matchesDev = Boolean(trimmedDevName && r.deviceName && r.deviceName.toLowerCase().trim() === trimmedDevName.toLowerCase());
-        const matchesId = Boolean(trimmedDevId && r.deviceId && r.deviceId.toLowerCase().trim() === trimmedDevId.toLowerCase());
-        if (matchesRun || matchesTester || matchesDev || matchesId) {
+        if (r.status === 'completed' || (r.status as any) === 'terminated') return r;
+        let isTarget = false;
+        if (runId) {
+          isTarget = r.id === runId;
+        } else if (r.status === 'in_progress') {
+          const matchesTester = Boolean(trimmedTester && r.testerName && r.testerName.toLowerCase().trim() === trimmedTester.toLowerCase());
+          const matchesDev = Boolean(trimmedDevName && r.deviceName && r.deviceName.toLowerCase().trim() === trimmedDevName.toLowerCase());
+          const matchesId = Boolean(trimmedDevId && r.deviceId && r.deviceId.toLowerCase().trim() === trimmedDevId.toLowerCase());
+          isTarget = matchesTester && (matchesId || matchesDev || (!trimmedDevId && !trimmedDevName));
+        }
+        if (isTarget) {
           matchedAny = true;
           const terminatedRun = { ...r, status: 'terminated' as any };
           safeSyncTestRun(terminatedRun);
@@ -1163,7 +1171,8 @@ export function App() {
         const matchesDevId = Boolean(trimmedDevId && d.id.toLowerCase().trim() === trimmedDevId.toLowerCase());
         const matchesDevName = Boolean(trimmedDevName && d.name.toLowerCase().trim() === trimmedDevName.toLowerCase());
         const matchesRunId = Boolean(runId && d.activeRunId === runId);
-        const matchesTester = Boolean(trimmedTester && d.activeTesterName && d.activeTesterName.toLowerCase().trim() === trimmedTester.toLowerCase());
+        // Only fall back to tester-name matching when no run/device was identified
+        const matchesTester = Boolean(!runId && !trimmedDevId && !trimmedDevName && trimmedTester && d.activeTesterName && d.activeTesterName.toLowerCase().trim() === trimmedTester.toLowerCase());
         if (matchesDevId || matchesDevName || matchesRunId || matchesTester) {
           changed = true;
           const released = {

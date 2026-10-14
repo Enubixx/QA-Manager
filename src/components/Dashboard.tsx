@@ -1,12 +1,13 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota } from '../types';
-import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers, FileSpreadsheet, ExternalLink, MessageSquareText, ClipboardPaste } from 'lucide-react';
+import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers, FileSpreadsheet, ExternalLink, MessageSquareText, ClipboardPaste, Bot } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard, copySingleBugToClipboard } from '../utils/exportUtils';
 import { isRunFullyCompleted, buildStepFirstSeenIndex } from '../utils/runUtils';
 import { ALL_PLANS, ALL_DATES, mergeRunsById, getKnownCujNames, computeCujReport, listReportDates, buildTimelinePoints, getPlanPickerOptions, buildCujReportText, buildReportScopeKey, formatReportDateLabel } from '../utils/cujReportUtils';
 import type { CujMetric } from '../utils/cujReportUtils';
 import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel, discoverAvailableGeminiModels, rankModelsForSummaries, DEFAULT_GEMINI_MODEL, getGeminiKeyErrorHint, buildChatSummaryPrompt, applyChatSummaryReply, isChatSummaryPrompt, getChatReplyReportId } from '../services/geminiService';
+import { requestRx95Summary, isRx95Available } from '../services/rx95Service';
 import type { ExecutiveQAResult, SummaryScopeContext } from '../services/geminiService';
 import { GOOGLE_APPS_SCRIPT_CODE } from '../googleAppsScriptCode';
 import { toBlob } from 'html-to-image';
@@ -376,6 +377,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [copiedImage, setCopiedImage] = useState<boolean>(false);
   const [copiedBugs, setCopiedBugs] = useState<boolean>(false);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState<boolean>(false);
+  /** Seconds RX95 has been working on a summary, or null when idle. */
+  const [rx95Elapsed, setRx95Elapsed] = useState<number | null>(null);
   const [generatedReport, setGeneratedReport] = useState<{
     plainText: string;
     htmlText: string;
@@ -1190,6 +1193,39 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   const handleGenerateSummary = () => {
     handleExecuteCopyReport(false);
+  };
+
+  /** Has RX95 (the user's Jetski agent on their Cloudtop) write the executive summary. */
+  const handleAskRx95 = async () => {
+    if (rx95Elapsed !== null || isGeneratingSummary) return;
+    const { featuresPayload, allBugs, scopeContext } = buildDailySummaryPayload();
+    if (!allBugs.some(b => b.note && b.note.trim())) {
+      // Nothing for an AI to summarize - build the clean report directly.
+      await handleExecuteCopyReport(true);
+      return;
+    }
+    const scopeAtStart = reportScopeKey;
+    setRx95Elapsed(0);
+    try {
+      const { reply } = await requestRx95Summary(featuresPayload, scopeContext, s => setRx95Elapsed(s));
+      if (reportScopeKeyRef.current !== scopeAtStart) {
+        setSummaryToast({ type: 'warning', message: '⚠️ The test plan or day changed while RX95 was writing, so its summary was discarded. Ask RX95 again for the current view.' });
+        setTimeout(() => setSummaryToast(null), 7000);
+        return;
+      }
+      const result = applyChatSummaryReply(featuresPayload, allBugs, reply, scopeContext);
+      result.modelUsed = 'RX95';
+      const report = await handleExecuteCopyReport(true, result);
+      if (report) {
+        setSummaryToast({ type: 'success', message: '🤖 RX95 wrote the executive summary. Click "Copy" when you\'re ready.' });
+        setTimeout(() => setSummaryToast(null), 6000);
+      }
+    } catch (e: any) {
+      setSummaryToast({ type: 'error', message: `⚠️ ${e?.message || 'RX95 could not write the summary.'} You can still use "AI Chat".` });
+      setTimeout(() => setSummaryToast(null), 9000);
+    } finally {
+      setRx95Elapsed(null);
+    }
   };
 
   /** Copies plain text, falling back to a hidden textarea when the async clipboard API is blocked. */
@@ -3171,6 +3207,25 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       <MessageSquareText className="w-3.5 h-3.5 text-blue-400" />
                       <span className="leading-none">AI Chat</span>
                     </button>
+
+                    {isRx95Available() && (
+                      <button
+                        type="button"
+                        onClick={() => void handleAskRx95()}
+                        disabled={isGeneratingSummary || rx95Elapsed !== null}
+                        className={`px-2.5 h-7 rounded-xl text-xs font-medium flex items-center gap-1.5 transition disabled:cursor-not-allowed ${
+                          rx95Elapsed !== null
+                            ? 'bg-violet-600/20 text-violet-200 cursor-wait'
+                            : 'text-slate-300 hover:bg-slate-800 hover:text-white cursor-pointer disabled:opacity-50'
+                        }`}
+                        title="Have RX95 (your Jetski agent) write the executive summary - no API key or copy/paste needed"
+                      >
+                        <Bot className={`w-3.5 h-3.5 text-violet-400 ${rx95Elapsed !== null ? 'animate-pulse' : ''}`} />
+                        <span className="leading-none">
+                          {rx95Elapsed !== null ? `RX95 writing… ${rx95Elapsed}s` : 'Ask RX95'}
+                        </span>
+                      </button>
+                    )}
                   </div>
 
                   {/* 3. Overall Quality Status Pill */}
