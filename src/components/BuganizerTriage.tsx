@@ -21,7 +21,7 @@ import {
 } from '../utils/buganizerDraft';
 
 /**
- * Buganizer triage PROTOTYPE (local only).
+ * Buganizer PROTOTYPE (local only).
  * Categorize QA app bugs for Buganizer, review/edit them in a "Ready to file" queue, then open
  * one prefilled Buganizer new-issue tab per bug. Drafts live in this browser's localStorage only.
  * Nothing is sent to Buganizer: the prefilled form only creates a bug if a person clicks Create.
@@ -61,6 +61,7 @@ export default function BuganizerTriage({ bugs, plans }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<string | null>(null);
   const [preview, setPreview] = useState<BuganizerDraft[] | null>(null);
+  const [previewExpanded, setPreviewExpanded] = useState<Set<string>>(new Set());
   const [allowOpen, setAllowOpen] = useState(false);
   const [openQueue, setOpenQueue] = useState<BuganizerDraft[]>([]);
   const [toast, setToast] = useState<string | null>(null);
@@ -112,36 +113,59 @@ export default function BuganizerTriage({ bugs, plans }: Props) {
     const list = selectedVisible.map(draftFor);
     if (list.length === 0) return flash('Select at least one bug first.');
     setAllowOpen(false);
+    setPreviewExpanded(new Set());
     setPreview(list);
   };
 
-  /** Opens prefilled forms only. Browsers usually allow one tab per click unless pop-ups are allowed. */
-  const openTabs = (list: BuganizerDraft[]) => {
-    const remaining: BuganizerDraft[] = [];
-    list.forEach((d, i) => {
-      const win = window.open(buildBuganizerUrl(d), '_blank', 'noopener');
-      if (!win && i > 0) remaining.push(d);
-      else {
-        const bug = bugs.find(b => b.id === d.bugId);
-        if (bug) updateDraft(bug, { state: 'opened' });
-      }
+  /**
+   * Opens one prefilled form per draft. Browsers allow only ONE pop-up per click unless pop-ups are
+   * allowed for this site, so anything the browser blocks is kept in a "blocked" list the user can
+   * retry after allowing pop-ups (or open one per click). Never use 'noopener' here: it makes
+   * window.open return null even on success, which hides whether a tab was blocked.
+   */
+  const tryOpen = (d: BuganizerDraft): boolean => {
+    const win = window.open(buildBuganizerUrl(d), '_blank');
+    if (!win) return false;
+    try { win.opener = null; } catch { /* cross-origin - fine */ }
+    return true;
+  };
+
+  const markOpened = (ds: BuganizerDraft[]) => {
+    if (ds.length === 0) return;
+    const ids = new Set(ds.map(d => d.bugId));
+    setDrafts(prev => {
+      const next = { ...prev };
+      bugs.filter(b => ids.has(b.id)).forEach(b => {
+        next[b.id] = { ...(prev[b.id] || draftFor(b)), state: 'opened', updatedAt: Date.now() };
+      });
+      return next;
     });
+  };
+
+  const openTabs = (list: BuganizerDraft[]) => {
+    const opened: BuganizerDraft[] = [];
+    const blocked: BuganizerDraft[] = [];
+    list.forEach(d => (tryOpen(d) ? opened : blocked).push(d));
+    markOpened(opened);
     setPreview(null);
-    if (remaining.length) {
-      setOpenQueue(remaining);
-      flash(`Your browser blocked ${remaining.length} tab(s). Allow pop-ups for this site, or use "Open next".`);
+    setOpenQueue(blocked);
+    if (blocked.length) {
+      flash(`Opened ${opened.length} of ${list.length}. Your browser blocked ${blocked.length} - allow pop-ups for this site, then click "Open remaining".`);
     } else {
-      flash(`Opened ${list.length} prefilled Buganizer form${list.length === 1 ? '' : 's'}. Review each and click Create there.`);
+      flash(`Opened ${opened.length} prefilled Buganizer form${opened.length === 1 ? '' : 's'}. Review each and click Create there.`);
     }
   };
 
-  const openNext = () => {
-    const [next, ...rest] = openQueue;
-    if (!next) return;
-    window.open(buildBuganizerUrl(next), '_blank', 'noopener');
-    const bug = bugs.find(b => b.id === next.bugId);
-    if (bug) updateDraft(bug, { state: 'opened' });
-    setOpenQueue(rest);
+  /** Retries every blocked tab (all open if pop-ups are now allowed; otherwise at least the next one). */
+  const openRemaining = () => {
+    const opened: BuganizerDraft[] = [];
+    const blocked: BuganizerDraft[] = [];
+    openQueue.forEach(d => (tryOpen(d) ? opened : blocked).push(d));
+    markOpened(opened);
+    setOpenQueue(blocked);
+    flash(blocked.length
+      ? `Opened ${opened.length} more. ${blocked.length} still blocked - allow pop-ups for this site to open them all at once.`
+      : `Opened the remaining ${opened.length} form${opened.length === 1 ? '' : 's'}.`);
   };
 
   const copyLinks = async (list: BuganizerDraft[]) => {
@@ -155,10 +179,22 @@ export default function BuganizerTriage({ bugs, plans }: Props) {
       <div className="rounded-[20px] border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 flex items-start gap-3">
         <ShieldCheck className="w-5 h-5 text-emerald-300 flex-shrink-0 mt-0.5" />
         <div className="text-xs text-emerald-100 leading-relaxed">
-          <b>Buganizer triage: local prototype.</b> Drafts are saved only in this browser. Nothing is sent to Buganizer.
+          <b>Buganizer (local prototype).</b> Drafts are saved only in this browser. Nothing is sent to Buganizer.
           "Open in Buganizer" only opens <i>prefilled forms</i>, and a bug is created only if someone reviews the form and clicks <b>Create</b>.
         </div>
       </div>
+
+      {/* Pop-up blocked help */}
+      {openQueue.length > 0 && (
+        <div data-testid="popup-blocked" className="rounded-[20px] border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-100 flex flex-wrap items-center gap-3">
+          <div className="flex-1 min-w-[260px] leading-relaxed">
+            <b>Your browser blocked {openQueue.length} tab{openQueue.length === 1 ? '' : 's'}.</b> Browsers allow only one pop-up per click.
+            Click the blocked pop-up icon at the right end of the address bar, choose <b>"Always allow pop-ups and redirects from {window.location.host}"</b>, then click <b>Open remaining</b>.
+          </div>
+          <button className="px-3 h-8 rounded-xl font-semibold bg-amber-500/25 border border-amber-500/50" onClick={openRemaining}>Open remaining ({openQueue.length})</button>
+          <button className="px-2.5 h-8 rounded-xl text-amber-200/80 hover:bg-amber-500/10" onClick={() => setOpenQueue([])}>Dismiss</button>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="rounded-[20px] border border-slate-800 bg-[#111827] p-4 space-y-3">
@@ -223,8 +259,8 @@ export default function BuganizerTriage({ bugs, plans }: Props) {
         <button className="px-2.5 h-7 rounded-xl text-xs text-slate-300 hover:bg-slate-800" onClick={() => markSelected('draft')}>Back to draft</button>
         <div className="flex-1" />
         {openQueue.length > 0 && (
-          <button className="px-3 h-8 rounded-xl text-xs font-semibold bg-amber-500/20 text-amber-100 border border-amber-500/40" onClick={openNext}>
-            Open next ({openQueue.length} left)
+          <button data-testid="open-remaining" className="px-3 h-8 rounded-xl text-xs font-semibold bg-amber-500/20 text-amber-100 border border-amber-500/40" onClick={openRemaining}>
+            Open remaining ({openQueue.length})
           </button>
         )}
         <button
@@ -337,7 +373,7 @@ export default function BuganizerTriage({ bugs, plans }: Props) {
                       {d.state !== 'draft' && d.state !== 'filed' && (
                         <button className="px-2.5 h-7 rounded-xl text-xs text-slate-300 hover:bg-slate-800" onClick={() => updateDraft(bug, { state: 'draft' })}>Back to draft</button>
                       )}
-                      <button className="px-2.5 h-7 rounded-xl text-xs text-slate-300 hover:bg-slate-800" onClick={() => { setAllowOpen(false); setPreview([d]); }}>
+                      <button className="px-2.5 h-7 rounded-xl text-xs text-slate-300 hover:bg-slate-800" onClick={() => { setAllowOpen(false); setPreviewExpanded(new Set([d.bugId])); setPreview([d]); }}>
                         <Eye className="w-3.5 h-3.5 inline mr-1" />Preview
                       </button>
                       <div className="flex items-center gap-1 ml-auto">
@@ -357,40 +393,70 @@ export default function BuganizerTriage({ bugs, plans }: Props) {
         })}
       </div>
 
-      {/* Preview / dry-run modal */}
+      {/* Preview / dry-run modal: compact cards, expand one to review details */}
       {preview && (
         <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={() => setPreview(null)}>
-          <div className="w-full max-w-3xl max-h-[85vh] overflow-y-auto rounded-[20px] border border-slate-700 bg-[#0f172a] p-5 space-y-4" onClick={e => e.stopPropagation()} data-testid="preview-modal">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-slate-50 flex items-center gap-2"><Bug className="w-4 h-4 text-rose-400" /> {preview.length} prefilled Buganizer form{preview.length === 1 ? '' : 's'} (dry run)</h3>
-              <button aria-label="Close preview" onClick={() => setPreview(null)} className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
-            </div>
-            <p className="text-xs text-slate-400">This is exactly what each Buganizer tab would open with. Nothing has been sent anywhere.</p>
-            {preview.map(d => {
-              const u = buildBuganizerUrl(d);
-              const c = componentById(d.componentId);
-              return (
-                <div key={d.bugId} className="rounded-2xl border border-slate-800 bg-[#111827] p-3 space-y-1.5 text-xs" data-testid="preview-item">
-                  <div className="font-semibold text-slate-100">{d.title}</div>
-                  <div className="text-slate-400">
-                    <b className="text-slate-300">{c ? c.name : d.componentId}</b> ({d.componentId}) · {d.priority}{d.severity ? ` · ${d.severity}` : ''} · {d.type}
-                    {d.hotlistIds.length ? ` · hotlist ${d.hotlistIds.join(', ')}` : ''}{d.assignee ? ` · assignee ${d.assignee}` : ''}{d.cc ? ` · cc ${d.cc}` : ''}
-                  </div>
-                  <pre className="whitespace-pre-wrap text-[11px] text-slate-300 bg-[#0b1220] rounded-xl p-2 max-h-40 overflow-y-auto">{d.description}</pre>
-                  <div className={`break-all text-[10px] ${u.length > MAX_SAFE_URL_LENGTH ? 'text-amber-300' : 'text-slate-500'}`} data-testid="preview-url">{u}</div>
+          <div className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-[20px] border border-slate-700 bg-[#0f172a]" onClick={e => e.stopPropagation()} data-testid="preview-modal">
+            <div className="px-5 pt-4 pb-3 border-b border-slate-800 space-y-1">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-slate-50 flex items-center gap-2"><Bug className="w-4 h-4 text-rose-400" /> Review {preview.length} Buganizer form{preview.length === 1 ? '' : 's'}</h3>
+                <button aria-label="Close preview" onClick={() => setPreview(null)} className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[11px] text-slate-400">Dry run: nothing has been sent. Click a card to see its full description and link.</p>
+                <div className="flex gap-1 text-[11px] flex-shrink-0">
+                  <button data-testid="expand-all" className="px-2 h-6 rounded-lg text-slate-300 hover:bg-slate-800" onClick={() => setPreviewExpanded(new Set(preview.map(d => d.bugId)))}>Expand all</button>
+                  <button data-testid="collapse-all" className="px-2 h-6 rounded-lg text-slate-300 hover:bg-slate-800" onClick={() => setPreviewExpanded(new Set())}>Collapse all</button>
                 </div>
-              );
-            })}
-            <label className="flex items-start gap-2 text-xs text-slate-300">
-              <input type="checkbox" className="mt-0.5 accent-blue-500" checked={allowOpen} onChange={e => setAllowOpen(e.target.checked)} data-testid="allow-open" />
-              <span>Open these as Buganizer tabs. Each tab is only a prefilled form; review it and click <b>Create</b> yourself. Allow pop-ups for this site to open more than one at a time.</span>
-            </label>
-            <div className="flex justify-end gap-2">
-              <button className="px-3 h-8 rounded-xl text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-1.5" onClick={() => copyLinks(preview)}><Copy className="w-3.5 h-3.5" /> Copy links</button>
-              <button disabled={!allowOpen} onClick={() => openTabs(preview)} data-testid="confirm-open"
-                className="px-3 h-8 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5">
-                <ExternalLink className="w-3.5 h-3.5" /> Open {preview.length} tab{preview.length === 1 ? '' : 's'}
-              </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2">
+              {preview.map((d, i) => {
+                const u = buildBuganizerUrl(d);
+                const c = componentById(d.componentId);
+                const isExp = previewExpanded.has(d.bugId);
+                const tooLong = u.length > MAX_SAFE_URL_LENGTH;
+                return (
+                  <div key={d.bugId} className={`rounded-2xl border bg-[#111827] text-xs ${tooLong ? 'border-amber-500/50' : 'border-slate-800'}`} data-testid="preview-item">
+                    <button type="button" data-testid="preview-toggle" aria-expanded={isExp}
+                      onClick={() => setPreviewExpanded(prev => { const n = new Set(prev); n.has(d.bugId) ? n.delete(d.bugId) : n.add(d.bugId); return n; })}
+                      className="w-full text-left px-3 py-2 flex items-center gap-2">
+                      <span className="text-slate-500 font-mono w-5 flex-shrink-0">{i + 1}.</span>
+                      <span className="flex-1 min-w-0">
+                        <span className="block font-semibold text-slate-100 truncate" title={d.title}>{d.title}</span>
+                        <span className="block text-[11px] text-slate-400 truncate">
+                          <b className="text-slate-300">{c ? c.name : d.componentId}</b> · {d.priority}{d.severity ? ` · ${d.severity}` : ''} · {d.type === 'BUG' ? 'Bug' : d.type}
+                          {d.hotlistIds.length ? ` · hotlist ${d.hotlistIds.join(', ')}` : ''}{d.cc ? ` · cc ${d.cc}` : ''}
+                        </span>
+                      </span>
+                      {tooLong && <span className="text-[10px] text-amber-300 flex-shrink-0">long link</span>}
+                      <span className={`text-slate-400 flex-shrink-0 transition-transform ${isExp ? 'rotate-180' : ''}`}>▾</span>
+                    </button>
+                    {isExp && (
+                      <div className="px-3 pb-3 space-y-1.5" data-testid="preview-details">
+                        <div className="text-[11px] text-slate-400">Component {d.componentId}{c ? ` · ${c.path}` : ''}{d.assignee ? ` · assignee ${d.assignee}` : ''}</div>
+                        <pre className="whitespace-pre-wrap text-[11px] text-slate-300 bg-[#0b1220] rounded-xl p-2 max-h-48 overflow-y-auto">{d.description}</pre>
+                        <div className={`break-all text-[10px] ${tooLong ? 'text-amber-300' : 'text-slate-500'}`} data-testid="preview-url">{u}</div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="px-5 py-3 border-t border-slate-800 space-y-2.5">
+              <label className="flex items-start gap-2 text-xs text-slate-300">
+                <input type="checkbox" className="mt-0.5 accent-blue-500" checked={allowOpen} onChange={e => setAllowOpen(e.target.checked)} data-testid="allow-open" />
+                <span>Open these as Buganizer tabs. Each tab is only a prefilled form - review it and click <b>Create</b> yourself.{preview.length > 1 ? <> To open all {preview.length} at once, allow pop-ups for <b>{window.location.host}</b> first.</> : null}</span>
+              </label>
+              <div className="flex justify-end gap-2">
+                <button className="px-3 h-8 rounded-xl text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-1.5" onClick={() => copyLinks(preview)}><Copy className="w-3.5 h-3.5" /> Copy links</button>
+                <button disabled={!allowOpen} onClick={() => openTabs(preview)} data-testid="confirm-open"
+                  className="px-3 h-8 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5">
+                  <ExternalLink className="w-3.5 h-3.5" /> Open {preview.length} tab{preview.length === 1 ? '' : 's'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

@@ -40,6 +40,8 @@ export const BUGANIZER_NEW_ISSUE_URL = 'https://b.corp.google.com/issues/new';
 export const MAX_SAFE_URL_LENGTH = 7500;
 export const TITLE_PREFIX = '[Gemini on Glasses]';
 const STORAGE_KEY = 'qa_buganizer_drafts_v1';
+/** Issue types Buganizer accepts in a prefilled URL. */
+const ALLOWED_TYPES = new Set(['BUG', 'FEATURE_REQUEST', 'CUSTOMER_ISSUE', 'INTERNAL_CLEANUP', 'PROCESS', 'VULNERABILITY']);
 
 const PRIORITY_FROM_SEVERITY: Record<string, string> = { critical: 'P0', high: 'P1', medium: 'P2', low: 'P3' };
 
@@ -119,9 +121,10 @@ export function buildBuganizerUrl(d: BuganizerDraft): string {
   }
   if (/^P[0-4]$/.test(d.priority)) add('priority', d.priority);
   if (/^S[0-4]$/.test(d.severity)) add('severity', d.severity);
-  if (d.type) add('type', d.type);
-  const assignee = usernames(d.assignee)[0];
-  if (assignee) add('assignee', assignee);
+  if (ALLOWED_TYPES.has(d.type)) add('type', d.type);
+  // Assignee must be exactly one valid username - anything else (e.g. "john doe") is dropped, not guessed
+  const assigneeRaw = d.assignee.trim().replace(/@google\.com$/i, '');
+  if (/^[a-z0-9._-]{1,64}$/i.test(assigneeRaw)) add('assignee', assigneeRaw);
   const cc = usernames(d.cc).map(u => `${u}@google.com`);
   if (cc.length) add('cc', cc.join(','));
   d.hotlistIds.filter(h => /^\d{1,12}$/.test(h)).forEach(h => add('hotlistIds', h));

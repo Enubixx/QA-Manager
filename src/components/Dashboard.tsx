@@ -3804,7 +3804,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           <button type="button" onClick={() => setBugsView('feed')}
             className={`px-3 h-7 rounded-xl text-xs font-semibold ${bugsView === 'feed' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}>Bugs Feed</button>
           <button type="button" data-testid="buganizer-tab" onClick={() => setBugsView('buganizer')}
-            className={`px-3 h-7 rounded-xl text-xs font-semibold ${bugsView === 'buganizer' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}>Buganizer Triage (prototype)</button>
+            className={`px-3 h-7 rounded-xl text-xs font-semibold ${bugsView === 'buganizer' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}>Buganizer</button>
         </div>
       )}
       {activeTab === 'bugs' && BUGANIZER_PROTOTYPE && bugsView === 'buganizer' && (
