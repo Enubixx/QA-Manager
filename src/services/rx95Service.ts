@@ -1,4 +1,5 @@
-import type { BugLog } from '../types';
+import type { BugLog, RefinedBugText } from '../types';
+import { REFINE_MAX_BUGS_PER_REQUEST, parseRefineReply, toRefineInput } from '../utils/bugRefine';
 import type { FeaturePayload, SummaryScopeContext } from './geminiService';
 import { supabase } from '../lib/supabase';
 
@@ -62,10 +63,18 @@ export async function requestRx95Summary(
   signal?: { cancelled: boolean },
   reportScope?: Rx95ReportScope
 ): Promise<Rx95Result> {
-  const payload = buildRx95Payload(features, scopeContext, reportScope);
+  return sendRx95(buildRx95Payload(features, scopeContext, reportScope), onProgress, signal, 'summary');
+}
+
+/** Queues any RX95 bridge request (summary or refine) and waits for the raw reply. */
+async function sendRx95(
+  payload: object,
+  onProgress?: (elapsedSec: number) => void,
+  signal?: { cancelled: boolean },
+  what: 'summary' | 'refine' = 'summary'
+): Promise<Rx95Result> {
   const started = Date.now();
   const tick = () => onProgress?.(Math.round((Date.now() - started) / 1000));
-
   if (BRIDGE_URL) {
     const res = await fetch(`${BRIDGE_URL}/api/rx95/summary`, {
       method: 'POST',
@@ -81,7 +90,7 @@ export async function requestRx95Summary(
       tick();
       const s = await fetch(`${BRIDGE_URL}/api/rx95/summary/${body.requestId}`).then(r => r.json()).catch(() => null);
       if (s?.status === 'done' && s.reply) return { reply: s.reply, conversationId: s.conversationId };
-      if (s?.status === 'error') throw new Error(`RX95 couldn't finish the summary: ${s.error}`);
+      if (s?.status === 'error') throw new Error(`RX95 couldn't finish the ${what}: ${s.error}`);
     }
     throw new Error('RX95 took too long to reply. Try again, or use AI Chat.');
   }
@@ -96,7 +105,21 @@ export async function requestRx95Summary(
     tick();
     const { data } = await supabase.from(TABLE).select('status,reply,error,conversation_id').eq('id', id).maybeSingle();
     if (data?.status === 'done' && data.reply) return { reply: data.reply, conversationId: data.conversation_id || undefined };
-    if (data?.status === 'error') throw new Error(`RX95 couldn't finish the summary: ${data.error}`);
+    if (data?.status === 'error') throw new Error(`RX95 couldn't finish the ${what}: ${data.error}`);
   }
   throw new Error('RX95 did not pick up the request in time. Is your Cloudtop online? You can use AI Chat instead.');
+}
+
+/**
+ * Asks RX95 to rewrite bugs' title + description into clean Buganizer wording.
+ * Resolves with refinements keyed by bug id (bugs RX95 skipped are simply missing).
+ */
+export async function requestRx95Refine(
+  bugs: BugLog[],
+  signal?: { cancelled: boolean }
+): Promise<Record<string, RefinedBugText>> {
+  const batch = bugs.slice(0, REFINE_MAX_BUGS_PER_REQUEST);
+  if (batch.length === 0) return {};
+  const { reply } = await sendRx95({ kind: 'refine', bugs: batch.map(toRefineInput) }, undefined, signal, 'refine');
+  return parseRefineReply(reply, batch);
 }

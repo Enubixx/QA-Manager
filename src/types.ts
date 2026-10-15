@@ -32,6 +32,14 @@ export interface BuildEnvironment {
   capturedAt?: string;
 }
 
+export interface RefinedBugText {
+  sig: string;
+  title: string;
+  description: string;
+  at: string;
+  by: 'rx95';
+}
+
 export interface BugLog {
   id: string;
   testRunId: string;
@@ -45,6 +53,11 @@ export interface BugLog {
   /** Short summary - becomes the Buganizer title. `note` is the description body. */
   title?: string;
   note: string;
+  /**
+   * RX95's cleaned-up wording of this bug for Buganizer. `sig` is the title+note it was written
+   * from, so it is ignored (and re-requested) once the reporter's text changes.
+   */
+  refined?: RefinedBugText;
   imageUrl?: string;
   timestamp: string; // ISO string with date & time
   formattedTime: string; // Human readable time

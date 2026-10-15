@@ -1,6 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Bug, CheckCircle2, Copy, ExternalLink, Eye, Filter, Search, ShieldCheck, X } from 'lucide-react';
-import type { BugLog, TestPlan } from '../types';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Bug, CheckCircle2, Copy, ExternalLink, Eye, Filter, Search, ShieldCheck, Sparkles, X } from 'lucide-react';
+import type { BugLog, RefinedBugText, TestPlan } from '../types';
+import { isRx95Available, requestRx95Refine } from '../services/rx95Service';
+import { bugTextSig, currentRefinement, isAutoRefineOn, loadRefineCache, saveRefineCache, setAutoRefineOn } from '../utils/bugRefine';
 import {
   BUGANIZER_COMPONENTS,
   BUGANIZER_PRIORITIES,
@@ -16,6 +18,7 @@ import {
   MAX_SAFE_URL_LENGTH,
   buildBuganizerUrl,
   buildDefaultDraft,
+  generatedText,
   loadDrafts,
   syncDraftWithBug,
   saveDrafts,
@@ -30,7 +33,12 @@ import {
 interface Props {
   bugs: BugLog[];
   plans: TestPlan[];
+  /** Saves RX95 refinements onto the bugs (so every device sees them). Optional - falls back to this browser only. */
+  onUpdateBugLog?: (updated: BugLog | BugLog[]) => void;
 }
+
+/** Max RX95 refine requests one page visit will make on its own (each covers up to 25 bugs). */
+const MAX_AUTO_REFINE_BATCHES = 4;
 
 const STATE_LABEL: Record<DraftState, string> = { draft: 'Draft', ready: 'Ready to file', opened: 'Opened in Buganizer', filed: 'Filed' };
 const STATE_STYLE: Record<DraftState, string> = {
@@ -50,7 +58,7 @@ const topComponents = BUGANIZER_COMPONENTS.slice(0, TOP_COMPONENT_COUNT);
 const otherComponents = BUGANIZER_COMPONENTS.slice(TOP_COMPONENT_COUNT).sort((a, b) => a.name.localeCompare(b.name));
 const pathTail = (path: string) => path.split(' > ').slice(-2, -1)[0] || '';
 
-export default function BuganizerTriage({ bugs, plans }: Props) {
+export default function BuganizerTriage({ bugs, plans, onUpdateBugLog }: Props) {
   const planName = (id?: string) => plans.find(p => p.id === id)?.name || id || 'Unknown plan';
   const [drafts, setDrafts] = useState<Record<string, BuganizerDraft>>(() => loadDrafts());
   const [tester, setTester] = useState('all');
@@ -69,13 +77,35 @@ export default function BuganizerTriage({ bugs, plans }: Props) {
 
   useEffect(() => saveDrafts(drafts), [drafts]);
 
-  const ctxFor = (bug: BugLog) => ({ planId: bug.planId, planName: planName(bug.planId), cujName: bug.feature || 'General' });
+  // RX95 refinements: on the bug itself when synced, plus a per-browser cache.
+  const [refineCache, setRefineCache] = useState<Record<string, RefinedBugText>>(() => loadRefineCache());
+  useEffect(() => saveRefineCache(refineCache), [refineCache]);
+  const [autoRefine, setAutoRefine] = useState<boolean>(() => isAutoRefineOn());
+  const [refineState, setRefineState] = useState<{ running: number; done: number; error?: string }>({ running: 0, done: 0 });
+  const refineAttempted = useRef<Set<string>>(new Set());
+  const refineBatches = useRef(0);
+  const refineBusy = useRef(false);
+  const [refineTick, setRefineTick] = useState(0);
+  const rx95Ready = isRx95Available();
+  const bugsRef = useRef(bugs);
+  bugsRef.current = bugs;
+
+  const refinedFor = (bug: BugLog) => currentRefinement(bug, refineCache);
+  const ctxFor = (bug: BugLog) => ({ planId: bug.planId, planName: planName(bug.planId), cujName: bug.feature || 'General', refined: refinedFor(bug) });
   const draftFromStore = (store: Record<string, BuganizerDraft>, bug: BugLog): BuganizerDraft =>
     store[bug.id] ? syncDraftWithBug(store[bug.id], bug, ctxFor(bug)) : buildDefaultDraft(bug, ctxFor(bug));
   const draftFor = (bug: BugLog): BuganizerDraft => draftFromStore(drafts, bug);
 
-  const updateDraft = (bug: BugLog, patch: Partial<BuganizerDraft>) =>
-    setDrafts(prev => ({ ...prev, [bug.id]: { ...draftFromStore(prev, bug), ...patch, updatedAt: Date.now() } }));
+  const updateDraft = (bug: BugLog, patch: Partial<BuganizerDraft>) => {
+    // Hand edits to the text mean RX95 must leave this draft's title/description alone.
+    const textPatch = ('title' in patch || 'description' in patch) && !('textEdited' in patch) ? { textEdited: true } : {};
+    setDrafts(prev => ({ ...prev, [bug.id]: { ...draftFromStore(prev, bug), ...patch, ...textPatch, updatedAt: Date.now() } }));
+  };
+  const useOriginalWording = (bug: BugLog) => updateDraft(bug, { ...generatedText(bug, ctxFor(bug), false), textEdited: true });
+  const useRx95Wording = (bug: BugLog) => {
+    const r = refinedFor(bug);
+    if (r) updateDraft(bug, { ...generatedText(bug, ctxFor(bug), true), textEdited: false, refinedAt: r.at });
+  };
 
   const testers = useMemo(() => Array.from(new Set(bugs.map(b => (b.testerName || '').trim()).filter(Boolean))).sort(), [bugs]);
   const cujs = useMemo(() => Array.from(new Set(bugs.map(b => b.feature || 'General'))).sort(), [bugs]);
@@ -101,6 +131,54 @@ export default function BuganizerTriage({ bugs, plans }: Props) {
     return c;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, drafts]);
+
+  // Background RX95 refinement of the reporter's wording (newest visible bugs first).
+  useEffect(() => {
+    if (!autoRefine || !rx95Ready || refineBusy.current || refineBatches.current >= MAX_AUTO_REFINE_BATCHES) return;
+    const key = (b: BugLog) => `${b.id}|${bugTextSig(b)}`;
+    const todo = visible.filter(b => !refinedFor(b) && !refineAttempted.current.has(key(b))).slice(0, 25);
+    if (todo.length === 0) return;
+    todo.forEach(b => refineAttempted.current.add(key(b)));
+    refineBusy.current = true;
+    refineBatches.current += 1;
+    setRefineState(s => ({ ...s, running: todo.length, error: undefined }));
+    const signal = { cancelled: false };
+    requestRx95Refine(todo, signal)
+      .then(result => {
+        const ids = Object.keys(result);
+        if (ids.length === 0) return;
+        setRefineCache(prev => ({ ...prev, ...result }));
+        if (onUpdateBugLog) {
+          // Use the latest copy of each bug, and skip any whose text was edited while RX95 was working.
+          const latest = new Map(bugsRef.current.map(b => [b.id, b]));
+          const updates = ids.map(id => latest.get(id)).filter((b): b is BugLog => !!b && bugTextSig(b) === result[b.id].sig)
+            .map(b => ({ ...b, refined: result[b.id] }));
+          if (updates.length) onUpdateBugLog(updates);
+        }
+        setRefineState(s => ({ ...s, done: s.done + ids.length }));
+      })
+      .catch(err => setRefineState(s => ({ ...s, error: String(err?.message || err) })))
+      .finally(() => {
+        refineBusy.current = false;
+        setRefineState(s => ({ ...s, running: 0 }));
+        setRefineTick(t => t + 1);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, autoRefine, rx95Ready, refineTick]);
+
+  const retryRefine = () => {
+    refineAttempted.current.clear();
+    refineBatches.current = 0;
+    setRefineState(s => ({ ...s, error: undefined }));
+    setRefineTick(t => t + 1);
+  };
+  const toggleAutoRefine = () => {
+    const next = !autoRefine;
+    setAutoRefine(next);
+    setAutoRefineOn(next);
+    if (next) retryRefine();
+  };
+  const refinedVisible = visible.filter(b => refinedFor(b)).length;
 
   const selectedVisible = visible.filter(b => selected.has(b.id));
   const flash = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 4000); };
@@ -185,6 +263,31 @@ export default function BuganizerTriage({ bugs, plans }: Props) {
           <b>Buganizer triage.</b> Drafts are saved only in this browser. Nothing is sent to Buganizer automatically.
           "Open in Buganizer" only opens <i>prefilled forms</i>, and a bug is created only if someone reviews the form and clicks <b>Create</b>.
         </div>
+      </div>
+
+      {/* RX95 wording refinement status */}
+      <div data-testid="rx95-refine-bar" className="rounded-[20px] border border-violet-500/30 bg-violet-500/10 px-4 py-2.5 flex flex-wrap items-center gap-3 text-xs text-violet-100">
+        <Sparkles className="w-4 h-4 text-violet-300 flex-shrink-0" />
+        <div className="flex-1 min-w-[240px] leading-relaxed">
+          <b>RX95 wording cleanup.</b>{' '}
+          {!rx95Ready
+            ? 'Not available here (needs the cloud connection). Drafts use the reporter\'s wording.'
+            : !autoRefine
+            ? 'Off - drafts use the reporter\'s wording.'
+            : refineState.running > 0
+            ? `Refining ${refineState.running} bug${refineState.running === 1 ? '' : 's'} in the background…`
+            : refineState.error
+            ? `Paused: ${refineState.error}`
+            : `${refinedVisible} of ${visible.length} bugs refined. RX95 rewrites the reporter's title and description; the original stays on the left.`}
+        </div>
+        {rx95Ready && refineState.error && autoRefine && (
+          <button className="px-2.5 h-7 rounded-xl font-semibold bg-violet-500/20 border border-violet-500/40" onClick={retryRefine}>Retry</button>
+        )}
+        {rx95Ready && (
+          <label className="flex items-center gap-1.5 cursor-pointer select-none">
+            <input type="checkbox" data-testid="rx95-auto-refine" className="accent-violet-400" checked={autoRefine} onChange={toggleAutoRefine} /> Auto-refine
+          </label>
+        )}
       </div>
 
       {/* Pop-up blocked help */}
@@ -296,7 +399,20 @@ export default function BuganizerTriage({ bugs, plans }: Props) {
                     <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
                       <span className={`px-2 py-0.5 rounded-full border ${STATE_STYLE[d.state]}`}>{STATE_LABEL[d.state]}{d.state === 'filed' && d.issueId ? ` · b/${d.issueId}` : ''}</span>
                       <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">{bug.feature || 'General'}</span>
+                      {refinedFor(bug) && (
+                        d.refinedAt === refinedFor(bug)!.at && !d.textEdited ? (
+                          <span data-testid="rx95-refined-chip" className="px-2 py-0.5 rounded-full border border-violet-500/40 bg-violet-500/15 text-violet-200 flex items-center gap-1">
+                            <Sparkles className="w-3 h-3" /> RX95 wording
+                            <button className="ml-1 underline decoration-dotted text-violet-300 hover:text-white" onClick={() => useOriginalWording(bug)}>use original</button>
+                          </span>
+                        ) : (
+                          <button data-testid="rx95-use-wording" className="px-2 py-0.5 rounded-full border border-violet-500/30 text-violet-300 hover:bg-violet-500/10 flex items-center gap-1" onClick={() => useRx95Wording(bug)}>
+                            <Sparkles className="w-3 h-3" /> Use RX95 wording
+                          </button>
+                        )
+                      )}
                     </div>
+                    <p className="text-[10px] uppercase tracking-wide text-slate-500 pt-0.5">Reporter's original</p>
                     {bug.title && <p className="text-sm font-semibold text-white leading-snug">{bug.title}</p>}
                     {(!bug.title || bug.note !== bug.title) && (
                       <p className={`${bug.title ? 'text-xs text-slate-300 line-clamp-3 whitespace-pre-line' : 'text-sm text-slate-100'} leading-snug`}>{bug.note}</p>

@@ -3822,7 +3822,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
       {activeTab === 'bugs' && BUGANIZER_ENABLED && bugsView === 'buganizer' && (
-        <BuganizerTriage bugs={bugLogs} plans={testPlans} />
+        <BuganizerTriage bugs={bugLogs} plans={testPlans} onUpdateBugLog={onUpdateBugLog} />
       )}
 
       {/* Tab 3: Bugs Feed */}

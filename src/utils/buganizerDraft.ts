@@ -1,4 +1,4 @@
-import type { BugLog } from '../types';
+import type { BugLog, RefinedBugText } from '../types';
 import {
   CUJ_DEFAULT_COMPONENT,
   DEFAULT_CC,
@@ -31,6 +31,10 @@ export interface BuganizerDraft {
   issueId?: string;
   /** Fingerprint of the bug's title + note when the draft text was generated (re-sync after Bugs Feed edits). */
   sourceSig?: string;
+  /** True once someone edits the title/description in the Buganizer tab (RX95 then leaves them alone). */
+  textEdited?: boolean;
+  /** `at` of the RX95 refinement currently applied to title/description, if any. */
+  refinedAt?: string;
   updatedAt: number;
 }
 
@@ -38,6 +42,8 @@ export interface DraftContext {
   planId?: string;
   planName?: string;
   cujName?: string;
+  /** RX95's cleaned-up wording for this bug (only when it matches the bug's current text). */
+  refined?: RefinedBugText;
 }
 
 export const BUGANIZER_NEW_ISSUE_URL = 'https://b.corp.google.com/issues/new';
@@ -85,9 +91,10 @@ export function environmentLines(bug: BugLog): string[] {
 }
 
 export function defaultDescription(bug: BugLog, ctx: DraftContext): string {
+  const original = (bug.note || '').trim() || (bug.title || '').trim() || '(no tester note)';
   const lines = [
     '**What happened**',
-    (bug.note || '').trim() || (bug.title || '').trim() || '(no tester note)',
+    ctx.refined ? ctx.refined.description.trim() || ctx.refined.title : original,
     '',
     '**Where**',
     `- Test plan: ${ctx.planName || bug.planId || 'Unknown'}`,
@@ -100,6 +107,12 @@ export function defaultDescription(bug: BugLog, ctx: DraftContext): string {
     `_Logged by ${bug.testerName || 'Unknown'} on ${bug.deviceName || 'Unknown device'} · ${bug.formattedTime || bug.timestamp || 'Unknown time'} · QA Manager ${bug.id}_`,
   ];
   if (bug.imageUrl) lines.push('', '_A screenshot was captured in QA Manager - attach it here if useful._');
+  if (ctx.refined) {
+    const t = (bug.title || '').trim();
+    const n = (bug.note || '').trim();
+    const quoted = [t && `**${t}**`, n && n !== t ? n : ''].filter(Boolean).join('\n').split('\n').map(l => `> ${l}`).join('\n');
+    lines.push('', '**Reporter\'s original note**', quoted || '> (none)');
+  }
   return lines.join('\n');
 }
 
@@ -108,7 +121,7 @@ export function buildDefaultDraft(bug: BugLog, ctx: DraftContext): BuganizerDraf
   const hotlist = hotlistForPlan(ctx.planId || bug.planId, ctx.planName)?.hotlistId;
   return {
     bugId: bug.id,
-    title: defaultTitle(bug, cuj),
+    title: defaultTitle(bug, cuj, ctx.refined),
     description: defaultDescription(bug, { ...ctx, cujName: cuj }),
     componentId: defaultComponentFor(cuj),
     priority: defaultPriority(bug),
@@ -120,12 +133,22 @@ export function buildDefaultDraft(bug: BugLog, ctx: DraftContext): BuganizerDraf
     foundIn: bug.environment?.glassesFirmware || '',
     state: 'draft',
     sourceSig: bugSourceSig(bug),
+    textEdited: false,
+    refinedAt: ctx.refined?.at,
     updatedAt: Date.now(),
   };
 }
 
-export function defaultTitle(bug: BugLog, cuj: string): string {
-  return `${TITLE_PREFIX} [${cuj}] ${(bug.title || '').replace(/\s+/g, ' ').trim() || titleFromNote(bug.note)}`;
+export function defaultTitle(bug: BugLog, cuj: string, refined?: RefinedBugText): string {
+  const core = (refined?.title || bug.title || '').replace(/\s+/g, ' ').trim() || titleFromNote(bug.note);
+  return `${TITLE_PREFIX} [${cuj}] ${core}`;
+}
+
+/** Draft title + description as generated from the bug (RX95 wording when `useRefined` and available). */
+export function generatedText(bug: BugLog, ctx: DraftContext, useRefined = true): { title: string; description: string } {
+  const cuj = ctx.cujName || bug.feature || 'General';
+  const c = { ...ctx, cujName: cuj, refined: useRefined ? ctx.refined : undefined };
+  return { title: defaultTitle(bug, cuj, c.refined), description: defaultDescription(bug, c) };
 }
 
 /** Changes whenever the tester's title or description is edited (e.g. from the Bugs Feed). */
@@ -139,12 +162,22 @@ export function bugSourceSig(bug: BugLog): string {
  * those defaults existed.
  */
 export function syncDraftWithBug(saved: BuganizerDraft, bug: BugLog, ctx: DraftContext): BuganizerDraft {
-  const cuj = ctx.cujName || bug.feature || 'General';
   const d: BuganizerDraft = { ...saved, foundIn: saved.foundIn ?? (bug.environment?.glassesFirmware || '') };
   const sig = bugSourceSig(bug);
-  if (saved.sourceSig !== undefined && saved.sourceSig !== sig) {
-    d.title = defaultTitle(bug, cuj);
-    d.description = defaultDescription(bug, { ...ctx, cujName: cuj });
+  const textChanged = saved.sourceSig !== undefined && saved.sourceSig !== sig;
+  // Drafts saved before `textEdited` existed: treat them as edited unless they still match the generated text.
+  const edited = saved.textEdited ?? (() => {
+    const plain = generatedText(bug, ctx, false);
+    return saved.title !== plain.title || saved.description !== plain.description;
+  })();
+  if (textChanged) {
+    // The reporter's own text changed (Bugs Feed edit) - that always wins.
+    Object.assign(d, generatedText(bug, ctx), { textEdited: false, refinedAt: ctx.refined?.at });
+  } else if (ctx.refined && saved.refinedAt !== ctx.refined.at && !edited) {
+    // New RX95 wording arrived and nobody has hand-edited this draft's text.
+    Object.assign(d, generatedText(bug, ctx), { textEdited: false, refinedAt: ctx.refined.at });
+  } else {
+    d.textEdited = edited;
   }
   if (saved.sourceSig === undefined) {
     // Draft predates hotlist/CC defaults: fill them only if they were left blank.
