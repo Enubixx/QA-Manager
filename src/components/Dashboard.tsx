@@ -354,6 +354,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   const [expandedBugIds, setExpandedBugIds] = useState<Record<string, boolean>>({});
+  // Bugs Feed inline edit (title + description) so bugs can be tidied before the Buganizer tab
+  const [feedEdit, setFeedEdit] = useState<{ bugId: string; title: string; note: string } | null>(null);
+  const startFeedEdit = (bug: BugLog) => {
+    setExpandedBugIds(prev => ({ ...prev, [bug.id]: true }));
+    setFeedEdit({ bugId: bug.id, title: bug.title || '', note: bug.title && bug.note === bug.title ? '' : (bug.note || '') });
+  };
+  const saveFeedEdit = (bug: BugLog) => {
+    if (!feedEdit || !onUpdateBugLog) return;
+    const title = feedEdit.title.replace(/\s+/g, ' ').trim().slice(0, 120);
+    const note = feedEdit.note.trim() || title;
+    if (!title && !note) return;
+    onUpdateBugLog({ ...bug, title: title || undefined, note });
+    setFeedEdit(null);
+  };
 
   const toggleBugExpand = (bugId: string) => {
     setExpandedBugIds(prev => ({
@@ -4146,7 +4160,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                       <div className="flex items-center gap-3 ml-auto">
                         <div className="text-xs text-slate-300 max-w-xs md:max-w-md truncate font-medium">
-                          {bug.note}
+                          {bug.title ? <span className="text-white font-semibold">{bug.title}</span> : bug.note}
                         </div>
 
                         {bug.imageUrl && (
@@ -4174,6 +4188,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             <Copy className="w-4 h-4" />
                           )}
                         </button>
+
+                        {onUpdateBugLog && (
+                          <button
+                            type="button"
+                            data-testid="feed-edit-bug"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              startFeedEdit(bug);
+                            }}
+                            className="p-2 text-slate-400 hover:text-blue-300 hover:bg-slate-800 rounded-xl border border-transparent hover:border-slate-700 transition"
+                            title="Edit title & description"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </button>
+                        )}
 
                         <button
                           type="button"
@@ -4232,14 +4261,59 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-5 text-xs">
                               <div className="md:col-span-2 space-y-3">
-                                <div>
-                                  <span className="text-[11px] uppercase font-mono text-slate-300 block font-bold mb-1.5 flex items-center gap-1.5">
-                                    Observation / Bug Description Log:
-                                  </span>
-                                  <div className="liquid-glass-input p-4 rounded-2xl text-slate-100 text-xs leading-relaxed whitespace-pre-wrap font-medium shadow-inner">
-                                    {bug.note || 'No description attached.'}
+                                {feedEdit?.bugId === bug.id ? (
+                                  <div className="space-y-2.5 rounded-2xl border border-blue-500/40 bg-blue-950/20 p-3" data-testid="feed-edit-form">
+                                    <div>
+                                      <div className="flex items-center justify-between mb-1">
+                                        <label className="text-[11px] uppercase font-mono text-slate-300 font-bold">Title</label>
+                                        <span className="text-[10px] font-mono text-slate-500">{feedEdit.title.length}/120</span>
+                                      </div>
+                                      <input
+                                        data-testid="feed-edit-title"
+                                        value={feedEdit.title}
+                                        maxLength={120}
+                                        onChange={e => setFeedEdit({ ...feedEdit, title: e.target.value })}
+                                        placeholder="Short summary of the bug"
+                                        className="w-full bg-[#0f172a] border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-semibold focus:outline-none focus:border-blue-500"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="text-[11px] uppercase font-mono text-slate-300 font-bold block mb-1">Description</label>
+                                      <textarea
+                                        data-testid="feed-edit-description"
+                                        rows={6}
+                                        value={feedEdit.note}
+                                        onChange={e => setFeedEdit({ ...feedEdit, note: e.target.value })}
+                                        placeholder="Steps to reproduce, expected vs. actual"
+                                        className="w-full bg-[#0f172a] border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 leading-relaxed focus:outline-none focus:border-blue-500"
+                                      />
+                                    </div>
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="text-[10px] text-slate-400">Changes carry over to the Buganizer tab.</span>
+                                      <div className="flex gap-2">
+                                        <button type="button" onClick={() => setFeedEdit(null)} className="px-3 h-8 rounded-xl text-xs font-semibold text-slate-300 hover:bg-slate-800">Cancel</button>
+                                        <button type="button" data-testid="feed-edit-save" disabled={!feedEdit.title.trim() && !feedEdit.note.trim()} onClick={() => saveFeedEdit(bug)} className="px-3 h-8 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40">Save changes</button>
+                                      </div>
+                                    </div>
                                   </div>
-                                </div>
+                                ) : (
+                                  <div>
+                                    <div className="flex items-center justify-between mb-1.5">
+                                      <span className="text-[11px] uppercase font-mono text-slate-300 font-bold flex items-center gap-1.5">
+                                        Observation / Bug Description Log:
+                                      </span>
+                                      {onUpdateBugLog && (
+                                        <button type="button" onClick={() => startFeedEdit(bug)} className="px-2.5 py-1 rounded-xl text-[11px] font-bold flex items-center gap-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700">
+                                          <Edit className="w-3 h-3 text-blue-300" /> Edit
+                                        </button>
+                                      )}
+                                    </div>
+                                    {bug.title && <div className="text-sm font-bold text-white mb-1.5">{bug.title}</div>}
+                                    <div className="liquid-glass-input p-4 rounded-2xl text-slate-100 text-xs leading-relaxed whitespace-pre-wrap font-medium shadow-inner">
+                                      {bug.note || 'No description attached.'}
+                                    </div>
+                                  </div>
+                                )}
 
                                 <div className="grid grid-cols-2 gap-3 text-xs font-mono">
                                   <div className="liquid-glass-panel p-3 rounded-2xl border border-slate-800">

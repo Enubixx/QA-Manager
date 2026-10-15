@@ -42,6 +42,8 @@ export interface BugLog {
   testerName: string;
   deviceName?: string;
   severity: 'low' | 'medium' | 'high' | 'critical';
+  /** Short summary - becomes the Buganizer title. `note` is the description body. */
+  title?: string;
   note: string;
   imageUrl?: string;
   timestamp: string; // ISO string with date & time

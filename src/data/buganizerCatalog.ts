@@ -404,6 +404,24 @@ export const PLAN_HOTLISTS: Record<string, { hotlistId: string; name: string }> 
   'plan-1791908761906': { hotlistId: '8682925', name: 'Jinju Launch Event' },
 };
 
+/** Every hotlist the triage view offers in its picker. */
+export const KNOWN_HOTLISTS = [
+  { hotlistId: '8810391', name: 'NYFW Press Demo Bugs' },
+  { hotlistId: '8682925', name: 'Jinju Launch Event' },
+] as const;
+
+/** Hotlist for a test plan: exact plan ID first, then the plan name (Press → Press hotlist, Gentle Monster → Jinju). */
+export function hotlistForPlan(planId?: string, planName?: string): { hotlistId: string; name: string } | undefined {
+  if (planId && PLAN_HOTLISTS[planId]) return PLAN_HOTLISTS[planId];
+  const n = (planName || '').toLowerCase();
+  if (/\bpress\b/.test(n)) return KNOWN_HOTLISTS[0];
+  if (/gentle\s*monster|jinju/.test(n)) return KNOWN_HOTLISTS[1];
+  return undefined;
+}
+
+/** CC list added to every new Buganizer draft. */
+export const DEFAULT_CC = 'xr-demo-eng-team@google.com';
+
 export const BUGANIZER_PRIORITIES = ['P0', 'P1', 'P2', 'P3', 'P4'] as const;
 export const BUGANIZER_SEVERITIES = ['', 'S0', 'S1', 'S2', 'S3', 'S4'] as const;
 export const BUGANIZER_TYPES = [

@@ -118,6 +118,7 @@ export const fetchAllSupabaseData = async () => {
         timestamp: item.timestamp || new Date().toISOString(),
         formattedTime: item.formatted_time || new Date().toLocaleTimeString(),
         environment: item.environment && typeof item.environment === 'object' ? item.environment : undefined,
+        title: typeof item.title === 'string' && item.title.trim() ? item.title : undefined,
       });
     });
 
@@ -129,9 +130,15 @@ export const fetchAllSupabaseData = async () => {
           if (bugsWipedAt > 0 && bTs > 0 && bTs <= bugsWipedAt) return;
           if (!bugMap.has(b.id)) {
             bugMap.set(b.id, b);
-          } else if (b.environment && !bugMap.get(b.id)!.environment) {
-            // Builds ride along in the run's JSON even before bug_logs.environment exists
-            bugMap.set(b.id, { ...bugMap.get(b.id)!, environment: b.environment });
+          } else {
+            // Builds and titles ride along in the run's JSON even before the bug_logs columns exist
+            const existing = bugMap.get(b.id)!;
+            const merged = {
+              ...existing,
+              environment: existing.environment || b.environment,
+              title: existing.title || b.title,
+            };
+            if (merged.environment !== existing.environment || merged.title !== existing.title) bugMap.set(b.id, merged);
           }
         }
       });
@@ -301,8 +308,8 @@ export const deleteArchivedRunFromSupabase = async (runId: string) => {
   }
 };
 
-/** Flips to false if the bug_logs.environment column hasn't been added yet. */
-let bugEnvironmentColumnAvailable = true;
+/** Optional bug_logs columns; each flips to false if that column hasn't been added yet. */
+const optionalBugColumns = { environment: true, title: true };
 
 export const syncBugLogToSupabase = async (bug: BugLog) => {
   if (!supabase || !isSupabaseConfigured) return;
@@ -330,13 +337,18 @@ export const syncBugLogToSupabase = async (bug: BugLog) => {
       timestamp: bug.timestamp,
       formatted_time: bug.formattedTime,
     };
-    if (bug.environment && bugEnvironmentColumnAvailable) row.environment = bug.environment;
+    if (bug.environment && optionalBugColumns.environment) row.environment = bug.environment;
+    if (bug.title && optionalBugColumns.title) row.title = bug.title;
     let { error } = await supabase.from('bug_logs').upsert(row);
-    // The optional `environment` jsonb column may not exist yet - retry without it (the builds still
-    // travel inside the run's bug_logs JSON) and stop sending it for this session.
-    if (error && 'environment' in row && /environment/i.test(String((error as any).message || ''))) {
-      bugEnvironmentColumnAvailable = false;
-      delete row.environment;
+    // Optional columns (`environment` jsonb, `title` text) may not exist yet - drop the one the error
+    // names and retry. The values still travel inside the run's bug_logs JSON.
+    for (let attempt = 0; error && attempt < 2; attempt++) {
+      const msg = String((error as any).message || '');
+      const missing = (Object.keys(optionalBugColumns) as Array<keyof typeof optionalBugColumns>)
+        .find(col => col in row && new RegExp(`\\b${col}\\b`, 'i').test(msg));
+      if (!missing) break;
+      optionalBugColumns[missing] = false;
+      delete row[missing];
       ({ error } = await supabase.from('bug_logs').upsert(row));
     }
     if (error) {

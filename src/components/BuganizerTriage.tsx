@@ -4,9 +4,9 @@ import type { BugLog, TestPlan } from '../types';
 import {
   BUGANIZER_COMPONENTS,
   BUGANIZER_PRIORITIES,
-  BUGANIZER_SEVERITIES,
   BUGANIZER_TYPES,
-  PLAN_HOTLISTS,
+  KNOWN_HOTLISTS,
+  hotlistForPlan,
   TOP_COMPONENT_COUNT,
   componentById,
 } from '../data/buganizerCatalog';
@@ -17,6 +17,7 @@ import {
   buildBuganizerUrl,
   buildDefaultDraft,
   loadDrafts,
+  syncDraftWithBug,
   saveDrafts,
 } from '../utils/buganizerDraft';
 
@@ -68,11 +69,13 @@ export default function BuganizerTriage({ bugs, plans }: Props) {
 
   useEffect(() => saveDrafts(drafts), [drafts]);
 
-  const draftFor = (bug: BugLog): BuganizerDraft =>
-    (drafts[bug.id] && { ...drafts[bug.id], foundIn: drafts[bug.id].foundIn ?? (bug.environment?.glassesFirmware || '') }) || buildDefaultDraft(bug, { planId: bug.planId, planName: planName(bug.planId), cujName: bug.feature || 'General' });
+  const ctxFor = (bug: BugLog) => ({ planId: bug.planId, planName: planName(bug.planId), cujName: bug.feature || 'General' });
+  const draftFromStore = (store: Record<string, BuganizerDraft>, bug: BugLog): BuganizerDraft =>
+    store[bug.id] ? syncDraftWithBug(store[bug.id], bug, ctxFor(bug)) : buildDefaultDraft(bug, ctxFor(bug));
+  const draftFor = (bug: BugLog): BuganizerDraft => draftFromStore(drafts, bug);
 
   const updateDraft = (bug: BugLog, patch: Partial<BuganizerDraft>) =>
-    setDrafts(prev => ({ ...prev, [bug.id]: { ...(prev[bug.id] || draftFor(bug)), ...patch, updatedAt: Date.now() } }));
+    setDrafts(prev => ({ ...prev, [bug.id]: { ...draftFromStore(prev, bug), ...patch, updatedAt: Date.now() } }));
 
   const testers = useMemo(() => Array.from(new Set(bugs.map(b => (b.testerName || '').trim()).filter(Boolean))).sort(), [bugs]);
   const cujs = useMemo(() => Array.from(new Set(bugs.map(b => b.feature || 'General'))).sort(), [bugs]);
@@ -294,7 +297,10 @@ export default function BuganizerTriage({ bugs, plans }: Props) {
                       <span className={`px-2 py-0.5 rounded-full border ${STATE_STYLE[d.state]}`}>{STATE_LABEL[d.state]}{d.state === 'filed' && d.issueId ? ` · b/${d.issueId}` : ''}</span>
                       <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">{bug.feature || 'General'}</span>
                     </div>
-                    <p className="text-sm text-slate-100 leading-snug">{bug.note}</p>
+                    {bug.title && <p className="text-sm font-semibold text-white leading-snug">{bug.title}</p>}
+                    {(!bug.title || bug.note !== bug.title) && (
+                      <p className={`${bug.title ? 'text-xs text-slate-300 line-clamp-3 whitespace-pre-line' : 'text-sm text-slate-100'} leading-snug`}>{bug.note}</p>
+                    )}
                     <p className="text-[11px] text-slate-400">
                       {bug.testerName || 'Unknown'} · {bug.deviceName || 'Unknown device'} · {bug.formattedTime || localDay(bug.timestamp)}
                     </p>
@@ -334,17 +340,21 @@ export default function BuganizerTriage({ bugs, plans }: Props) {
                     </div>
                     {comp && <p className="text-[10px] text-slate-500 truncate" title={comp.path}>{comp.path} · <a className="text-blue-400 hover:underline" href={`https://b.corp.google.com/components/${comp.id}`} target="_blank" rel="noreferrer">{comp.id}</a></p>}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                      <div>
-                        <label className={labelCls}>Severity</label>
-                        <select aria-label="Severity" className={inputCls} value={d.severity} onChange={e => updateDraft(bug, { severity: e.target.value })}>
-                          {BUGANIZER_SEVERITIES.map(s => <option key={s || 'none'} value={s}>{s || 'Not set'}</option>)}
-                        </select>
-                      </div>
-                      <div>
+                      <div className="col-span-2">
                         <label className={labelCls}>Hotlist</label>
-                        <input aria-label="Hotlist" className={inputCls} value={d.hotlistIds.join(', ')}
-                          title={bug.planId && PLAN_HOTLISTS[bug.planId] ? PLAN_HOTLISTS[bug.planId].name : 'No hotlist for this plan'}
-                          onChange={e => updateDraft(bug, { hotlistIds: e.target.value.split(/[,\s]+/).filter(Boolean) })} />
+                        {(() => {
+                          const cur = d.hotlistIds.join(', ');
+                          const known = KNOWN_HOTLISTS.some(h => h.hotlistId === cur);
+                          return (
+                            <select aria-label="Hotlist" className={inputCls} value={cur}
+                              title={hotlistForPlan(bug.planId, planName(bug.planId)) ? `Auto-set from test plan: ${hotlistForPlan(bug.planId, planName(bug.planId))!.name}` : 'No hotlist mapped to this test plan'}
+                              onChange={e => updateDraft(bug, { hotlistIds: e.target.value ? [e.target.value] : [] })}>
+                              <option value="">None</option>
+                              {KNOWN_HOTLISTS.map(h => <option key={h.hotlistId} value={h.hotlistId}>{h.name} · {h.hotlistId}</option>)}
+                              {cur && !known && <option value={cur}>Custom · {cur}</option>}
+                            </select>
+                          );
+                        })()}
                       </div>
                       <div>
                         <label className={labelCls}>Assignee</label>
@@ -352,7 +362,7 @@ export default function BuganizerTriage({ bugs, plans }: Props) {
                       </div>
                       <div>
                         <label className={labelCls}>CC</label>
-                        <input aria-label="CC" className={inputCls} value={d.cc} placeholder="ldap1, ldap2" onChange={e => updateDraft(bug, { cc: e.target.value })} />
+                        <input aria-label="CC" className={inputCls} value={d.cc} placeholder="ldap1, team@google.com" onChange={e => updateDraft(bug, { cc: e.target.value })} />
                       </div>
                     </div>
                     <div>
@@ -431,7 +441,7 @@ export default function BuganizerTriage({ bugs, plans }: Props) {
                       <span className="flex-1 min-w-0">
                         <span className="block font-semibold text-slate-100 truncate" title={d.title}>{d.title}</span>
                         <span className="block text-[11px] text-slate-400 truncate">
-                          <b className="text-slate-300">{c ? c.name : d.componentId}</b> · {d.priority}{d.severity ? ` · ${d.severity}` : ''} · {d.type === 'BUG' ? 'Bug' : d.type}
+                          <b className="text-slate-300">{c ? c.name : d.componentId}</b> · {d.priority} · {d.type === 'BUG' ? 'Bug' : d.type}
                           {d.hotlistIds.length ? ` · hotlist ${d.hotlistIds.join(', ')}` : ''}{d.foundIn ? ` · found in ${d.foundIn}` : ''}{d.cc ? ` · cc ${d.cc}` : ''}
                         </span>
                       </span>

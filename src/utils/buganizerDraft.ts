@@ -1,8 +1,9 @@
 import type { BugLog } from '../types';
 import {
   CUJ_DEFAULT_COMPONENT,
+  DEFAULT_CC,
   FALLBACK_COMPONENT_ID,
-  PLAN_HOTLISTS,
+  hotlistForPlan,
 } from '../data/buganizerCatalog';
 
 /**
@@ -28,6 +29,8 @@ export interface BuganizerDraft {
   foundIn: string;
   state: DraftState;
   issueId?: string;
+  /** Fingerprint of the bug's title + note when the draft text was generated (re-sync after Bugs Feed edits). */
+  sourceSig?: string;
   updatedAt: number;
 }
 
@@ -84,7 +87,7 @@ export function environmentLines(bug: BugLog): string[] {
 export function defaultDescription(bug: BugLog, ctx: DraftContext): string {
   const lines = [
     '**What happened**',
-    (bug.note || '').trim() || '(no tester note)',
+    (bug.note || '').trim() || (bug.title || '').trim() || '(no tester note)',
     '',
     '**Where**',
     `- Test plan: ${ctx.planName || bug.planId || 'Unknown'}`,
@@ -102,22 +105,57 @@ export function defaultDescription(bug: BugLog, ctx: DraftContext): string {
 
 export function buildDefaultDraft(bug: BugLog, ctx: DraftContext): BuganizerDraft {
   const cuj = ctx.cujName || bug.feature || 'General';
-  const hotlist = (ctx.planId && PLAN_HOTLISTS[ctx.planId]?.hotlistId) || (bug.planId && PLAN_HOTLISTS[bug.planId]?.hotlistId);
+  const hotlist = hotlistForPlan(ctx.planId || bug.planId, ctx.planName)?.hotlistId;
   return {
     bugId: bug.id,
-    title: `${TITLE_PREFIX} [${cuj}] ${titleFromNote(bug.note)}`,
+    title: defaultTitle(bug, cuj),
     description: defaultDescription(bug, { ...ctx, cujName: cuj }),
     componentId: defaultComponentFor(cuj),
     priority: defaultPriority(bug),
     severity: '',
     type: bug.bugType === 'Feature Request' ? 'FEATURE_REQUEST' : 'BUG',
     hotlistIds: hotlist ? [hotlist] : [],
-    cc: '',
+    cc: DEFAULT_CC,
     assignee: '',
     foundIn: bug.environment?.glassesFirmware || '',
     state: 'draft',
+    sourceSig: bugSourceSig(bug),
     updatedAt: Date.now(),
   };
+}
+
+export function defaultTitle(bug: BugLog, cuj: string): string {
+  return `${TITLE_PREFIX} [${cuj}] ${(bug.title || '').replace(/\s+/g, ' ').trim() || titleFromNote(bug.note)}`;
+}
+
+/** Changes whenever the tester's title or description is edited (e.g. from the Bugs Feed). */
+export function bugSourceSig(bug: BugLog): string {
+  return `${(bug.title || '').trim()}\u0000${(bug.note || '').trim()}`;
+}
+
+/**
+ * Bring a saved draft up to date: re-generate title/description when the bug itself was
+ * edited since the draft was made, and fill the default hotlist/CC for drafts saved before
+ * those defaults existed.
+ */
+export function syncDraftWithBug(saved: BuganizerDraft, bug: BugLog, ctx: DraftContext): BuganizerDraft {
+  const cuj = ctx.cujName || bug.feature || 'General';
+  const d: BuganizerDraft = { ...saved, foundIn: saved.foundIn ?? (bug.environment?.glassesFirmware || '') };
+  const sig = bugSourceSig(bug);
+  if (saved.sourceSig !== undefined && saved.sourceSig !== sig) {
+    d.title = defaultTitle(bug, cuj);
+    d.description = defaultDescription(bug, { ...ctx, cujName: cuj });
+  }
+  if (saved.sourceSig === undefined) {
+    // Draft predates hotlist/CC defaults: fill them only if they were left blank.
+    if (!d.hotlistIds?.length) {
+      const h = hotlistForPlan(ctx.planId || bug.planId, ctx.planName)?.hotlistId;
+      d.hotlistIds = h ? [h] : [];
+    }
+    if (!(d.cc || '').trim()) d.cc = DEFAULT_CC;
+  }
+  d.sourceSig = sig;
+  return d;
 }
 
 const usernames = (s: string) =>
@@ -135,7 +173,6 @@ export function buildBuganizerUrl(d: BuganizerDraft): string {
     add('format', 'MARKDOWN');
   }
   if (/^P[0-4]$/.test(d.priority)) add('priority', d.priority);
-  if (/^S[0-4]$/.test(d.severity)) add('severity', d.severity);
   if (ALLOWED_TYPES.has(d.type)) add('type', d.type);
   // Assignee must be exactly one valid username - anything else (e.g. "john doe") is dropped, not guessed
   const assigneeRaw = d.assignee.trim().replace(/@google\.com$/i, '');

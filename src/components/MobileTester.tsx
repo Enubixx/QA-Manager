@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import GlassesBuildCapture from './GlassesBuildCapture';
+import { TITLE_PREFIX } from '../utils/buganizerDraft';
 import { buildEnvironment, getCurrentGlassesBuild, getPhoneBuildInfo, type GlassesBuild, type PhoneBuildInfo } from '../services/deviceBuilds';
 import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile } from '../types';
@@ -9,6 +10,10 @@ import { triggerHaptic } from '../utils/haptics';
 import { isRunFullyCompleted, buildStepFirstSeenIndex } from '../utils/runUtils';
 import { APP_VERSION_CODE, APP_VERSION_NAME } from '../constants';
 import { BootSignal, subscribeToSystemCommands } from '../services/supabaseService';
+
+/** Buganizer titles stay readable at ~120 chars. */
+const BUG_TITLE_MAX = 120;
+const BUG_DESCRIPTION_TEMPLATE = 'Steps to reproduce:\n1. \n2. \n\nExpected:\n\nActual:\n';
 
 interface MobileTesterProps {
   testPlans: TestPlan[];
@@ -555,7 +560,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   // Bug Modal state
   const [showBugModal, setShowBugModal] = useState(false);
   const [editingBug, setEditingBug] = useState<BugLog | null>(null);
+  const [bugTitle, setBugTitle] = useState('');
   const [bugNote, setBugNote] = useState('');
+  const [showBuganizerPreview, setShowBuganizerPreview] = useState(false);
   const [bugImageUrl, setBugImageUrl] = useState('');
   const [bugSeverity, setBugSeverity] = useState<'low' | 'medium' | 'high' | 'critical'>('medium');
   const [bugSuccessMessage, setBugSuccessMessage] = useState<string | null>(null);
@@ -583,6 +590,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   const closeBugModal = () => {
     stopSpeechRecognition();
     setEditingBug(null);
+    setBugTitle('');
+    setShowBuganizerPreview(false);
     setBugNote('');
     setBugImageUrl('');
     setBugSeverity('medium');
@@ -592,6 +601,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   const openNewBugModal = () => {
     stopSpeechRecognition();
     setEditingBug(null);
+    setBugTitle('');
+    setShowBuganizerPreview(false);
     setBugNote('');
     setBugImageUrl('');
     setBugSeverity('medium');
@@ -601,7 +612,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   const handleStartEditBug = (bug: BugLog) => {
     stopSpeechRecognition();
     setEditingBug(bug);
-    setBugNote(bug.note);
+    setBugTitle(bug.title || '');
+    setShowBuganizerPreview(false);
+    // Older bugs have no separate title; their note is the description
+    setBugNote(bug.title && bug.note === bug.title ? '' : bug.note);
     setBugSeverity(bug.severity || 'medium');
     setBugImageUrl(bug.imageUrl || '');
     setShowBugModal(true);
@@ -1210,12 +1224,17 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   // Submit or Update Bug
   const handleReportBugSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!bugNote.trim()) return;
+    const titleText = bugTitle.replace(/\s+/g, ' ').trim().slice(0, BUG_TITLE_MAX);
+    const descriptionText = bugNote.trim();
+    if (!titleText) return;
+    // `note` stays the free-text field every report/summary reads; fall back to the title if no description
+    const noteText = descriptionText || titleText;
 
     if (editingBug) {
       const updatedBug: BugLog = {
         ...editingBug,
-        note: bugNote.trim(),
+        title: titleText,
+        note: noteText,
         severity: bugSeverity,
         imageUrl: bugImageUrl.trim() || undefined
       };
@@ -1268,7 +1287,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       testerName: (completedRunSummary || activeRun).testerName || 'Tester',
       deviceName: (completedRunSummary || activeRun).deviceName || 'Mobile Device',
       severity: bugSeverity,
-      note: bugNote.trim(),
+      title: titleText,
+      note: noteText,
       imageUrl: bugImageUrl.trim() || undefined,
       timestamp: isoTimestamp,
       formattedTime: formattedTime,
@@ -1535,17 +1555,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-wider ${
-                          bug.severity === 'critical'
-                            ? 'bg-rose-500/30 text-rose-300 border border-rose-500/40'
-                            : bug.severity === 'high'
-                            ? 'bg-amber-500/30 text-amber-300 border border-amber-500/40'
-                            : 'bg-blue-500/30 text-blue-300 border border-blue-500/40'
-                        }`}>
-                          {bug.severity}
-                        </span>
                         <span className="text-xs font-bold text-white">
-                          {bug.stepTitle || bug.feature || 'Bug'}
+                          {bug.title || bug.stepTitle || bug.feature || 'Bug'}
                         </span>
                       </div>
                       <div className="flex items-center gap-1">
@@ -1721,8 +1732,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                     {currentStepBugs.map(b => (
                       <div key={b.id} className="bg-rose-950/40 border border-rose-500/30 rounded-2xl p-2.5 flex items-center justify-between gap-2 text-xs">
                         <div className="min-w-0 flex-1">
-                          <span className="font-bold text-rose-300">[{b.severity.toUpperCase()}]</span>{' '}
-                          <span className="text-zinc-200">{b.note}</span>
+                          <span className="text-zinc-200">{b.title ? <b className="text-rose-200">{b.title}</b> : b.note}</span>
                         </div>
                         <div className="flex items-center gap-1">
                           <button
@@ -2425,7 +2435,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
             
             <form onSubmit={handleReportBugSubmit} className="h-full flex flex-col justify-between space-y-4">
               
-              <div className="space-y-3.5">
+              <div className="space-y-3.5 overflow-y-auto flex-1 min-h-0 pr-0.5 -mr-0.5">
                 <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
                   <h4 className="text-sm font-bold text-rose-400 flex items-center gap-1.5 tracking-tight">
                     <Bug className="w-4 h-4 text-rose-400" />
@@ -2448,35 +2458,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-[11px] font-bold text-zinc-400 mb-1.5 uppercase tracking-wider">Severity Level</label>
-                  <div className="grid grid-cols-4 gap-2">
-                    {(['low', 'medium', 'high', 'critical'] as const).map(sev => {
-                      const isSelected = bugSeverity === sev;
-                      return (
-                        <button
-                          key={sev}
-                          type="button"
-                          onClick={() => setBugSeverity(sev)}
-                          className={`py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border cursor-pointer ${
-                            isSelected
-                              ? sev === 'critical'
-                                ? 'bg-rose-500/30 text-rose-300 border-rose-500 shadow-md shadow-rose-500/20 ring-1 ring-rose-400'
-                                : sev === 'high'
-                                ? 'bg-amber-500/30 text-amber-300 border-amber-500 shadow-md shadow-amber-500/20 ring-1 ring-amber-400'
-                                : sev === 'medium'
-                                ? 'bg-indigo-500/30 text-indigo-300 border-indigo-500 shadow-md shadow-indigo-500/20 ring-1 ring-indigo-400'
-                                : 'bg-emerald-500/30 text-emerald-300 border-emerald-500 shadow-md shadow-emerald-500/20 ring-1 ring-emerald-400'
-                              : 'bg-zinc-900/80 text-zinc-400 border-zinc-800 hover:border-zinc-700'
-                          }`}
-                        >
-                          {sev}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
                 <div className="grid grid-cols-2 gap-2.5 text-xs">
                   <div>
                     <label className="block text-[10px] font-bold text-zinc-400 mb-1 uppercase tracking-wider">Reporter</label>
@@ -2488,37 +2469,99 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   </div>
                 </div>
 
+                {/* Title -> Buganizer title */}
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
-                      Bug Description / Notes
-                    </label>
-                    <button
-                      type="button"
-                      onClick={toggleSpeechRecognition}
-                      className={`px-2.5 py-1 rounded-xl text-[10px] font-bold flex items-center gap-1.5 transition shadow-sm cursor-pointer ${
-                        isListeningSpeech
-                          ? 'bg-rose-500/20 text-rose-300 border border-rose-500/50 animate-pulse'
-                          : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700'
-                      }`}
-                      title={isListeningSpeech ? 'Stop recording voice note' : 'Click to speak note'}
-                    >
-                      <Mic className={`w-3 h-3 ${isListeningSpeech ? 'text-rose-400 animate-bounce' : 'text-zinc-400'}`} />
-                      <span>{isListeningSpeech ? 'Listening...' : 'Voice Dictate'}</span>
-                    </button>
+                    <label htmlFor="bug-title" className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">Title</label>
+                    <span className={`text-[10px] font-mono ${bugTitle.length > BUG_TITLE_MAX - 15 ? 'text-amber-400' : 'text-zinc-500'}`}>{bugTitle.length}/{BUG_TITLE_MAX}</span>
+                  </div>
+                  <input
+                    id="bug-title"
+                    data-testid="bug-title"
+                    type="text"
+                    maxLength={BUG_TITLE_MAX}
+                    placeholder="Short summary, e.g. Gemini doesn't save the Keep note"
+                    value={bugTitle}
+                    onChange={e => setBugTitle(e.target.value)}
+                    className="w-full liquid-glass-input rounded-2xl px-3.5 py-3 text-sm text-white placeholder-zinc-500 border border-zinc-800 focus:border-rose-500/60 focus:outline-none font-semibold"
+                    required
+                    autoComplete="off"
+                  />
+                </div>
+
+                {/* Description -> Buganizer body */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5 gap-2">
+                    <label htmlFor="bug-description" className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">Description</label>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        data-testid="bug-template"
+                        onClick={() => setBugNote(prev => (prev.trim() ? `${prev.trim()}\n\n${BUG_DESCRIPTION_TEMPLATE}` : BUG_DESCRIPTION_TEMPLATE))}
+                        className="px-2.5 py-1 rounded-xl text-[10px] font-bold bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 cursor-pointer"
+                        title="Insert steps / expected / actual"
+                      >
+                        + Steps
+                      </button>
+                      <button
+                        type="button"
+                        onClick={toggleSpeechRecognition}
+                        className={`px-2.5 py-1 rounded-xl text-[10px] font-bold flex items-center gap-1.5 transition shadow-sm cursor-pointer ${
+                          isListeningSpeech
+                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/50 animate-pulse'
+                            : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700'
+                        }`}
+                        title={isListeningSpeech ? 'Stop recording voice note' : 'Click to speak note'}
+                      >
+                        <Mic className={`w-3 h-3 ${isListeningSpeech ? 'text-rose-400 animate-bounce' : 'text-zinc-400'}`} />
+                        <span>{isListeningSpeech ? 'Listening...' : 'Dictate'}</span>
+                      </button>
+                    </div>
                   </div>
                   <textarea
-                    rows={3}
-                    placeholder="Describe what went wrong or observation notes (or click Voice Dictate to speak)..."
+                    id="bug-description"
+                    data-testid="bug-description"
+                    rows={5}
+                    placeholder="What happened? Add steps, what you expected and what actually happened (or tap Dictate)."
                     value={bugNote}
                     onChange={e => setBugNote(e.target.value)}
                     className="w-full liquid-glass-input rounded-2xl p-3.5 text-xs text-white placeholder-zinc-500 border border-zinc-800 focus:border-zinc-600 focus:outline-none font-medium leading-relaxed"
-                    required
                   />
                   {isListeningSpeech && (
                     <div className="mt-1.5 text-[10px] text-rose-400 flex items-center gap-1.5 font-medium animate-pulse">
                       <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping" />
                       Listening... speak into your microphone
+                    </div>
+                  )}
+                </div>
+
+                {/* Live Buganizer preview */}
+                <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50">
+                  <button
+                    type="button"
+                    data-testid="bug-buganizer-preview-toggle"
+                    onClick={() => setShowBuganizerPreview(v => !v)}
+                    className="w-full flex items-center justify-between px-3 py-2 text-[11px] font-bold text-zinc-300 cursor-pointer"
+                  >
+                    <span>Buganizer preview</span>
+                    <ChevronDown className={`w-3.5 h-3.5 text-zinc-500 transition-transform ${showBuganizerPreview ? 'rotate-180' : ''}`} />
+                  </button>
+                  {showBuganizerPreview && (
+                    <div className="px-3 pb-3 space-y-1.5" data-testid="bug-buganizer-preview">
+                      <div className="text-[11px] font-semibold text-white leading-snug break-words">
+                        {`${TITLE_PREFIX} [${editingBug?.feature || currentStep?.feature || 'General'}] ${bugTitle.trim() || 'Your title'}`}
+                      </div>
+                      <pre className="whitespace-pre-wrap text-[10px] leading-relaxed text-zinc-400 font-mono bg-black/40 rounded-xl p-2 max-h-32 overflow-y-auto">
+{`**What happened**
+${bugNote.trim() || bugTitle.trim() || '(description)'}
+
+**Where**
+- Step: ${editingBug ? editingBug.stepTitle || 'Defect Entry' : currentStep?.title || 'Current Step'}
+- CUJ: ${editingBug?.feature || currentStep?.feature || 'General'}
+
+**Environment**
+- Builds from this phone + glasses are added automatically`}
+                      </pre>
                     </div>
                   )}
                 </div>
