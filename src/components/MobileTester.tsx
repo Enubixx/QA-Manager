@@ -2005,7 +2005,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                         <div key={bug.id} className="flex items-center justify-between bg-zinc-900/90 p-2 rounded-xl border border-zinc-800 text-[11px]">
                           <div className="truncate pr-2">
                             <span className="font-mono text-sky-400 mr-1.5 text-[10px] bg-sky-500/10 px-1.5 py-0.5 rounded-md border border-sky-500/25">[{bug.feature || 'General'}]</span>
-                            <span className="text-zinc-200">{bug.note}</span>
+                            <span className="text-zinc-200">{bug.title ? <b className="text-rose-200">{bug.title}</b> : bug.note}</span>
                           </div>
                           <div className="flex items-center gap-1 flex-shrink-0">
                             <button
