@@ -568,6 +568,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   const [bugSeverity, setBugSeverity] = useState<'low' | 'medium' | 'high' | 'critical'>('medium');
   // Time of day the bug happened ("HH:MM", same day). Defaults to now for new bugs.
   const [bugTime, setBugTime] = useState('');
+  // New bugs only: true once the tester picks a time. Until then the bug is logged at the real
+  // save time, so the clock ticking past a minute while typing never counts as an adjustment.
+  const [bugTimeTouched, setBugTimeTouched] = useState(false);
   const [bugSuccessMessage, setBugSuccessMessage] = useState<string | null>(null);
   const [isListeningSpeech, setIsListeningSpeech] = useState(false);
   const speechRecognitionRef = useRef<any>(null);
@@ -601,6 +604,16 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     setShowBugModal(false);
   };
 
+  useEffect(() => {
+    if (!showBugModal || editingBug || bugTimeTouched) return;
+    const tick = () => setBugTime(prev => {
+      const nowHHMM = toLocalHHMM(new Date().toISOString());
+      return prev === nowHHMM ? prev : nowHHMM;
+    });
+    const id = window.setInterval(tick, 10000);
+    return () => window.clearInterval(id);
+  }, [showBugModal, editingBug, bugTimeTouched]);
+
   const openNewBugModal = () => {
     stopSpeechRecognition();
     setEditingBug(null);
@@ -610,6 +623,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     setBugImageUrl('');
     setBugSeverity('medium');
     setBugTime(toLocalHHMM(new Date().toISOString()));
+    setBugTimeTouched(false);
     setShowBugModal(true);
   };
 
@@ -622,6 +636,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     setBugNote(bug.title && bug.note === bug.title ? '' : bug.note);
     setBugSeverity(bug.severity || 'medium');
     setBugTime(toLocalHHMM(bug.timestamp));
+    setBugTimeTouched(false);
     setBugImageUrl(bug.imageUrl || '');
     setShowBugModal(true);
   };
@@ -1280,7 +1295,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
     const now = new Date();
     // If the tester moved the time back (noted the bug late), keep the real logging time as originalTimestamp.
-    const picked = bugTime && bugTime !== toLocalHHMM(now.toISOString()) ? atLocalTime(now.toISOString(), bugTime, now) : null;
+    const picked = bugTimeTouched && bugTime && bugTime !== toLocalHHMM(now.toISOString()) ? atLocalTime(now.toISOString(), bugTime, now) : null;
     const isoTimestamp = (picked || now).toISOString();
     const formattedTime = formatBugTime(picked || now);
 
@@ -2451,7 +2466,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   </h4>
                   {(() => {
                     const loggedAt = editingBug ? (editingBug.originalTimestamp || editingBug.timestamp) : new Date().toISOString();
-                    const adjusted = !!bugTime && bugTime !== toLocalHHMM(loggedAt);
+                    const adjusted = !!bugTime && (editingBug ? true : bugTimeTouched) && bugTime !== toLocalHHMM(loggedAt);
                     return (
                       <div className="flex flex-col items-end gap-0.5">
                         <label
@@ -2464,12 +2479,12 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                             aria-label="Time the bug happened"
                             value={bugTime}
                             max={editingBug ? undefined : toLocalHHMM(new Date().toISOString())}
-                            onChange={e => setBugTime(e.target.value)}
+                            onChange={e => { setBugTime(e.target.value); if (!editingBug) setBugTimeTouched(true); }}
                             className="bg-transparent text-inherit font-mono w-[88px] focus:outline-none [color-scheme:dark]"
                           />
                         </label>
                         {adjusted && (
-                          <button type="button" data-testid="bug-time-reset" onClick={() => setBugTime(toLocalHHMM(loggedAt))} className="text-[9px] text-amber-300/80 underline decoration-dotted">
+                          <button type="button" data-testid="bug-time-reset" onClick={() => { setBugTime(toLocalHHMM(editingBug ? loggedAt : new Date().toISOString())); setBugTimeTouched(false); }} className="text-[9px] text-amber-300/80 underline decoration-dotted">
                             logged {new Date(loggedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · reset
                           </button>
                         )}
