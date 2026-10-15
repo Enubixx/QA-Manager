@@ -6,7 +6,7 @@ import {
 } from '../data/buganizerCatalog';
 
 /**
- * Buganizer triage prototype: per-bug draft fields, defaults, the prefilled new-issue URL
+ * Buganizer triage: per-bug draft fields, defaults, the prefilled new-issue URL
  * builder, and local-only storage. Nothing here talks to Buganizer - it only builds
  * https://b.corp.google.com/issues/new?... links, which never create a bug on their own
  * (a person must review the form and click Create).

@@ -10,8 +10,8 @@ import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generat
 import { requestRx95Summary, isRx95Available } from '../services/rx95Service';
 import BuganizerTriage from './BuganizerTriage';
 
-/** Local-only Buganizer triage prototype (off unless VITE_BUGANIZER_PROTOTYPE=1). */
-const BUGANIZER_PROTOTYPE = ((import.meta as any).env?.VITE_BUGANIZER_PROTOTYPE || '') === '1';
+/** Buganizer triage view: on by default; set VITE_BUGANIZER_ENABLED=0 to hide it. */
+const BUGANIZER_ENABLED = ((import.meta as any).env?.VITE_BUGANIZER_ENABLED || '') !== '0';
 import type { ExecutiveQAResult, SummaryScopeContext } from '../services/geminiService';
 import { GOOGLE_APPS_SCRIPT_CODE } from '../googleAppsScriptCode';
 import { toBlob } from 'html-to-image';
@@ -3798,8 +3798,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
 
-      {/* Buganizer triage prototype toggle (local only, behind VITE_BUGANIZER_PROTOTYPE) */}
-      {activeTab === 'bugs' && BUGANIZER_PROTOTYPE && (
+      {/* Bugs Feed / Buganizer toggle (hidden only when VITE_BUGANIZER_ENABLED=0) */}
+      {activeTab === 'bugs' && BUGANIZER_ENABLED && (
         <div className="inline-flex items-center bg-[#0f172a] border border-slate-800 rounded-2xl p-0.5 gap-0.5 h-8">
           <button type="button" onClick={() => setBugsView('feed')}
             className={`px-3 h-7 rounded-xl text-xs font-semibold ${bugsView === 'feed' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}>Bugs Feed</button>
@@ -3807,12 +3807,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
             className={`px-3 h-7 rounded-xl text-xs font-semibold ${bugsView === 'buganizer' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}>Buganizer</button>
         </div>
       )}
-      {activeTab === 'bugs' && BUGANIZER_PROTOTYPE && bugsView === 'buganizer' && (
+      {activeTab === 'bugs' && BUGANIZER_ENABLED && bugsView === 'buganizer' && (
         <BuganizerTriage bugs={bugLogs} plans={testPlans} />
       )}
 
       {/* Tab 3: Bugs Feed */}
-      {activeTab === 'bugs' && (!BUGANIZER_PROTOTYPE || bugsView === 'feed') && (
+      {activeTab === 'bugs' && (!BUGANIZER_ENABLED || bugsView === 'feed') && (
         <div className="space-y-6">
           
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">

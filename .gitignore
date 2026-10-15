@@ -31,7 +31,7 @@ dist-ssr
 
 # Native build artifacts & local JDKs
 jdk17/
-android/
+/android/
 twa-manifest.json
 *.apk
 !public/*.apk

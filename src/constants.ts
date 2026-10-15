@@ -1,6 +1,6 @@
 // App Version Constants for Mobile APK and Server Compatibility Enforcement
-export const APP_VERSION_CODE = 5;
-export const APP_VERSION_NAME = '2.3.0';
+export const APP_VERSION_CODE = 6;
+export const APP_VERSION_NAME = '2.4.0';
 
 // Version options for minimum APK version selector and display formatting
 export const APP_VERSION_OPTIONS: { code: number; version: string; label: string }[] = [
@@ -8,7 +8,8 @@ export const APP_VERSION_OPTIONS: { code: number; version: string; label: string
   { code: 2, version: '2.0.0', label: 'v2.0.0 (Code 2)' },
   { code: 3, version: '2.1.0', label: 'v2.1.0 (Code 3)' },
   { code: 4, version: '2.2.0', label: 'v2.2.0 (Code 4)' },
-  { code: 5, version: '2.3.0', label: 'v2.3.0 (Code 5 - Latest)' },
+  { code: 5, version: '2.3.0', label: 'v2.3.0 (Code 5)' },
+  { code: 6, version: '2.4.0', label: 'v2.4.0 (Code 6 - Latest)' },
 ];
 
 export const formatAppVersionName = (code: number): string => {

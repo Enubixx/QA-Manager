@@ -21,7 +21,7 @@ import {
 } from '../utils/buganizerDraft';
 
 /**
- * Buganizer PROTOTYPE (local only).
+ * Buganizer triage view.
  * Categorize QA app bugs for Buganizer, review/edit them in a "Ready to file" queue, then open
  * one prefilled Buganizer new-issue tab per bug. Drafts live in this browser's localStorage only.
  * Nothing is sent to Buganizer: the prefilled form only creates a bug if a person clicks Create.
@@ -175,11 +175,11 @@ export default function BuganizerTriage({ bugs, plans }: Props) {
 
   return (
     <div className="space-y-5" data-testid="buganizer-triage">
-      {/* Prototype banner */}
+      {/* Safety banner */}
       <div className="rounded-[20px] border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 flex items-start gap-3">
         <ShieldCheck className="w-5 h-5 text-emerald-300 flex-shrink-0 mt-0.5" />
         <div className="text-xs text-emerald-100 leading-relaxed">
-          <b>Buganizer (local prototype).</b> Drafts are saved only in this browser. Nothing is sent to Buganizer.
+          <b>Buganizer triage.</b> Drafts are saved only in this browser. Nothing is sent to Buganizer automatically.
           "Open in Buganizer" only opens <i>prefilled forms</i>, and a bug is created only if someone reviews the form and clicks <b>Create</b>.
         </div>
       </div>

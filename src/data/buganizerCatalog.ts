@@ -1,5 +1,5 @@
 /**
- * Buganizer catalog for the QA Manager triage prototype.
+ * Buganizer catalog for the QA Manager Buganizer triage view.
  *
  * Components are every component used in the Press QA (8810391) and Gentle Monster (8682925)
  * hotlists as of Oct 14, 2026, sorted by how often the team used them. The CUJ defaults come
