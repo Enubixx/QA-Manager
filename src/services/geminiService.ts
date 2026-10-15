@@ -33,7 +33,7 @@ const BATCH_CACHE_MAX_ENTRIES = 12;
 
 // Bump whenever the executive summary prompt or tone rules change, so that
 // cached summaries generated under the previous style are not reused.
-const PROMPT_STYLE_VERSION = 'v5-plan-scoped';
+const PROMPT_STYLE_VERSION = 'v7-natural-voice';
 
 function stableHash(input: string): string {
   let h1 = 0xdeadbeef;
@@ -1008,8 +1008,8 @@ export function synthesizeExecutiveOverview(
   if (topPattern && topCount >= 3 && topCount / notes.length >= 0.2) {
     const requiresRestart = /\b(?:restart|reboot|power cycle|unresponsive|froze|frozen)\b/i.test(lower);
     recurringSentence = requiresRestart
-      ? ` There are noticeable common occurrences of ${topPattern}, which forces a needed device restart.`
-      : ` There are noticeable common occurrences of ${topPattern} across multiple CUJs.`;
+      ? ` ${topPattern.charAt(0).toUpperCase()}${topPattern.slice(1)} keeps coming up and forces a device restart.`
+      : ` ${topPattern.charAt(0).toUpperCase()}${topPattern.slice(1)} keeps coming up across several CUJs.`;
   }
 
   // 3. Constructive closing note
@@ -1223,22 +1223,23 @@ export async function summarizeOverallBugsWithGemini(bugs: BugLog[] = []): Promi
 
   if (userApiKey) {
     try {
-      const prompt = `You are a Senior Principal QA Architect writing an executive summary overview for an engineering leadership report.
+      const prompt = `You are a QA lead writing a short overview of these bugs for your engineering team.
 
 Reported Bugs List:
 ${bugLines.join('\n')}
 
-GOAL: Write a concise 1 to 2 sentence executive overview (20 to 45 words) synthesizing key failure modes and friction areas across the system.
+GOAL: Write 1 to 2 sentences (20 to 45 words) in plain, natural English that say what went wrong most often and why it matters.
 
-FEW-SHOT EXAMPLE:
-"Testing revealed latency and false-trigger issues across voice and camera flows, primarily characterized by image generation delays exceeding 4 minutes, unprompted photo captures, and duplicate confirmation speech triggered by overheard ambient voices."
+EXAMPLE (different product - copy the voice, never the content):
+"Photo uploads are still the weak spot, with some notable issues including uploads that take up to 20 seconds. Other notable bugs include an upload spinner that hangs until the app is restarted."
 
-CRITICAL REQUIREMENTS:
-1. EXECUTIVE SYNTHESIS: Frame the overview strategically: "Testing revealed [key defect categories, e.g. latency, false-trigger, stability] issues across [affected feature/system flows], primarily characterized by [synthesized root causes with exact durations/metrics retained]..."
-2. PRESERVE METRICS: Retain specific quantitative thresholds (e.g. durations like "exceeding 4 minutes").
-3. ACCURACY & REALITY: The summary MUST accurately reflect the actual bugs listed above without hallucinating unrelated errors.
-4. COMPLETE SENTENCES: Write full, complete, grammatical sentences. Never cut off sentences or end with ellipses (...).
-5. Return ONLY the final executive summary text.`;
+REQUIREMENTS:
+1. NATURAL VOICE: simple everyday words, active voice, concrete nouns. Never use report-speak such as "testing revealed", "characterized by", "failure modes", "friction", "common occurrences", "various" or "it is worth noting".
+2. KEEP NUMBERS: retain specific durations and counts (e.g. "up to 4 minutes").
+3. ACCURACY: reflect only the bugs listed above - never invent problems.
+4. NAMING: the AI agent is always called "Gemini" - never "Assistant", "the AI" or "the bot".
+5. Write complete sentences; never end with an ellipsis.
+6. Return ONLY the summary text.`;
 
       const responseText = await callGeminiRestApi(userApiKey, selectedModel, prompt, { maxOutputTokens: 8192 });
       const text = (responseText || '').trim().replace(/^["']|["']$/g, '');
@@ -1674,15 +1675,18 @@ TASK 1 - "features": a complete, de-duplicated issue list for EVERY CUJ above.
 - Within a CUJ, order issues by how many bugs report them, then by severity (crashes and wrong behaviour before minor annoyances).
 - Use the exact CUJ IDs (F1, F2, ...) as "featureId" and include every CUJ listed above exactly once.
 
-TASK 2 - "overallSummary": an executive overview of these results (40 to 75 words, 2 to 3 sentences).
-- Sentence 1 (required): lead with the dominant cross-CUJ themes from these bugs: "Some notable issues include [theme A], [theme B], and [theme C]." You may prepend one short clause about clean CUJs, but never push the issues past sentence two.
-- Sentence 2 (include ONLY if a problem clearly repeats across several CUJs): "There are noticeable common occurrences of [behaviour] when [trigger], which [impact]."
-- Sentence 3 (required): a short positive closing note grounded in this data, such as the CUJs that ran clean. A trailing checkmark is optional.
-- Concrete triggers and impacts beat abstract adjectives.
+TASK 2 - "overallSummary": a short overview of these results (50 to 90 words, 3 to 4 sentences) in plain, natural English - the way a QA lead would say it out loud to their team.
+- Sentence 1: open with the biggest story in these bugs and why it matters (for example a new feature or flow that keeps failing), then name its most important issue: "[What changed or what is struggling], with some notable issues including [issue]." You may open with one short clause about clean CUJs instead.
+- Sentence 2 (include ONLY if there are other distinct issues): "Other notable bugs include [issue B], and [issue C]." List the next most important problems as concrete, specific things. If there are no other issues, skip this sentence entirely - never say that nothing else was reported.
+- Sentence 3 (include ONLY if one behaviour clearly repeats across several bugs or CUJs): describe it as a plain cause-and-effect sentence with its real impact, e.g. "Gemini sometimes [does X] when [trigger], which [impact on the user]."
+- Last sentence: a short positive note grounded in this data, such as CUJs that ran clean or kept high pass rates. End it with " ✅".
+- VOICE: simple everyday words, active voice, specific nouns. Write like a person, not a report generator.
+- NEVER use filler or report-speak such as: "noticeable common occurrences", "notable common occurrences", "common occurrences of", "failure modes", "friction areas", "characterized by", "it is worth noting", "testing revealed", "various", "a number of", "overall,", "in terms of", "observed", "exhibited", "experienced issues with".
 
 STRICT GROUNDING:
 - Use ONLY the bug reports above. Never invent issues, causes, numbers, products, or improvements that they do not support.
 - Paraphrase faithfully: do not exaggerate (say "crash" only if a crash was reported) and do not soften real failures.
+- NAMING: the AI agent is always called "Gemini" (or "GL" / "Gemini Live" where the tester wrote that). Never call it "Assistant", "the assistant", "Google Assistant", "the AI" or "the bot", in both the issue summaries and the overallSummary.
 
 FORMAT EXAMPLE (a different product - copy the structure, never the content):
 Input:
@@ -1693,7 +1697,7 @@ F1: "Photo Upload" (pass rate 60%, 4 bugs)
   #3 [Step: Share album] said it shared the album but my friend never got it
   #4 super slow upload again
 Output:
-{"features":[{"featureId":"F1","issues":[{"bugIds":[1,2,4],"summary":"slow photo uploads taking up to 20 seconds"},{"bugIds":[2],"summary":"upload spinner hangs until the app is restarted"},{"bugIds":[3],"summary":"album share reported as sent but never delivered"}]}],"overallSummary":"Login ran clean, but some notable issues include photo uploads taking up to 20 seconds, an upload spinner that hangs until the app is restarted, and album shares that are reported as sent but never arrive. The Login flow remained stable throughout testing ✅."}
+{"features":[{"featureId":"F1","issues":[{"bugIds":[1,2,4],"summary":"slow photo uploads taking up to 20 seconds"},{"bugIds":[2],"summary":"upload spinner hangs until the app is restarted"},{"bugIds":[3],"summary":"album share reported as sent but never delivered"}]}],"overallSummary":"Photo Upload is still the weak spot, with some notable issues including uploads that take up to 20 seconds. Other notable bugs include an upload spinner that hangs until the app is restarted, and album shares that say they were sent but never arrive. Login ran clean throughout testing ✅."}
 
 Return ONLY the JSON object.`;
 
