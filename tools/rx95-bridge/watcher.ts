@@ -463,5 +463,31 @@ async function startSupabase() {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   log(`starting in ${MODE} mode (agentapi: ${AGENTAPI})`);
+  if (MODE === 'supabase') takeOverSupabaseWatcher();
   if (MODE === 'supabase') void startSupabase(); else startLocal();
+}
+
+/**
+ * Only one Supabase watcher may poll the queue. A leftover older watcher (e.g. orphaned by a
+ * sidecar restart) would claim requests it doesn't understand and fail them, so the newest
+ * watcher stops any previous one recorded in the pid file and takes over.
+ */
+function takeOverSupabaseWatcher() {
+  const pidFile = path.join(os.homedir(), '.gemini/jetski/sidecar_data/rx95_qa_summary/watcher.pid');
+  try {
+    const old = Number(fs.readFileSync(pidFile, 'utf8').trim());
+    if (old && old !== process.pid) {
+      const cmd = fs.existsSync(`/proc/${old}/cmdline`) ? fs.readFileSync(`/proc/${old}/cmdline`, 'utf8') : '';
+      if (cmd.includes('watcher.ts')) {
+        process.kill(old, 'SIGTERM');
+        log(`stopped previous watcher (pid ${old})`);
+      }
+    }
+  } catch { /* no previous watcher */ }
+  try {
+    fs.mkdirSync(path.dirname(pidFile), { recursive: true });
+    fs.writeFileSync(pidFile, String(process.pid));
+  } catch (e: any) {
+    log('could not write pid file:', e.message);
+  }
 }
