@@ -72,13 +72,14 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate }) => {
         {/* Right side APK download & navigation */}
         <div className="flex items-center gap-3">
           <a
-            href="/QA_Field_Tester_v2.3.0.apk"
-            download="QA_Field_Tester_v2.3.0.apk"
+            href="https://drive.google.com/file/d/15qrnpJExF8siPcuTBy6wTIBk33racp3_/view?usp=drivesdk&resourcekey=0-6Th_JDrG2WzhwHfRB9YMcw"
+            target="_blank"
+            rel="noreferrer"
             className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-100 rounded-2xl text-xs font-semibold transition border border-slate-700 flex items-center gap-1.5 active:scale-95"
-            title="Download latest QA Field Tester Android APK (v2.3.0)"
+            title="Download the latest QA Tester Android app (v2.6.0) from Google Drive"
           >
             <Download className="w-3.5 h-3.5 text-slate-300" />
-            <span className="hidden sm:inline">Download</span> APK v2.3
+            <span className="hidden sm:inline">Download</span> APK v2.6
           </a>
         </div>
 
