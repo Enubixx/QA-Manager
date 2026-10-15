@@ -1,6 +1,6 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota } from '../types';
+import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota, RefinedBugText } from '../types';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers, FileSpreadsheet, ExternalLink, MessageSquareText, ClipboardPaste, Bot } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard, copySingleBugToClipboard } from '../utils/exportUtils';
 import { isRunFullyCompleted, buildStepFirstSeenIndex } from '../utils/runUtils';
@@ -37,6 +37,8 @@ interface DashboardProps {
   onDeletePlan: (planId: string) => void;
   onDeleteBug: (bugId: string) => void;
   onUpdateBugLog?: (updatedBug: BugLog | BugLog[]) => void;
+  /** Sets only `refined` on bugs whose current text still matches each refinement's sig. */
+  onApplyBugRefinements?: (refinements: Record<string, RefinedBugText>) => void;
   onWipeAllBugs?: () => void;
   onClonePlan: (planId: string) => void;
   onEditPlan?: (plan: TestPlan) => void;
@@ -86,6 +88,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onDeletePlan,
   onDeleteBug,
   onUpdateBugLog,
+  onApplyBugRefinements,
   onWipeAllBugs,
   onClonePlan,
   onEditPlan,
@@ -3822,7 +3825,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
       {activeTab === 'bugs' && BUGANIZER_ENABLED && bugsView === 'buganizer' && (
-        <BuganizerTriage bugs={bugLogs} plans={testPlans} onUpdateBugLog={onUpdateBugLog} />
+        <BuganizerTriage bugs={bugLogs} plans={testPlans} onApplyRefinements={onApplyBugRefinements} />
       )}
 
       {/* Tab 3: Bugs Feed */}

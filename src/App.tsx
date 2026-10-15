@@ -3,7 +3,8 @@ import { Dashboard } from './components/Dashboard';
 import { PlanBuilder } from './components/PlanBuilder';
 import { MobileTester } from './components/MobileTester';
 import { SAMPLE_PLANS, SAMPLE_RUNS, SAMPLE_BUG_LOGS } from './data/mockData';
-import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile } from './types';
+import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, RefinedBugText } from './types';
+import { bugTextSig } from './utils/bugRefine';
 import {
   fetchAllSupabaseData,
   syncTestPlanToSupabase,
@@ -1471,6 +1472,62 @@ export function App() {
     });
   };
 
+  // Bugs already sent to Supabase with a given refinement (StrictMode runs state updaters twice).
+  const refinedSyncedRef = useRef<Set<string>>(new Set());
+
+  /**
+   * Apply RX95 refinements at the source of truth: sets ONLY `refined` on bugs whose CURRENT
+   * text still matches the refinement's sig, so a reply that arrives after the bug was edited
+   * (e.g. in Bugs Feed while the request was in flight) can never overwrite the edit.
+   */
+  const handleApplyBugRefinements = (refinements: Record<string, RefinedBugText>) => {
+    if (!refinements || Object.keys(refinements).length === 0) return;
+    const applyTo = (b: BugLog): BugLog => {
+      const r = b && refinements[b.id];
+      if (!r || bugTextSig(b) !== r.sig) return b;
+      if (b.refined && b.refined.sig === r.sig && b.refined.at === r.at) return b;
+      return { ...b, refined: r };
+    };
+    markUserMutation();
+
+    setBugLogs(prev => {
+      let changed = false;
+      const next = prev.map(b => { const u = applyTo(b); if (u !== b) changed = true; return u; });
+      if (!changed) return prev;
+      safeSetStorageItem(
+        'qa_bug_logs',
+        JSON.stringify(next),
+        () => JSON.stringify(next.map((b, idx) => (idx >= 5 && b?.imageUrl?.startsWith('data:')) ? { ...b, imageUrl: undefined } : b))
+      );
+      next.forEach((b, i) => {
+        if (b === prev[i] || !b.refined) return;
+        const key = `${b.id}|${b.refined.sig}|${b.refined.at}`;
+        if (refinedSyncedRef.current.has(key)) return;
+        refinedSyncedRef.current.add(key);
+        safeSyncBugLog(b);
+      });
+      return next;
+    });
+
+    setTestRuns(prev => prev.map(r => {
+      const logs = r.bugLogs || [];
+      const nextLogs = logs.map(applyTo);
+      if (nextLogs.every((b, i) => b === logs[i])) return r;
+      const updated = { ...r, bugLogs: nextLogs };
+      syncTestRunToSupabase(updated);
+      return updated;
+    }));
+
+    setArchivedRuns(prev => prev.map(r => {
+      const logs = r.bugLogs || [];
+      const nextLogs = logs.map(applyTo);
+      if (nextLogs.every((b, i) => b === logs[i])) return r;
+      const updated = { ...r, bugLogs: nextLogs };
+      syncArchivedRunToSupabase(updated);
+      return updated;
+    }));
+  };
+
   const handleWipeAllBugs = () => {
     markUserMutation();
     const wipedAt = Date.now();
@@ -1952,6 +2009,7 @@ export function App() {
             onDeletePlan={handleDeletePlan}
             onDeleteBug={handleDeleteBug}
             onUpdateBugLog={handleUpdateBugLog}
+            onApplyBugRefinements={handleApplyBugRefinements}
             onWipeAllBugs={handleWipeAllBugs}
             onClonePlan={handleClonePlan}
             onEditPlan={handleEditPlan}

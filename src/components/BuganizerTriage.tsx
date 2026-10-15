@@ -34,7 +34,12 @@ interface Props {
   bugs: BugLog[];
   plans: TestPlan[];
   /** Saves RX95 refinements onto the bugs (so every device sees them). Optional - falls back to this browser only. */
-  onUpdateBugLog?: (updated: BugLog | BugLog[]) => void;
+  /**
+   * Persists RX95 refinements on the bugs. The handler (App) sets only `refined`, and only on bugs
+   * whose current text still matches each refinement's sig, so replies that land after an edit
+   * (even after this view unmounted) never overwrite it.
+   */
+  onApplyRefinements?: (refinements: Record<string, RefinedBugText>) => void;
 }
 
 /** Max RX95 refine requests one page visit will make on its own (each covers up to 25 bugs). */
@@ -58,7 +63,7 @@ const topComponents = BUGANIZER_COMPONENTS.slice(0, TOP_COMPONENT_COUNT);
 const otherComponents = BUGANIZER_COMPONENTS.slice(TOP_COMPONENT_COUNT).sort((a, b) => a.name.localeCompare(b.name));
 const pathTail = (path: string) => path.split(' > ').slice(-2, -1)[0] || '';
 
-export default function BuganizerTriage({ bugs, plans, onUpdateBugLog }: Props) {
+export default function BuganizerTriage({ bugs, plans, onApplyRefinements }: Props) {
   const planName = (id?: string) => plans.find(p => p.id === id)?.name || id || 'Unknown plan';
   const [drafts, setDrafts] = useState<Record<string, BuganizerDraft>>(() => loadDrafts());
   const [tester, setTester] = useState('all');
@@ -87,8 +92,11 @@ export default function BuganizerTriage({ bugs, plans, onUpdateBugLog }: Props) 
   const refineBusy = useRef(false);
   const [refineTick, setRefineTick] = useState(0);
   const rx95Ready = isRx95Available();
-  const bugsRef = useRef(bugs);
-  bugsRef.current = bugs;
+  const mountedRef = useRef(true);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+  // Latest handler, so a reply that arrives after unmount still reaches App's sig-guarded apply.
+  const applyRef = useRef(onApplyRefinements);
+  applyRef.current = onApplyRefinements;
 
   const refinedFor = (bug: BugLog) => currentRefinement(bug, refineCache);
   const ctxFor = (bug: BugLog) => ({ planId: bug.planId, planName: planName(bug.planId), cujName: bug.feature || 'General', refined: refinedFor(bug) });
@@ -147,14 +155,11 @@ export default function BuganizerTriage({ bugs, plans, onUpdateBugLog }: Props) 
       .then(result => {
         const ids = Object.keys(result);
         if (ids.length === 0) return;
-        setRefineCache(prev => ({ ...prev, ...result }));
-        if (onUpdateBugLog) {
-          // Use the latest copy of each bug, and skip any whose text was edited while RX95 was working.
-          const latest = new Map(bugsRef.current.map(b => [b.id, b]));
-          const updates = ids.map(id => latest.get(id)).filter((b): b is BugLog => !!b && bugTextSig(b) === result[b.id].sig)
-            .map(b => ({ ...b, refined: result[b.id] }));
-          if (updates.length) onUpdateBugLog(updates);
-        }
+        // Per-browser cache (entries are sig-guarded, so stale ones are simply never used).
+        if (mountedRef.current) setRefineCache(prev => ({ ...prev, ...result }));
+        else saveRefineCache({ ...loadRefineCache(), ...result });
+        // Never send bug objects from here: App applies only `refined`, checked against the CURRENT text.
+        applyRef.current?.(result);
         setRefineState(s => ({ ...s, done: s.done + ids.length }));
       })
       .catch(err => setRefineState(s => ({ ...s, error: String(err?.message || err) })))
