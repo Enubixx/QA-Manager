@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import GlassesBuildCapture from './GlassesBuildCapture';
 import { TITLE_PREFIX } from '../utils/buganizerDraft';
+import { atLocalTime, formatBugTime, toLocalHHMM, withBugTime } from '../utils/bugTime';
 import { buildEnvironment, getCurrentGlassesBuild, getPhoneBuildInfo, type GlassesBuild, type PhoneBuildInfo } from '../services/deviceBuilds';
 import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile } from '../types';
@@ -565,6 +566,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   const [showBuganizerPreview, setShowBuganizerPreview] = useState(false);
   const [bugImageUrl, setBugImageUrl] = useState('');
   const [bugSeverity, setBugSeverity] = useState<'low' | 'medium' | 'high' | 'critical'>('medium');
+  // Time of day the bug happened ("HH:MM", same day). Defaults to now for new bugs.
+  const [bugTime, setBugTime] = useState('');
   const [bugSuccessMessage, setBugSuccessMessage] = useState<string | null>(null);
   const [isListeningSpeech, setIsListeningSpeech] = useState(false);
   const speechRecognitionRef = useRef<any>(null);
@@ -606,6 +609,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     setBugNote('');
     setBugImageUrl('');
     setBugSeverity('medium');
+    setBugTime(toLocalHHMM(new Date().toISOString()));
     setShowBugModal(true);
   };
 
@@ -617,6 +621,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     // Older bugs have no separate title; their note is the description
     setBugNote(bug.title && bug.note === bug.title ? '' : bug.note);
     setBugSeverity(bug.severity || 'medium');
+    setBugTime(toLocalHHMM(bug.timestamp));
     setBugImageUrl(bug.imageUrl || '');
     setShowBugModal(true);
   };
@@ -1231,13 +1236,13 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     const noteText = descriptionText || titleText;
 
     if (editingBug) {
-      const updatedBug: BugLog = {
+      const updatedBug: BugLog = withBugTime({
         ...editingBug,
         title: titleText,
         note: noteText,
         severity: bugSeverity,
         imageUrl: bugImageUrl.trim() || undefined
-      };
+      }, bugTime);
 
       try {
         onLogBug(updatedBug);
@@ -1274,8 +1279,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     if (!activeRun || !currentPlan) return;
 
     const now = new Date();
-    const isoTimestamp = now.toISOString();
-    const formattedTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    // If the tester moved the time back (noted the bug late), keep the real logging time as originalTimestamp.
+    const picked = bugTime && bugTime !== toLocalHHMM(now.toISOString()) ? atLocalTime(now.toISOString(), bugTime, now) : null;
+    const isoTimestamp = (picked || now).toISOString();
+    const formattedTime = formatBugTime(picked || now);
 
     const newBug: BugLog = {
       id: 'bug-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
@@ -1292,6 +1299,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       imageUrl: bugImageUrl.trim() || undefined,
       timestamp: isoTimestamp,
       formattedTime: formattedTime,
+      ...(picked ? { originalTimestamp: now.toISOString() } : {}),
       environment: currentBuildEnvironment()
     };
 
@@ -2441,10 +2449,33 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                     <Bug className="w-4 h-4 text-rose-400" />
                     {editingBug ? 'Edit Bug / Defect Log' : 'Bug / Note Entry'}
                   </h4>
-                  <div className="text-[10px] font-mono text-zinc-400 bg-zinc-900 px-2.5 py-1 rounded-xl border border-zinc-800 backdrop-blur-md flex items-center gap-1">
-                    <Clock className="w-3 h-3 text-zinc-400" />
-                    {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </div>
+                  {(() => {
+                    const loggedAt = editingBug ? (editingBug.originalTimestamp || editingBug.timestamp) : new Date().toISOString();
+                    const adjusted = !!bugTime && bugTime !== toLocalHHMM(loggedAt);
+                    return (
+                      <div className="flex flex-col items-end gap-0.5">
+                        <label
+                          title="When did this happen? Tap to adjust (same day)"
+                          className={`text-[11px] font-mono px-2.5 py-1 rounded-xl border backdrop-blur-md flex items-center gap-1.5 cursor-pointer ${adjusted ? 'text-amber-200 bg-amber-950/40 border-amber-500/50' : 'text-zinc-300 bg-zinc-900 border-zinc-700 hover:border-zinc-500'}`}
+                        >
+                          <input
+                            type="time"
+                            data-testid="bug-time"
+                            aria-label="Time the bug happened"
+                            value={bugTime}
+                            max={editingBug ? undefined : toLocalHHMM(new Date().toISOString())}
+                            onChange={e => setBugTime(e.target.value)}
+                            className="bg-transparent text-inherit font-mono w-[88px] focus:outline-none [color-scheme:dark]"
+                          />
+                        </label>
+                        {adjusted && (
+                          <button type="button" data-testid="bug-time-reset" onClick={() => setBugTime(toLocalHHMM(loggedAt))} className="text-[9px] text-amber-300/80 underline decoration-dotted">
+                            logged {new Date(loggedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · reset
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 <div className="liquid-glass-pill rounded-2xl p-2.5 text-xs text-sky-200 flex items-center justify-between font-semibold border border-sky-500/30 bg-sky-950/20">

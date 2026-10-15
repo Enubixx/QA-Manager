@@ -4,6 +4,7 @@ import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuot
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers, FileSpreadsheet, ExternalLink, MessageSquareText, ClipboardPaste, Bot } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard, copySingleBugToClipboard } from '../utils/exportUtils';
 import { isRunFullyCompleted, buildStepFirstSeenIndex } from '../utils/runUtils';
+import { toLocalHHMM, withBugTime } from '../utils/bugTime';
 import { ALL_PLANS, ALL_DATES, mergeRunsById, getKnownCujNames, computeCujReport, listReportDates, buildTimelinePoints, getPlanPickerOptions, buildCujReportText, buildReportScopeKey, formatReportDateLabel } from '../utils/cujReportUtils';
 import type { CujMetric } from '../utils/cujReportUtils';
 import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel, discoverAvailableGeminiModels, rankModelsForSummaries, DEFAULT_GEMINI_MODEL, getGeminiKeyErrorHint, buildChatSummaryPrompt, applyChatSummaryReply, isChatSummaryPrompt, getChatReplyReportId } from '../services/geminiService';
@@ -358,17 +359,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   const [expandedBugIds, setExpandedBugIds] = useState<Record<string, boolean>>({});
   // Bugs Feed inline edit (title + description) so bugs can be tidied before the Buganizer tab
-  const [feedEdit, setFeedEdit] = useState<{ bugId: string; title: string; note: string } | null>(null);
+  const [feedEdit, setFeedEdit] = useState<{ bugId: string; title: string; note: string; time: string } | null>(null);
   const startFeedEdit = (bug: BugLog) => {
     setExpandedBugIds(prev => ({ ...prev, [bug.id]: true }));
-    setFeedEdit({ bugId: bug.id, title: bug.title || '', note: bug.title && bug.note === bug.title ? '' : (bug.note || '') });
+    setFeedEdit({ bugId: bug.id, title: bug.title || '', note: bug.title && bug.note === bug.title ? '' : (bug.note || ''), time: toLocalHHMM(bug.timestamp) });
   };
   const saveFeedEdit = (bug: BugLog) => {
     if (!feedEdit || !onUpdateBugLog) return;
     const title = feedEdit.title.replace(/\s+/g, ' ').trim().slice(0, 120);
     const note = feedEdit.note.trim() || title;
     if (!title && !note) return;
-    onUpdateBugLog({ ...bug, title: title || undefined, note });
+    onUpdateBugLog(withBugTime({ ...bug, title: title || undefined, note }, feedEdit.time));
     setFeedEdit(null);
   };
 
@@ -4279,6 +4280,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                         placeholder="Short summary of the bug"
                                         className="w-full bg-[#0f172a] border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-semibold focus:outline-none focus:border-blue-500"
                                       />
+                                    </div>
+                                    <div className="flex flex-wrap items-end gap-3">
+                                      <div>
+                                        <label className="text-[11px] uppercase font-mono text-slate-300 font-bold block mb-1">Time it happened</label>
+                                        <input
+                                          type="time"
+                                          data-testid="feed-edit-time"
+                                          value={feedEdit.time}
+                                          onChange={e => setFeedEdit({ ...feedEdit, time: e.target.value })}
+                                          className="bg-[#0f172a] border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-blue-500 [color-scheme:dark]"
+                                        />
+                                      </div>
+                                      <span className="text-[10px] text-slate-400 pb-2">
+                                        Same day only{bug.originalTimestamp ? ` · first logged ${new Date(bug.originalTimestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}
+                                      </span>
                                     </div>
                                     <div>
                                       <label className="text-[11px] uppercase font-mono text-slate-300 font-bold block mb-1">Description</label>

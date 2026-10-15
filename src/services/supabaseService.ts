@@ -120,6 +120,7 @@ export const fetchAllSupabaseData = async () => {
         environment: item.environment && typeof item.environment === 'object' ? item.environment : undefined,
         title: typeof item.title === 'string' && item.title.trim() ? item.title : undefined,
         refined: item.refined && typeof item.refined === 'object' ? item.refined : undefined,
+        originalTimestamp: typeof item.original_timestamp === 'string' && item.original_timestamp ? item.original_timestamp : undefined,
       });
     });
 
@@ -139,8 +140,9 @@ export const fetchAllSupabaseData = async () => {
               environment: existing.environment || b.environment,
               title: existing.title || b.title,
               refined: existing.refined || b.refined,
+              originalTimestamp: existing.originalTimestamp || b.originalTimestamp,
             };
-            if (merged.environment !== existing.environment || merged.title !== existing.title || merged.refined !== existing.refined) bugMap.set(b.id, merged);
+            if (merged.environment !== existing.environment || merged.title !== existing.title || merged.refined !== existing.refined || merged.originalTimestamp !== existing.originalTimestamp) bugMap.set(b.id, merged);
           }
         }
       });
@@ -311,7 +313,7 @@ export const deleteArchivedRunFromSupabase = async (runId: string) => {
 };
 
 /** Optional bug_logs columns; each flips to false if that column hasn't been added yet. */
-const optionalBugColumns = { environment: true, title: true, refined: true };
+const optionalBugColumns = { environment: true, title: true, refined: true, original_timestamp: true };
 
 export const syncBugLogToSupabase = async (bug: BugLog) => {
   if (!supabase || !isSupabaseConfigured) return;
@@ -342,10 +344,11 @@ export const syncBugLogToSupabase = async (bug: BugLog) => {
     if (bug.environment && optionalBugColumns.environment) row.environment = bug.environment;
     if (optionalBugColumns.title) row.title = (bug.title || '').trim() || null;
     if (bug.refined && optionalBugColumns.refined) row.refined = bug.refined;
+    if (optionalBugColumns.original_timestamp) row.original_timestamp = bug.originalTimestamp || null;
     let { error } = await supabase.from('bug_logs').upsert(row);
     // Optional columns (`environment` jsonb, `title` text, `refined` jsonb) may not exist yet - drop the one the error
     // names and retry. The values still travel inside the run's bug_logs JSON.
-    for (let attempt = 0; error && attempt < 3; attempt++) {
+    for (let attempt = 0; error && attempt < 4; attempt++) {
       const msg = String((error as any).message || '');
       const missing = (Object.keys(optionalBugColumns) as Array<keyof typeof optionalBugColumns>)
         .find(col => col in row && new RegExp(`\\b${col}\\b`, 'i').test(msg));

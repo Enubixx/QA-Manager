@@ -1,4 +1,5 @@
 import type { BugLog, RefinedBugText } from '../types';
+import { bugTimeLabel } from './bugTime';
 import {
   CUJ_DEFAULT_COMPONENT,
   DEFAULT_CC,
@@ -104,7 +105,7 @@ export function defaultDescription(bug: BugLog, ctx: DraftContext): string {
     '**Environment**',
     ...environmentLines(bug),
     '',
-    `_Logged by ${bug.testerName || 'Unknown'} on ${bug.deviceName || 'Unknown device'} · ${bug.formattedTime || bug.timestamp || 'Unknown time'} · QA Manager ${bug.id}_`,
+    `_Logged by ${bug.testerName || 'Unknown'} on ${bug.deviceName || 'Unknown device'} · ${bugTimeLabel(bug)} · QA Manager ${bug.id}_`,
   ];
   if (bug.imageUrl) lines.push('', '_A screenshot was captured in QA Manager - attach it here if useful._');
   if (ctx.refined) {
@@ -153,7 +154,9 @@ export function generatedText(bug: BugLog, ctx: DraftContext, useRefined = true)
 
 /** Changes whenever the tester's title or description is edited (e.g. from the Bugs Feed). */
 export function bugSourceSig(bug: BugLog): string {
-  return `${(bug.title || '').trim()}\u0000${(bug.note || '').trim()}`;
+  // The time only joins the fingerprint once it has been adjusted, so older drafts keep their sig.
+  const time = bug.originalTimestamp ? `\u0000${bug.timestamp}` : '';
+  return `${(bug.title || '').trim()}\u0000${(bug.note || '').trim()}${time}`;
 }
 
 /**

@@ -58,6 +58,8 @@ export interface BugLog {
    * from, so it is ignored (and re-requested) once the reporter's text changes.
    */
   refined?: RefinedBugText;
+  /** When the tester adjusted the bug's time of day, the time it was first logged. */
+  originalTimestamp?: string;
   imageUrl?: string;
   timestamp: string; // ISO string with date & time
   formattedTime: string; // Human readable time
