@@ -2,7 +2,7 @@
 - app name "QA Tester"
 - package visibility for Glasses Core / Glasses Companion (Android 11+ <queries>)
 - ML Kit text recognition dependency (bundled, on-device model)
-- release version: versionCode 7 / versionName "2.5.0"
+- release version: versionCode 8 / versionName "2.6.0"
 """
 import pathlib
 import re
@@ -33,8 +33,8 @@ dep = "    implementation 'com.google.mlkit:text-recognition:16.0.1'\n"
 if "com.google.mlkit:text-recognition" not in g:
     g = g.replace("    implementation project(':capacitor-android')\n", "    implementation project(':capacitor-android')\n" + dep, 1)
 # Keep in sync with APP_VERSION_CODE / APP_VERSION_NAME in src/constants.ts.
-g = re.sub(r'versionCode \d+', 'versionCode 7', g, count=1)
-g = re.sub(r'versionName "[^"]*"', 'versionName "2.5.0"', g, count=1)
+g = re.sub(r'versionCode \d+', 'versionCode 8', g, count=1)
+g = re.sub(r'versionName "[^"]*"', 'versionName "2.6.0"', g, count=1)
 gradle.write_text(g)
 
-print("android/ patched: app name, <queries>, ML Kit dependency, versionCode 7 / versionName 2.5.0")
+print("android/ patched: app name, <queries>, ML Kit dependency, versionCode 8 / versionName 2.6.0")
