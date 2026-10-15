@@ -76,10 +76,10 @@ export function exportTestRunToCSV(plan: TestPlan, run: TestRun) {
 
   if ((run.bugLogs || []).length > 0) {
     csvContent += '\n=== BUGS ===\n';
-    csvContent += 'Timestamp,Feature,Severity,Step Target,Reporter,Device Model,Image URL,Bug Note\n';
+    csvContent += 'Timestamp,Feature,Title,Step Target,Reporter,Device Model,Image URL,Bug Note\n';
 
     run.bugLogs.forEach(bug => {
-      csvContent += `${sanitize(bug.formattedTime)},${sanitize(bug.feature || 'General')},${sanitize((bug.severity || 'medium').toUpperCase())},${sanitize(bug.stepTitle)},${sanitize(bug.testerName)},${sanitize(run.deviceName || bug.deviceName || '')},${sanitize(bug.imageUrl || '')},${sanitize(bug.note)}\n`;
+      csvContent += `${sanitize(bug.formattedTime)},${sanitize(bug.feature || 'General')},${sanitize(bug.title || '')},${sanitize(bug.stepTitle)},${sanitize(bug.testerName)},${sanitize(run.deviceName || bug.deviceName || '')},${sanitize(bug.imageUrl || '')},${sanitize(bug.note)}\n`;
     });
   }
 
@@ -166,7 +166,7 @@ export function exportBugsToCSV(bugs: BugLog[], options?: BugCsvExportOptions) {
   const sanitize = sanitizeCsvCell;
   const getPlanName = options?.getPlanName;
 
-  let csvContent = 'Timestamp,Tester Name,Device,Feature,Description/Note,Image URL' + (getPlanName ? ',Test Plan' : '') + '\n';
+  let csvContent = 'Timestamp,Tester Name,Device,Feature,Title,Description/Note,Image URL' + (getPlanName ? ',Test Plan' : '') + '\n';
 
   (bugs || []).forEach(bug => {
     let formattedTs = bug.formattedTime || 'N/A';
@@ -179,7 +179,7 @@ export function exportBugsToCSV(bugs: BugLog[], options?: BugCsvExportOptions) {
       }
     } catch (e) {}
 
-    csvContent += `${sanitize(formattedTs)},${sanitize(bug.testerName || 'Anonymous')},${sanitize(bug.deviceName || 'Mobile Device')},${sanitize(bug.feature || 'General')},${sanitize(bug.note || '')},${sanitize(bug.imageUrl || '')}` + (getPlanName ? `,${sanitize(getPlanName(bug))}` : '') + '\n';
+    csvContent += `${sanitize(formattedTs)},${sanitize(bug.testerName || 'Anonymous')},${sanitize(bug.deviceName || 'Mobile Device')},${sanitize(bug.feature || 'General')},${sanitize(bug.title || '')},${sanitize(bug.note || '')},${sanitize(bug.imageUrl || '')}` + (getPlanName ? `,${sanitize(getPlanName(bug))}` : '') + '\n';
   });
 
   const planSlug = (options?.planName || '').trim().replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60);
@@ -278,19 +278,28 @@ export const getSmartBadgeHtml = (bugType: string, priority: string, status: str
          `<span style="display: inline-block; background-color: ${statusBg}; color: ${statusText}; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 9999px; margin-right: 6px; vertical-align: middle; border: 1px solid rgba(0,0,0,0.08); font-family: inherit;">${escapeHtml(status)} ▾</span>`;
 };
 
+/** Bug title (if the tester gave one) and the description to show under it (skipped when it just repeats the title). */
+function bugTitleAndDescription(bug: BugLog): { title: string; description: string } {
+  const title = (bug.title || '').trim();
+  const note = (bug.note || '').trim();
+  return { title, description: title && note === title ? '' : (note || (title ? '' : 'No description attached.')) };
+}
+
 /**
  * Format a single bug into plain text & rich Google Docs-compatible HTML
  */
 export function formatSingleBugToText(bug: BugLog): { plainText: string; htmlText: string } {
   const ts = getFormattedTimestamp(bug);
   const feature = bug.feature || 'General';
-  const description = bug.note || 'No description attached.';
+  const { title, description } = bugTitleAndDescription(bug);
   const publicImageUrl = getBugPublicImageUrl(bug);
   const { bugType, priority, status } = getBugCategorization(bug);
   const badgeHtml = getSmartBadgeHtml(bugType, priority, status);
 
   // Plain Text representation
-  let plainText = `[${bugType}] [${priority}] [${status}] [${ts}] Feature: ${feature}\nDescription: ${description}\n`;
+  let plainText = `[${bugType}] [${priority}] [${status}] [${ts}] Feature: ${feature}\n`;
+  if (title) plainText += `Title: ${title}\n`;
+  if (description) plainText += `Description: ${description}\n`;
   if (publicImageUrl) {
     plainText += `Screenshot: ${publicImageUrl}\n`;
   }
@@ -302,9 +311,12 @@ export function formatSingleBugToText(bug: BugLog): { plainText: string; htmlTex
   htmlText += `<span style="color: #475569; font-weight: 600;">[${escapeHtml(ts)}]</span> `;
   htmlText += `<span style="color: #4f46e5; font-weight: 700;">Feature: ${escapeHtml(feature)}</span>`;
   htmlText += `</div>`;
-  htmlText += `<div style="margin: 4px 0; font-size: 13px; color: #1e293b;">`;
-  htmlText += `<b>Description:</b> ${escapeHtml(description).replace(/\n/g, '<br/>')}`;
-  htmlText += `</div>`;
+  if (title) htmlText += `<div style="margin: 4px 0; font-size: 14px; font-weight: 700; color: #0f172a;">${escapeHtml(title)}</div>`;
+  if (description) {
+    htmlText += `<div style="margin: 4px 0; font-size: 13px; color: #1e293b;">`;
+    htmlText += `<b>Description:</b> ${escapeHtml(description).replace(/\n/g, '<br/>')}`;
+    htmlText += `</div>`;
+  }
 
   if (publicImageUrl) {
     htmlText += `<div style="margin-top: 8px;">`;
@@ -335,6 +347,7 @@ export function formatBugsToText(bugs: BugLog[], filterOptions?: BugCopyFilterOp
       const q = filterOptions.searchQuery.trim().toLowerCase();
       scopedBugs = scopedBugs.filter(b =>
         (b.note || '').toLowerCase().includes(q) ||
+        (b.title || '').toLowerCase().includes(q) ||
         (b.feature || '').toLowerCase().includes(q) ||
         (b.testerName || '').toLowerCase().includes(q) ||
         (b.deviceName || '').toLowerCase().includes(q) ||
@@ -373,12 +386,13 @@ export function formatBugsToText(bugs: BugLog[], filterOptions?: BugCopyFilterOp
     group.bugs.forEach((bug, idx) => {
       const ts = getFormattedTimestamp(bug);
       const feature = bug.feature || 'General';
-      const description = bug.note || 'No description attached.';
+      const { title, description } = bugTitleAndDescription(bug);
       const publicImageUrl = getBugPublicImageUrl(bug);
       const { bugType, priority, status } = getBugCategorization(bug);
 
       plainText += `[${bugType}] [${priority}] [${status}] [${ts}] Feature: ${feature}\n`;
-      plainText += `Description: ${description}\n`;
+      if (title) plainText += `Title: ${title}\n`;
+      if (description) plainText += `Description: ${description}\n`;
       if (publicImageUrl) {
         plainText += `Screenshot: ${publicImageUrl}\n`;
       }
@@ -404,7 +418,8 @@ export function formatBugsToText(bugs: BugLog[], filterOptions?: BugCopyFilterOp
     group.bugs.forEach((bug, idx) => {
       const ts = getFormattedTimestamp(bug);
       const feature = bug.feature || 'General';
-      const description = escapeHtml(bug.note || 'No description attached.').replace(/\n/g, '<br/>');
+      const { title, description: rawDescription } = bugTitleAndDescription(bug);
+      const description = escapeHtml(rawDescription).replace(/\n/g, '<br/>');
       const publicImageUrl = getBugPublicImageUrl(bug);
       const { bugType, priority, status } = getBugCategorization(bug);
       const badgeHtml = getSmartBadgeHtml(bugType, priority, status);
@@ -415,9 +430,12 @@ export function formatBugsToText(bugs: BugLog[], filterOptions?: BugCopyFilterOp
       htmlText += `<span style="color: #475569; font-weight: 600;">[${escapeHtml(ts)}]</span> `;
       htmlText += `<span style="color: #4f46e5; font-weight: 700;">Feature: ${escapeHtml(feature)}</span>`;
       htmlText += `</div>`;
-      htmlText += `<div style="margin: 4px 0; font-size: 13px; color: #1e293b;">`;
-      htmlText += `<b>Description:</b> ${description}`;
-      htmlText += `</div>`;
+      if (title) htmlText += `<div style="margin: 4px 0; font-size: 14px; font-weight: 700; color: #0f172a;">${escapeHtml(title)}</div>`;
+      if (description) {
+        htmlText += `<div style="margin: 4px 0; font-size: 13px; color: #1e293b;">`;
+        htmlText += `<b>Description:</b> ${description}`;
+        htmlText += `</div>`;
+      }
       if (publicImageUrl) {
         htmlText += `<div style="margin-top: 8px;">`;
         htmlText += `<img src="${escapeHtml(publicImageUrl)}" alt="Bug Screenshot" width="450" style="max-width: 450px; width: 100%; height: auto; border-radius: 6px; display: block; border: 1px solid #cbd5e1;" />`;
