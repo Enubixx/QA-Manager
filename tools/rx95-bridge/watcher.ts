@@ -12,6 +12,7 @@
  *   --mode=dev-supabase  same, against a LOCAL mock (RX95_SUPABASE_URL=http://127.0.0.1:<port>, see
  *                    mock-supabase.ts); never touches the live pid file. --rx95=fake answers without RX95.
  *   --worker=off     don't start the background worker (worker.ts)
+ *   --requests=off   don't poll ai_summary_requests (dev: worker only)
  *
  * Request kinds (payload.kind):
  *   (none)    executive QA summary for a report
@@ -711,6 +712,7 @@ async function startSupabase() {
     const { startWorker } = await import('./worker');
     startWorker({ url: base, key, events: MODE === 'dev-supabase' ? 'sse' : 'realtime', ports: await workerPorts() });
   }
+  if (args.requests === 'off') { log('request queue polling is off (--requests=off)'); return; }
   log(`supabase bridge polling ai_summary_requests${MODE === 'dev-supabase' ? ` (DEV mock ${base})` : ''}`);
   for (;;) {
     try {

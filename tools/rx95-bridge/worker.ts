@@ -455,8 +455,9 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
         const openedAt = Date.parse(p.openedAt || '');
         if (!Number.isFinite(openedAt)) continue;
         if (Date.now() - openedAt > CONFIRM_WINDOW_MS) {
-          for (const m of members) await writeOwned(m, { file_pending: { ...m.filePending, expired: true } });
-          log(`confirm: ${unitKey} expired after 24h without proof`);
+          let n = 0;
+          for (const m of members) if (await writeOwned(m, { file_pending: { ...m.filePending, expired: true } })) n++;
+          if (n) log(`confirm: ${unitKey} expired after 24h without proof`);
           continue;
         }
         if (Date.now() - (lastChecked.get(unitKey) || 0) < CONFIRM_EVERY_MS - 1000) continue;
