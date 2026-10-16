@@ -2,6 +2,8 @@ import {
   syncTestRunToSupabase,
   syncArchivedRunToSupabase,
   syncBugLogToSupabase,
+  patchBugWorkerColumns,
+  type BugWorkerField,
   deleteTestRunFromSupabase,
   deleteArchivedRunFromSupabase,
   syncDevicesListToCloud
@@ -12,6 +14,7 @@ export type OfflineMutationType =
   | 'syncTestRun'
   | 'syncArchivedRun'
   | 'syncBugLog'
+  | 'patchBugColumns'
   | 'deleteTestRun'
   | 'deleteArchivedRun'
   | 'syncDevices';
@@ -51,6 +54,9 @@ function getMutationEntityKey(mut: OfflineMutation): string | null {
       return mut.payload ? `archivedRun:${String(mut.payload)}` : null;
     case 'syncBugLog':
       return mut.payload?.id ? `bugLog:${mut.payload.id}` : null;
+    case 'patchBugColumns':
+      // One entry per bug + field set, so the latest value of those columns wins
+      return mut.payload?.bug?.id ? `bugCols:${mut.payload.bug.id}:${[...(mut.payload.fields || [])].sort().join(',')}` : null;
     case 'syncDevices':
       return 'devices:all';
     default:
@@ -75,6 +81,9 @@ function stripBase64ImagesFromMutation(mut: OfflineMutation): OfflineMutation {
   if (!mut || !mut.payload || typeof mut.payload !== 'object') return mut;
   if (mut.type === 'syncBugLog' && typeof mut.payload.imageUrl === 'string' && mut.payload.imageUrl.startsWith('data:image')) {
     return { ...mut, payload: { ...mut.payload, imageUrl: undefined } };
+  }
+  if (mut.type === 'patchBugColumns' && typeof mut.payload.bug?.imageUrl === 'string' && mut.payload.bug.imageUrl.startsWith('data:image')) {
+    return { ...mut, payload: { ...mut.payload, bug: { ...mut.payload.bug, imageUrl: undefined } } };
   }
   if ((mut.type === 'syncTestRun' || mut.type === 'syncArchivedRun') && Array.isArray(mut.payload.bugLogs)) {
     return {
@@ -164,6 +173,9 @@ export const drainOfflineQueue = async () => {
           case 'syncBugLog':
             await syncBugLogToSupabase(mut.payload as BugLog);
             break;
+          case 'patchBugColumns':
+            await patchBugWorkerColumns(mut.payload.bug as BugLog, mut.payload.fields as BugWorkerField[]);
+            break;
           case 'deleteTestRun':
             await deleteTestRunFromSupabase(mut.payload as string);
             break;
@@ -229,6 +241,20 @@ export const safeSyncBugLog = async (bug: BugLog) => {
     await syncBugLogToSupabase(bug);
   } catch (e) {
     enqueueOfflineMutation('syncBugLog', bug);
+  }
+};
+
+/** Targeted write of worker-owned bug columns (filed, file_pending, bundle, ...), queued when offline. */
+export const safePatchBugColumns = async (bug: BugLog, fields: BugWorkerField[]) => {
+  if (!fields.length) return;
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    enqueueOfflineMutation('patchBugColumns', { bug, fields });
+    return;
+  }
+  try {
+    await patchBugWorkerColumns(bug, fields);
+  } catch (e) {
+    enqueueOfflineMutation('patchBugColumns', { bug, fields });
   }
 };
 

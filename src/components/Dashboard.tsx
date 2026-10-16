@@ -476,9 +476,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
       const keepLegacyFiled = field === 'status' && targetBug.status === 'Filed' && !targetBug.filed
         ? { filed: { via: 'legacy' as const, at: targetBug.timestamp } }
         : {};
+      // filed is worker-owned: it can only change through the targeted patch handler
+      if (keepLegacyFiled.filed && onPatchBugLog) onPatchBugLog(bugId, keepLegacyFiled);
       onUpdateBugLog({
         ...targetBug,
-        ...keepLegacyFiled,
         bugType: nextCat.bugType || targetBug.bugType || 'Bug',
         priority: nextCat.priority || targetBug.priority || (targetBug.severity === 'critical' ? 'P0' : targetBug.severity === 'high' ? 'P1' : 'P2'),
         // No default: 'Filed' used to be written here even when only type/priority changed

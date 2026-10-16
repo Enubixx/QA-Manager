@@ -42,6 +42,7 @@ import {
   safeSyncTestRun,
   safeSyncArchivedRun,
   safeSyncBugLog,
+  safePatchBugColumns,
   safeDeleteTestRun,
   safeSyncDevices
 } from './services/offlineSyncQueue';
@@ -1460,9 +1461,17 @@ export function App() {
     updates.forEach(b => {
       if (b && b.id) updateMap.set(b.id, b);
     });
+    // Worker-owned fields (filed, filePending, bundle, reproMatches, refined) always come from the CURRENT
+    // copy: a caller holding a slightly stale bug (e.g. a Bugs Feed edit seconds after RX95 confirmed a
+    // filing) must never roll them back. They change only through the patch handlers below.
+    const merge = (cur: BugLog): BugLog => {
+      const u = updateMap.get(cur.id);
+      if (!u) return cur;
+      return { ...u, filed: cur.filed, filePending: cur.filePending, bundle: cur.bundle, reproMatches: cur.reproMatches, refined: cur.refined };
+    };
 
     setBugLogs(prev => {
-      const next = prev.map(b => updateMap.get(b.id) || b);
+      const next = prev.map(merge);
       safeSetStorageItem(
         'qa_bug_logs',
         JSON.stringify(next),
@@ -1473,14 +1482,14 @@ export function App() {
 
     setTestRuns(prev => prev.map(r => {
       if (!(r.bugLogs || []).some(b => updateMap.has(b.id))) return r;
-      const updated = { ...r, bugLogs: (r.bugLogs || []).map(b => updateMap.get(b.id) || b) };
+      const updated = { ...r, bugLogs: (r.bugLogs || []).map(b => (b ? merge(b) : b)) };
       syncTestRunToSupabase(updated);
       return updated;
     }));
 
     setArchivedRuns(prev => prev.map(r => {
       if (!(r.bugLogs || []).some(b => updateMap.has(b.id))) return r;
-      const updated = { ...r, bugLogs: (r.bugLogs || []).map(b => updateMap.get(b.id) || b) };
+      const updated = { ...r, bugLogs: (r.bugLogs || []).map(b => (b ? merge(b) : b)) };
       syncArchivedRunToSupabase(updated);
       return updated;
     }));
@@ -1522,7 +1531,7 @@ export function App() {
         const key = `${b.id}|${b.refined.sig}|${b.refined.at}`;
         if (refinedSyncedRef.current.has(key)) return;
         refinedSyncedRef.current.add(key);
-        safeSyncBugLog(b);
+        safePatchBugColumns(b, ['refined']);
       });
       return next;
     });
@@ -1570,7 +1579,13 @@ export function App() {
         const key = `${token}|${b.id}`;
         if (patchSyncedRef.current.has(key)) return;
         patchSyncedRef.current.add(key);
-        safeSyncBugLog(b);
+        const before = prev[i] || ({} as BugLog);
+        const workerChanged = (['refined', 'reproMatches', 'filed', 'filePending', 'bundle'] as const)
+          .filter(f => JSON.stringify(before[f] ?? null) !== JSON.stringify(b[f] ?? null));
+        const strip = (x: BugLog) => ({ ...x, refined: undefined, reproMatches: undefined, filed: undefined, filePending: undefined, bundle: undefined });
+        // Base fields (status, title, ...) go through the general upsert; worker-owned columns only via a targeted write.
+        if (JSON.stringify(strip(before)) !== JSON.stringify(strip(b))) safeSyncBugLog(b);
+        if (workerChanged.length) safePatchBugColumns(b, [...workerChanged]);
       });
       return next;
     });
@@ -1769,9 +1784,11 @@ export function App() {
     if (newBug.feature) {
       handleAddPopulatedFeature(newBug.feature);
     }
+    // Editing an existing bug (phone): keep the worker-owned fields of the CURRENT copy (see handleUpdateBugLog)
+    const keepWorker = (cur: BugLog): BugLog => ({ ...newBug, filed: cur.filed, filePending: cur.filePending, bundle: cur.bundle, reproMatches: cur.reproMatches, refined: cur.refined });
     setBugLogs(prev => {
       const exists = prev.some(b => b.id === newBug.id);
-      const updated = exists ? prev.map(b => b.id === newBug.id ? newBug : b) : [newBug, ...prev];
+      const updated = exists ? prev.map(b => b.id === newBug.id ? keepWorker(b) : b) : [newBug, ...prev];
       safeSetStorageItem(
         'qa_bug_logs',
         JSON.stringify(updated),
@@ -1787,7 +1804,7 @@ export function App() {
           const exists = (r.bugLogs || []).some(b => b.id === newBug.id);
           const updatedRun = {
             ...r,
-            bugLogs: exists ? (r.bugLogs || []).map(b => b.id === newBug.id ? newBug : b) : [...(r.bugLogs || []), newBug]
+            bugLogs: exists ? (r.bugLogs || []).map(b => b.id === newBug.id ? keepWorker(b) : b) : [...(r.bugLogs || []), newBug]
           };
           syncTestRunToSupabase(updatedRun);
           return updatedRun;
@@ -1800,7 +1817,7 @@ export function App() {
           const exists = (r.bugLogs || []).some(b => b.id === newBug.id);
           const updatedRun = {
             ...r,
-            bugLogs: exists ? (r.bugLogs || []).map(b => b.id === newBug.id ? newBug : b) : [...(r.bugLogs || []), newBug]
+            bugLogs: exists ? (r.bugLogs || []).map(b => b.id === newBug.id ? keepWorker(b) : b) : [...(r.bugLogs || []), newBug]
           };
           syncArchivedRunToSupabase(updatedRun);
           return updatedRun;

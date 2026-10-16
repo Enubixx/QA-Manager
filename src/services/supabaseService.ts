@@ -359,15 +359,12 @@ export const syncBugLogToSupabase = async (bug: BugLog) => {
     };
     if (bug.environment && optionalBugColumns.environment) row.environment = bug.environment;
     if (optionalBugColumns.title) row.title = (bug.title || '').trim() || null;
-    if (bug.refined && optionalBugColumns.refined) row.refined = bug.refined;
     if (optionalBugColumns.original_timestamp) row.original_timestamp = bug.originalTimestamp || null;
-    // status/filed are sent as null when unset so clearing them (e.g. turning the Filed switch off) syncs too
+    // status is app-owned (null when unset so it can be cleared)
     if (optionalBugColumns.status) row.status = bug.status || null;
-    if (optionalBugColumns.filed) row.filed = bug.filed || null;
-    if (bug.reproMatches && optionalBugColumns.repro_matches) row.repro_matches = bug.reproMatches;
-    // Sent as null when unset so cancelling a pending filing / unbundling syncs too
-    if (optionalBugColumns.file_pending) row.file_pending = bug.filePending || null;
-    if (optionalBugColumns.bundle) row.bundle = bug.bundle || null;
+    // Worker-owned columns (refined, repro_matches, filed, file_pending, bundle) are NEVER part of this general
+    // upsert: a save from a browser with slightly stale state would overwrite e.g. the worker's fresh filing
+    // confirmation. They are written only by patchBugWorkerColumns, from the actions that change them.
     let { error } = await supabase.from('bug_logs').upsert(row);
     // Optional columns (environment, title, refined, original_timestamp, status, filed, repro_matches, file_pending, bundle) may not exist yet - drop the one the error
     // names and retry. The values still travel inside the run's bug_logs JSON.
@@ -388,6 +385,49 @@ export const syncBugLogToSupabase = async (bug: BugLog) => {
   } catch (err) {
     console.error('syncBugLogToSupabase exception:', err);
     throw err;
+  }
+};
+
+/** Bug fields owned by targeted writes (actions / the RX95 worker), and their bug_logs columns. */
+export const BUG_WORKER_FIELDS = { refined: 'refined', reproMatches: 'repro_matches', filed: 'filed', filePending: 'file_pending', bundle: 'bundle' } as const;
+export type BugWorkerField = keyof typeof BUG_WORKER_FIELDS;
+
+/**
+ * Targeted write of just these worker-owned columns (null clears). Creates the row first if it doesn't exist.
+ * Missing columns are dropped (the values still travel in the run's bug_logs JSON).
+ */
+export const patchBugWorkerColumns = async (bug: BugLog, fields: BugWorkerField[]) => {
+  if (!supabase || !isSupabaseConfigured || !bug?.id || !fields.length) return;
+  const wipedAtStr = typeof localStorage !== 'undefined' ? localStorage.getItem('qa_bugs_wiped_at') : null;
+  if (wipedAtStr) {
+    const wipedAt = parseInt(wipedAtStr, 10);
+    const bugTs = bug.timestamp ? new Date(bug.timestamp).getTime() : 0;
+    if (wipedAt > 0 && bugTs > 0 && bugTs <= wipedAt) return;
+  }
+  const patch: Record<string, any> = {};
+  for (const f of fields) {
+    const col = BUG_WORKER_FIELDS[f];
+    if (optionalBugColumns[col]) patch[col] = (bug as any)[f] ?? null;
+  }
+  let createdRow = false;
+  for (let attempt = 0; attempt <= fields.length + 1 && Object.keys(patch).length; attempt++) {
+    const { data, error } = await supabase.from('bug_logs').update(patch).eq('id', bug.id).select('id');
+    if (!error) {
+      if (data && data.length) return;
+      if (createdRow) return;
+      // No row yet (bug only in the run JSON): create it with the base fields, then patch again.
+      await syncBugLogToSupabase(bug);
+      createdRow = true;
+      continue;
+    }
+    const msg = String((error as any).message || '');
+    const missing = Object.keys(patch).find(col => /column/i.test(msg) && new RegExp(`\\b${col}\\b`, 'i').test(msg)) as keyof typeof optionalBugColumns | undefined;
+    if (!missing) {
+      console.error('patchBugWorkerColumns error:', error);
+      throw error;
+    }
+    optionalBugColumns[missing] = false;
+    delete patch[missing];
   }
 };
 
