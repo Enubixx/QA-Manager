@@ -6,22 +6,26 @@
  *   npx tsx tools/rx95-bridge/match-eval.ts judge [--limit=N] [--batch=6] [--sets=qa,dup,neg]
  *   npx tsx tools/rx95-bridge/match-eval.ts report [--run=<file>]
  *
- * Gold sets, all from real data:
- *   qa   QA Manager bugs that were filed in Buganizer (the filed description carries
- *        "QA Manager bug-<id>"); query = the reporter's raw title + note, gold = the filed issue
- *        (or its canonical bug if it was closed as a duplicate).
- *   dup  Hotlist bugs closed as "DUPLICATE of Y" where Y is still a candidate; query = the
- *        duplicate's own text (another person describing the same problem), gold = Y.
- *   neg  qa queries with the gold bug removed from the candidates: any "very_likely" is wrong.
- * Candidate descriptions are redacted of the QA Manager id and the reporter's original note so the
- * qa set can't match on copied text.
+ * Gold sets, all from real data (labels live outside the repo, in $MATCH_EVAL_DIR):
+ *   repro  MAIN SET. Every live QA Manager bug, hand-labelled with the hotlist bugs it reproduces
+ *          (repro_labels.json: gold = same bug, ok = closely related / neutral, own = the issue
+ *          filed from that very QA bug, which is removed from the candidates). Bugs with no gold
+ *          left are negatives: any "very_likely" outside `ok` is wrong.
+ *   filed  QA bugs whose filed issue carries "QA Manager bug-<id>"; query = the reporter's raw
+ *          title + note, gold = that issue (or its canonical bug if closed as a duplicate).
+ *   dup    HARD SET. Hotlist bugs closed as "DUPLICATE of Y" (Y still a candidate); query = the
+ *          duplicate's own text. Triagers often dup symptoms into root-cause bugs, so this is a
+ *          stress test, not the release target.
+ * Candidate descriptions are redacted of the QA Manager id and the reporter's original note so a
+ * query can't match on text copied from itself.
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import {
-  MATCH_SHORTLIST_SIZE, parseMatchReplyBatch, shortlistCandidates, splitFiledTitle, trimDescription,
+  MATCH_SHORTLIST_SIZE, parseMatchReplyBatch, shortlistCandidates, splitFiledTitle, trimDescription, twoStageShortlist,
   type HotlistCandidate, type MatchBugInput, type MatchJob,
 } from '../../src/utils/reproMatch';
 import { judgeMatchesWithRx95, parseIssuesSearchOutput, parseRenderedDescription } from './watcher';
@@ -42,18 +46,25 @@ const cli = (argv: string[]) => new Promise<string>((resolve, reject) =>
 const readJson = <T>(f: string, d: T): T => { try { return JSON.parse(fs.readFileSync(path.join(CACHE, f), 'utf8')); } catch { return d; } };
 const writeJson = (f: string, v: unknown) => fs.writeFileSync(path.join(CACHE, f), JSON.stringify(v, null, 1));
 
-interface Issue extends HotlistCandidate { hotlistId: string; fullDescription: string }
+interface Issue extends HotlistCandidate { hotlistId: string; hotlistIds?: string[]; fullDescription: string }
 interface QaBug { id: string; planId: string; title?: string; note: string; feature?: string; stepTitle?: string }
 
 // ---------- collect ----------
 async function collect() {
   const issues: Record<string, Issue> = readJson('issues.json', {});
+  const seen = new Set<string>();
   for (const hotlistId of Object.values(HOTLISTS)) {
     let token = '';
     let n = 0;
     do {
       const out = await cli(['search', `hotlistid:${hotlistId}`, '--limit', '500', '--fields', 'issue_id,title,status,priority', ...(token ? ['--page_token', token] : [])]);
-      for (const b of parseIssuesSearchOutput(out)) { issues[b.id] = { ...(issues[b.id] || { fullDescription: '' }), ...b, hotlistId }; n++; }
+      for (const b of parseIssuesSearchOutput(out)) {
+        const prev = issues[b.id];
+        const hotlistIds = [...new Set([...(seen.has(b.id) ? prev?.hotlistIds || [] : []), hotlistId])];
+        seen.add(b.id);
+        issues[b.id] = { ...(prev || { fullDescription: '' }), ...b, hotlistId: hotlistIds[0], hotlistIds };
+        n++;
+      }
       token = out.match(/^Next page token:\s*(\S+)/m)?.[1] || '';
     } while (token);
     console.log(`hotlist ${hotlistId}: ${n} issues`);
@@ -88,10 +99,10 @@ async function collect() {
   writeJson('qa_bugs.json', [...bugs.values()]);
   console.log(`QA bugs: ${bugs.size}; issues: ${Object.keys(issues).length}`);
 }
-function __dirname_() { return path.dirname(new URL(import.meta.url).pathname); }
+function __dirname_() { return path.dirname(fileURLToPath(import.meta.url)); }
 
 // ---------- gold ----------
-interface EvalItem { key: string; set: 'qa' | 'dup' | 'neg'; hotlistId: string; bug: MatchBugInput; gold: string[]; exclude: string[] }
+interface EvalItem { key: string; set: 'repro' | 'filed' | 'dup'; hotlistId: string; bug: MatchBugInput; gold: string[]; ok: string[]; exclude: string[] }
 
 /** Removes text copied from the QA bug so the qa set can't match on it. */
 export function redact(desc: string): string {
@@ -113,7 +124,7 @@ function loadData() {
   const candidatesByHotlist: Record<string, HotlistCandidate[]> = {};
   for (const i of Object.values(issues)) {
     if (!CANDIDATE_STATUS.test(String(i.status || ''))) continue;
-    (candidatesByHotlist[i.hotlistId] ||= []).push({ id: i.id, title: i.title, status: i.status, priority: i.priority, description: redact(i.fullDescription || '') });
+    for (const h of i.hotlistIds || [i.hotlistId]) (candidatesByHotlist[h] ||= []).push({ id: i.id, title: i.title, status: i.status, priority: i.priority, description: redact(i.fullDescription || '') });
   }
   return { issues, qaBugs, candidatesByHotlist };
 }
@@ -137,45 +148,67 @@ function buildGold(): { items: EvalItem[]; candidatesByHotlist: Record<string, H
   const qaById = new Map(qaBugs.map(b => [b.id, b]));
   const seenQa = new Set<string>();
   for (const i of Object.values(issues)) {
-    const qaId = (i.fullDescription || '').match(/QA Manager (bug-[\w-]+)/)?.[1];
+    const qaId = (i.fullDescription || '').match(/QA Manager (bug-\d+-[a-z0-9]+)/)?.[1];
     const qa = qaId ? qaById.get(qaId) : undefined;
     if (!qa || seenQa.has(qa.id)) continue;
     const canon = canonical(i.id);
-    if (!isCand(canon, i.hotlistId)) continue; // filed bug was closed (obsolete, not reproducible, ...): not a candidate
+    const hotlistId = HOTLISTS[qa.planId] || i.hotlistId; // production searches the QA bug's plan hotlist
+    if (!isCand(canon, hotlistId)) continue; // filed bug was closed (obsolete, not reproducible, ...): not a candidate
     seenQa.add(qa.id);
     const bug: MatchBugInput = { id: qa.id, title: qa.title || '', note: qa.note || '', feature: qa.feature || '', stepTitle: qa.stepTitle || '' };
     const gold = sameBug(canon);
-    items.push({ key: `qa:${qa.id}`, set: 'qa', hotlistId: i.hotlistId, bug, gold, exclude: [] });
-    items.push({ key: `neg:${qa.id}`, set: 'neg', hotlistId: i.hotlistId, bug, gold: [], exclude: gold });
+    items.push({ key: `filed:${qa.id}`, set: 'filed', hotlistId, bug, gold, ok: [], exclude: [] });
   }
   for (const d of Object.values(issues)) {
     const m = String(d.status || '').match(/DUPLICATE of (\d+)/);
     if (!m) continue;
     const canon = canonical(d.id);
-    if (!isCand(canon, d.hotlistId)) continue;
+    const hotlistId = (d.hotlistIds || [d.hotlistId]).find(h => isCand(canon, h));
+    if (!hotlistId) continue;
     const { cuj, text } = splitFiledTitle(d.title);
     const desc = redact(d.fullDescription || '');
     const bug: MatchBugInput = { id: d.id, title: text, note: problemText(desc), feature: cuj || (desc.match(/^- CUJ:\s*(.+)$/m)?.[1] || ''), stepTitle: desc.match(/^- Step:\s*(.+)$/m)?.[1] || '' };
-    items.push({ key: `dup:${d.id}`, set: 'dup', hotlistId: d.hotlistId, bug, gold: sameBug(canon).filter(x => x !== d.id), exclude: [d.id] });
+    items.push({ key: `dup:${d.id}`, set: 'dup', hotlistId, bug, gold: sameBug(canon).filter(x => x !== d.id), ok: [], exclude: [d.id] });
+  }
+  // Hand-labelled repro set
+  const labels: Record<string, { gold?: string[]; ok?: string[]; own?: string[] }> = readJson('repro_labels.json', {});
+  for (const qa of qaBugs) {
+    const lab = labels[qa.id.replace(/^bug-/, '')];
+    const hotlistId = HOTLISTS[qa.planId];
+    if (!lab || !hotlistId) continue;
+    const pool = candidatesByHotlist[hotlistId] || [];
+    const resolve = (suffixes: string[] = []) => suffixes.flatMap(sfx => {
+      const hit = pool.filter(c => c.id.endsWith(sfx));
+      if (hit.length !== 1) console.warn(`label ${sfx} for ${qa.id}: ${hit.length} matches`);
+      return hit.map(c => c.id);
+    });
+    const own = resolve(lab.own);
+    const expand = (ids: string[]) => [...new Set(ids.flatMap(id => sameBug(canonical(id))))];
+    const bug: MatchBugInput = { id: qa.id, title: qa.title || '', note: qa.note || '', feature: qa.feature || '', stepTitle: qa.stepTitle || '' };
+    const inPool = (id: string) => pool.some(c => c.id === id) && !own.includes(id);
+    items.push({ key: `repro:${qa.id}`, set: 'repro', hotlistId, bug, gold: expand(resolve(lab.gold)).filter(inPool), ok: expand(resolve(lab.ok)), exclude: own });
   }
   return { items, candidatesByHotlist };
 }
 
-function jobFor(item: EvalItem, candidatesByHotlist: Record<string, HotlistCandidate[]>, size = MATCH_SHORTLIST_SIZE): MatchJob {
+async function jobFor(item: EvalItem, candidatesByHotlist: Record<string, HotlistCandidate[]>, size = MATCH_SHORTLIST_SIZE): Promise<MatchJob> {
   const pool = (candidatesByHotlist[item.hotlistId] || []).filter(c => !item.exclude.includes(c.id));
-  const shortlist = shortlistCandidates(item.bug, pool, size).map(s => ({ ...s.candidate, description: trimDescription(s.candidate.description || '') }));
-  return { bug: item.bug, shortlist };
+  const descs = new Map(pool.map(c => [c.id, c.description || '']));
+  if (args.single) return { bug: item.bug, shortlist: shortlistCandidates(item.bug, pool.map(c => ({ ...c, description: trimDescription(c.description || '') })), size).map(s => s.candidate) };
+  return { bug: item.bug, shortlist: await twoStageShortlist(item.bug, pool, async ids => new Map(ids.map(id => [id, descs.get(id) || ''])), size) };
 }
 
 // ---------- shortlist eval ----------
-function shortlistEval() {
+async function shortlistEval() {
   const { items, candidatesByHotlist } = buildGold();
-  for (const set of ['qa', 'dup'] as const) {
-    const list = items.filter(i => i.set === set);
-    const at = (k: number) => list.filter(i => jobFor(i, candidatesByHotlist, k).shortlist.some(c => i.gold.includes(c.id))).length;
-    console.log(`${set}: n=${list.length}  recall@5=${pct(at(5), list.length)}  @10=${pct(at(10), list.length)}  @25=${pct(at(25), list.length)}  @40=${pct(at(40), list.length)}`);
+  for (const set of ['repro', 'filed', 'dup'] as const) {
+    const list = items.filter(i => i.set === set && i.gold.length > 0);
+    const ranks: number[] = [];
+    for (const i of list) ranks.push((await jobFor(i, candidatesByHotlist, 60)).shortlist.findIndex(c => i.gold.includes(c.id)));
+    const at = (k: number) => ranks.filter(r => r >= 0 && r < k).length;
+    console.log(`${set}: n=${list.length}  recall@5=${pct(at(5), list.length)}  @10=${pct(at(10), list.length)}  @25=${pct(at(25), list.length)}  @30=${pct(at(30), list.length)}  @35=${pct(at(35), list.length)}  @40=${pct(at(40), list.length)}  @60=${pct(at(60), list.length)}`);
     if (args.misses) for (const i of list) {
-      const j = jobFor(i, candidatesByHotlist, 25);
+      const j = await jobFor(i, candidatesByHotlist, 25);
       if (!j.shortlist.some(c => i.gold.includes(c.id))) console.log(`  MISS ${i.key} [${i.bug.feature}] "${i.bug.title} | ${i.bug.note.slice(0, 120)}" -> gold ${i.gold[0]} "${(candidatesByHotlist[i.hotlistId].find(c => c.id === i.gold[0])?.title || '').slice(0, 110)}"`);
     }
   }
@@ -183,11 +216,11 @@ function shortlistEval() {
 const pct = (a: number, b: number) => (b ? `${((100 * a) / b).toFixed(1)}% (${a}/${b})` : 'n/a');
 
 // ---------- RX95 judge eval ----------
-interface RunRecord { key: string; set: string; gold: string[]; shortlistHit: boolean; result: Array<{ id: string; verdict: string; confidence: number; reason: string }> }
+interface RunRecord { key: string; set: string; gold: string[]; ok?: string[]; shortlistHit: boolean; result: Array<{ id: string; verdict: string; confidence: number; reason: string }> }
 
 async function judgeEval() {
   const { items, candidatesByHotlist } = buildGold();
-  const sets = String(args.sets || 'qa,dup,neg').split(',');
+  const sets = String(args.sets || 'repro,filed').split(',');
   const limit = Number(args.limit || 1e9);
   const batch = Number(args.batch || 6);
   const runFile = String(args.run || `run-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
@@ -205,12 +238,12 @@ async function judgeEval() {
   await Promise.all(Array.from({ length: parallel }, async () => {
     while (next < batches.length) {
       const group = batches[next++];
-      const jobs = group.map(i => jobFor(i, candidatesByHotlist));
+      const jobs = await Promise.all(group.map(i => jobFor(i, candidatesByHotlist)));
       try {
         const { reply, conversationId } = await judgeMatchesWithRx95(jobs);
         const parsed = parseMatchReplyBatch(reply, jobs.map(j => j.shortlist));
         group.forEach((it, k) => records.push({
-          key: it.key, set: it.set, gold: it.gold,
+          key: it.key, set: it.set, gold: it.gold, ok: it.ok,
           shortlistHit: jobs[k].shortlist.some(c => it.gold.includes(c.id)),
           result: parsed[k].map(c => ({ id: c.id, verdict: c.verdict, confidence: c.confidence, reason: c.reason })),
         }));
@@ -230,38 +263,36 @@ function report(runFile = String(args.run || '')) {
   const recs: RunRecord[] = readJson(runFile, []);
   console.log(`\n=== ${runFile}: ${recs.length} records ===`);
   const top = (r: RunRecord) => r.result[0];
-  const vl = recs.filter(r => top(r)?.verdict === 'very_likely');
-  const vlCorrect = vl.filter(r => r.gold.includes(top(r).id));
-  const pos = recs.filter(r => r.set !== 'neg');
-  console.log(`very_likely top-1 precision (all sets): ${pct(vlCorrect.length, vl.length)}`);
-  for (const set of ['qa', 'dup', 'neg']) {
-    const s = recs.filter(r => r.set === set);
-    if (!s.length) continue;
-    const sv = s.filter(r => top(r)?.verdict === 'very_likely');
-    const line = [`${set}: n=${s.length}`];
-    if (set !== 'neg') {
-      line.push(`shortlist@25=${pct(s.filter(r => r.shortlistHit).length, s.length)}`);
-      line.push(`recall@5=${pct(s.filter(r => r.result.some(c => r.gold.includes(c.id))).length, s.length)}`);
-      line.push(`top1=${pct(s.filter(r => top(r) && r.gold.includes(top(r).id)).length, s.length)}`);
-      line.push(`vl-precision=${pct(sv.filter(r => r.gold.includes(top(r).id)).length, sv.length)}`);
-      line.push(`vl-coverage=${pct(sv.length, s.length)}`);
-    } else {
-      line.push(`false very_likely=${pct(sv.length, s.length)}`);
-    }
-    console.log(line.join('  '));
-  }
-  console.log(`positives recall@5: ${pct(pos.filter(r => r.result.some(c => r.gold.includes(c.id))).length, pos.length)}`);
+  const neutral = (r: RunRecord) => !!top(r) && !r.gold.includes(top(r).id) && (r.ok || []).includes(top(r).id);
+  const isVl = (r: RunRecord) => top(r)?.verdict === 'very_likely' && !neutral(r);
+  const summarize = (label: string, s: RunRecord[]) => {
+    if (!s.length) return;
+    const pos = s.filter(r => r.gold.length > 0);
+    const neg = s.filter(r => r.gold.length === 0);
+    const vl = s.filter(isVl);
+    console.log([
+      `${label}: n=${s.length} (pos ${pos.length}, neg ${neg.length})`,
+      `VL-precision=${pct(vl.filter(r => r.gold.includes(top(r).id)).length, vl.length)}`,
+      `recall@5=${pct(pos.filter(r => r.result.some(c => r.gold.includes(c.id))).length, pos.length)}`,
+      `top1=${pct(pos.filter(r => top(r) && r.gold.includes(top(r).id)).length, pos.length)}`,
+      `shortlist@25=${pct(pos.filter(r => r.shortlistHit).length, pos.length)}`,
+      `VL-coverage(pos)=${pct(pos.filter(isVl).length, pos.length)}`,
+      `false-VL(neg)=${pct(neg.filter(isVl).length, neg.length)}`,
+    ].join('  '));
+  };
+  for (const set of ['repro', 'filed', 'dup']) summarize(set, recs.filter(r => r.set === set));
+  summarize('ALL', recs);
   if (args.errors) for (const r of recs) {
     const t = top(r);
-    const wrongVl = t?.verdict === 'very_likely' && !r.gold.includes(t.id);
-    const missed = r.set !== 'neg' && !r.result.some(c => r.gold.includes(c.id));
+    const wrongVl = isVl(r) && !r.gold.includes(t.id);
+    const missed = r.gold.length > 0 && !r.result.some(c => r.gold.includes(c.id));
     if (wrongVl || missed) console.log(`  ${wrongVl ? 'WRONG-VL' : 'MISS'} ${r.key} gold=${r.gold[0] || '-'} top=${t ? `${t.id} ${t.verdict} ${t.confidence} "${t.reason}"` : 'none'}`);
   }
 }
 
 (async () => {
   if (CMD === 'collect') await collect();
-  else if (CMD === 'shortlist') shortlistEval();
+  else if (CMD === 'shortlist') await shortlistEval();
   else if (CMD === 'judge') await judgeEval();
   else report();
 })().catch(e => { console.error(e); process.exit(1); });

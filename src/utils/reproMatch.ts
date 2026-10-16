@@ -10,7 +10,7 @@ import { bugTextSig } from './bugRefine';
  * descriptions -> RX95 judges symptom / trigger / CUJ -> at most 5 ranked candidates.
  */
 export const MATCH_STYLE_VERSION = 'm1';
-export const MATCH_SHORTLIST_SIZE = 25;
+export const MATCH_SHORTLIST_SIZE = 30;
 export const MATCH_MAX_RESULTS = 5;
 export const MATCH_MIN_UNLIKELY_CONFIDENCE = 25;
 export const MATCH_DESCRIPTION_MAX = 1200;
@@ -69,7 +69,7 @@ const STOP = new Set(('a an the and or but if then than so to of in on at by for
   'it its this that these those there here i me my we our you your he she they them his her their what which who whom when where why how ' +
   'not no do does did done doing have has had having can could should would will just also very really still even only again after before ' +
   'while during about as some any all more most other such same own too s t don didn doesn isn wasn ok okay im ive got get gets getting go goes went ' +
-  'gemini glasses glass user tester says said saying tried try trying time times thing things like seems seemed one way').split(/\s+/));
+  'gemini gl glasses glass user tester says said saying tried try trying time times thing things like seems seemed one way').split(/\s+/));
 
 function stem(w: string): string {
   if (w.length > 5 && w.endsWith('ing')) w = w.slice(0, -3);
@@ -79,14 +79,42 @@ function stem(w: string): string {
   return w;
 }
 
+/** Phrases folded to one token before splitting (shorthand testers and filers use interchangeably). */
+const PHRASES: Array<[RegExp, string]> = [
+  [/something went wrong/g, ' sww '],
+  [/\b(?:youtube|yt) music\b/g, ' youtube music '],
+  [/\bytm\b/g, ' youtube music '],
+  [/\bnano ?banana\b/g, ' nb '],
+  [/\bdynamic camera\b/g, ' dc '],
+  [/\bhot ?word\b/g, ' hotword '],
+  [/\bshut (?:down|off)\b/g, ' crash '],
+  [/\bquit chime\b/g, ' error chime '],
+];
+
+/** Domain synonyms (after stemming) mapped to one canonical token. */
+const CANON: Record<string, string> = Object.fromEntries(([
+  ['symbol', 'hieroglyph hieroglyphic hieroglyphics glyph aymbol symbl unicode illustration drawing'],
+  ['start', 'launch launche begin began'],
+  ['crash', 'quit terminat termination terminate shutdown'],
+  ['echo', 'repeat repeate stutter twice'],
+  ['tap', 'touchpad touch'],
+  ['language', 'korean french portuguese spanish chinese japanese lang languag'],
+  ['youtube', 'yt'],
+  ['music', 'song playlist track'],
+  ['photo', 'picture image pic'],
+  ['translat', 'translate translation translator translato translati'],
+  ['navigat', 'navigation navigate'],
+  ['disconnect', 'disconnection'],
+  ['hallucinat', 'hallucinate hallucination'],
+] as Array<[string, string]>).flatMap(([canon, words]) => words.split(' ').map(w => [w, canon])));
+
 export function tokenize(text: string): string[] {
-  return String(text || '')
-    .toLowerCase()
-    .replace(/https?:\/\/\S+/g, ' ')
-    .replace(/[’']/g, '')
+  let t = String(text || '').toLowerCase().replace(/https?:\/\/\S+/g, ' ').replace(/[’']/g, '');
+  for (const [re, rep] of PHRASES) t = t.replace(re, rep);
+  return t
     .split(/[^a-z0-9]+/)
     .filter(w => w.length >= 2 && !STOP.has(w) && !/^\d{1,2}$/.test(w))
-    .map(stem);
+    .map(w => { const st = stem(w); return CANON[st] || CANON[w] || st; });
 }
 
 /** Damerau-free Levenshtein with an early exit once the distance exceeds `max`. */
@@ -140,12 +168,12 @@ export function shortlistCandidates(bug: MatchBugInput, candidates: HotlistCandi
   const qAll = new Set([...qTitle, ...tokenize([bug.note, bug.refinedDescription].filter(Boolean).join(' '))]);
   const feature = normCuj(bug.feature);
 
-  const best = (w: string, set: Set<string>) => {
-    if (set.has(w)) return 1;
-    let m = 0;
-    for (const x of set) { const s = wordSim(w, x); if (s > m) m = s; if (m >= 0.8) break; }
-    return m;
-  };
+  // Typo-tolerant matches: for each query word, the vocabulary words within a small edit distance.
+  const vocab = new Set<string>();
+  for (const d of docs) { for (const w of d.title) vocab.add(w); for (const w of d.desc) vocab.add(w); }
+  const near = new Map<string, string[]>();
+  for (const w of qAll) near.set(w, [...vocab].filter(x => x !== w && wordSim(w, x) > 0));
+  const best = (w: string, set: Set<string>) => (set.has(w) ? 1 : near.get(w)!.some(x => set.has(x)) ? 0.8 : 0);
   const scored = docs.map(d => {
     let s = 0, norm = 0;
     for (const w of qAll) {
@@ -161,6 +189,25 @@ export function shortlistCandidates(bug: MatchBugInput, candidates: HotlistCandi
   return scored.sort((a, b) => b.score - a.score).slice(0, size);
 }
 
+/** Stage-1 size: title-only ranking, whose descriptions are then fetched for the final ranking. */
+export const MATCH_STAGE1_SIZE = 60;
+
+/**
+ * Two-stage shortlist shared by the bridge and the eval: rank every hotlist bug by title (+CUJ),
+ * fetch descriptions for the top MATCH_STAGE1_SIZE, re-rank with title + description, keep `size`.
+ */
+export async function twoStageShortlist(
+  bug: MatchBugInput,
+  candidates: HotlistCandidate[],
+  fetchDescriptions: (ids: string[]) => Promise<Map<string, string>>,
+  size = MATCH_SHORTLIST_SIZE,
+): Promise<HotlistCandidate[]> {
+  const stage1 = shortlistCandidates(bug, candidates.map(({ description, ...c }) => c), MATCH_STAGE1_SIZE).map(s => s.candidate);
+  const descs = await fetchDescriptions(stage1.map(c => c.id));
+  const withDesc = stage1.map(c => ({ ...c, description: trimDescription(descs.get(c.id) || '') }));
+  return shortlistCandidates(bug, withDesc, size).map(s => s.candidate);
+}
+
 // ---------- prompt ----------
 function stableHash(input: string): string {
   let h = 0x811c9dc5;
@@ -173,15 +220,25 @@ function stableHash(input: string): string {
 
 const oneLine = (s: string | undefined, max = 300) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, max);
 
+/** Section headings after which a Buganizer description is only logs / builds / boilerplate. */
+const BOILERPLATE = /^.*\bsoftware versions?\b.*$|^\s*[*_#=\-\s]*(?:environment|supporting logs?|logs?|builds?|hardware|build number|bug ?reports?|attachments?|device info|originating component)\b.*$/im;
+
 /** Trims a Buganizer description to the parts that describe the problem (drops env/log boilerplate). */
 export function trimDescription(desc: string, max = MATCH_DESCRIPTION_MAX): string {
-  return String(desc || '')
-    .replace(/^Description by .*?:\s*$/m, '')
-    .replace(/\*\*Environment\*\*[\s\S]*?(?=\n\*\*|\n_Logged|$)/, '')
+  let t = String(desc || '').replace(/\r\n?/g, '\n').replace(/^Description by .*?:\s*$/m, '');
+  const cut = t.search(BOILERPLATE);
+  // keep the reporter's original note (QA Manager format puts it after Environment)
+  const note = t.match(/\*\*Reporter's original note\*\*[\s\S]*$/i)?.[0] || '';
+  if (cut > 0) t = t.slice(0, cut) + (note && t.indexOf(note) > cut ? `\n${note}` : '');
+  return t
+    .replace(/^_?Logged by .*$/gm, '')
     .replace(/https?:\/\/\S+/g, '')
-    .replace(/sherlogs?:\s*/gi, '')
+    .replace(/\b(?:sherlogs?|timestamp)\b[^\n]{0,40}?:?\s*$/gim, '')
+    .replace(/^\s*[-=*_]{3,}\s*$/gm, '')
+    .replace(/^\s*(?:summary of issues?|what happened)\s*:?\s*$/gim, '')
+    .replace(/\*\*/g, '')
     .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
+    .replace(/\n{2,}/g, '\n')
     .trim()
     .slice(0, max);
 }

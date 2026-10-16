@@ -29,7 +29,7 @@ import { buildChatSummaryPrompt, type FeaturePayload, type SummaryScopeContext }
 import type { BugLog } from '../../src/types';
 import { REFINE_MAX_BUGS_PER_REQUEST, buildRefinePrompt, type RefineBugInput } from '../../src/utils/bugRefine';
 import {
-  MATCH_SHORTLIST_SIZE, buildMatchPrompt, shortlistCandidates, trimDescription,
+  MATCH_SHORTLIST_SIZE, buildMatchPrompt, twoStageShortlist,
   type CatalogEntry, type HotlistCandidate, type MatchBugInput, type MatchJob,
 } from '../../src/utils/reproMatch';
 
@@ -447,9 +447,7 @@ export async function fetchIssueDescriptions(ids: string[], concurrency = 6): Pr
 
 /** Shortlists a bug's hotlist candidates and attaches trimmed descriptions to the shortlist. */
 export async function buildMatchJob(bug: MatchBugInput, candidates: HotlistCandidate[], size = MATCH_SHORTLIST_SIZE): Promise<MatchJob> {
-  const shortlist = shortlistCandidates(bug, candidates, size).map(s => s.candidate);
-  const descs = await fetchIssueDescriptions(shortlist.map(c => c.id));
-  return { bug, shortlist: shortlist.map(c => ({ ...c, description: trimDescription(descs.get(c.id) || '') })) };
+  return { bug, shortlist: await twoStageShortlist(bug, candidates, ids => fetchIssueDescriptions(ids), size) };
 }
 
 export function buildRx95MatchMessage(prompt: string, reportId: string, bugCount: number): string {
