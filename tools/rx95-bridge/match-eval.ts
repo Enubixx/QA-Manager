@@ -25,10 +25,10 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
-  MATCH_SHORTLIST_SIZE, parseMatchReplyBatch, shortlistCandidates, splitFiledTitle, trimDescription, twoStageShortlist,
+  MATCH_SHORTLIST_SIZE, buildMatchPrompt, parseMatchReplyBatch, shortlistCandidates, splitFiledTitle, trimDescription, twoStageShortlist,
   type HotlistCandidate, type MatchBugInput, type MatchJob,
 } from '../../src/utils/reproMatch';
-import { judgeMatchesWithRx95, parseIssuesSearchOutput, parseRenderedDescription } from './watcher';
+import { MAX_AGENTAPI_PROMPT_BYTES, judgeMatchesWithRx95, parseIssuesSearchOutput, parseRenderedDescription } from './watcher';
 
 const args = Object.fromEntries(process.argv.slice(3).map(a => {
   const [k, ...v] = a.replace(/^--/, '').split('=');
@@ -240,6 +240,9 @@ async function judgeEval() {
       const group = batches[next++];
       const jobs = await Promise.all(group.map(i => jobFor(i, candidatesByHotlist)));
       try {
+        while (jobs.length > 1 && Buffer.byteLength(buildMatchPrompt(jobs).prompt) > MAX_AGENTAPI_PROMPT_BYTES - 4000) {
+          const it = group.pop()!; jobs.pop(); batches.push([it]); // too big for one chat: judge it separately
+        }
         const { reply, conversationId } = await judgeMatchesWithRx95(jobs);
         const parsed = parseMatchReplyBatch(reply, jobs.map(j => j.shortlist));
         group.forEach((it, k) => records.push({
@@ -261,6 +264,9 @@ const hash = (s: string) => { let h = 0; for (const c of s) h = (Math.imul(h, 31
 function report(runFile = String(args.run || '')) {
   if (!runFile) runFile = fs.readdirSync(CACHE).filter(f => f.startsWith('run-')).sort().pop() || '';
   const recs: RunRecord[] = readJson(runFile, []);
+  // Score against the current labels (label fixes apply to old runs too)
+  const current = new Map(buildGold().items.map(i => [i.key, i]));
+  for (const r of recs) { const it = current.get(r.key); if (it) { r.gold = it.gold; r.ok = it.ok; } }
   console.log(`\n=== ${runFile}: ${recs.length} records ===`);
   const top = (r: RunRecord) => r.result[0];
   const neutral = (r: RunRecord) => !!top(r) && !r.gold.includes(top(r).id) && (r.ok || []).includes(top(r).id);
@@ -275,7 +281,7 @@ function report(runFile = String(args.run || '')) {
       `VL-precision=${pct(vl.filter(r => r.gold.includes(top(r).id)).length, vl.length)}`,
       `recall@5=${pct(pos.filter(r => r.result.some(c => r.gold.includes(c.id))).length, pos.length)}`,
       `top1=${pct(pos.filter(r => top(r) && r.gold.includes(top(r).id)).length, pos.length)}`,
-      `shortlist@25=${pct(pos.filter(r => r.shortlistHit).length, pos.length)}`,
+      `shortlist=${pct(pos.filter(r => r.shortlistHit).length, pos.length)}`,
       `VL-coverage(pos)=${pct(pos.filter(isVl).length, pos.length)}`,
       `false-VL(neg)=${pct(neg.filter(isVl).length, neg.length)}`,
     ].join('  '));

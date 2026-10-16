@@ -380,9 +380,41 @@ export function sanitizeMatchPayload(raw: unknown): MatchPayload {
 }
 
 const MAX_HOTLIST_BUGS = 2000;
+export const MAX_AGENTAPI_PROMPT_BYTES = 120_000;
 const hotlistCache = new Map<string, { at: number; bugs: HotlistCandidate[] }>();
-const descriptionCache = new Map<string, { at: number; desc: string }>();
-const DESCRIPTION_TTL_MS = 6 * 3_600_000;
+const DESCRIPTION_TTL_MS = 12 * 3_600_000;
+const DESCRIPTION_CACHE_FILE = process.env.RX95_DESC_CACHE_FILE
+  || path.join(os.homedir(), '.gemini/jetski/sidecar_data/rx95_qa_summary/issue-descriptions.json');
+/** Issue descriptions rarely change and each `render` costs ~1 s of CPU, so they persist across restarts. */
+const descriptionCache: Map<string, { at: number; desc: string }> = (() => {
+  try {
+    const raw = JSON.parse(fs.readFileSync(DESCRIPTION_CACHE_FILE, 'utf8'));
+    return new Map(Object.entries(raw).filter(([id, v]: [string, any]) => /^\d{4,12}$/.test(id) && typeof v?.desc === 'string' && Number.isFinite(v?.at)) as Array<[string, { at: number; desc: string }]>);
+  } catch { return new Map(); }
+})();
+let saveTimer: NodeJS.Timeout | null = null;
+function saveDescriptionCache() {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    try {
+      fs.mkdirSync(path.dirname(DESCRIPTION_CACHE_FILE), { recursive: true });
+      const now = Date.now();
+      const fresh = Object.fromEntries([...descriptionCache].filter(([, v]) => now - v.at < DESCRIPTION_TTL_MS));
+      fs.writeFileSync(DESCRIPTION_CACHE_FILE, JSON.stringify(fresh));
+    } catch (e: any) { log('could not save description cache:', e.message); }
+  }, 2000);
+  saveTimer.unref?.();
+}
+const warming = new Set<string>();
+/** Fetches every candidate's description in the background so later matches skip the CLI. */
+function warmDescriptions(hotlistId: string, bugs: HotlistCandidate[]) {
+  if (warming.has(hotlistId)) return;
+  warming.add(hotlistId);
+  void fetchIssueDescriptions(bugs.map(b => b.id), 2)
+    .catch(() => {})
+    .finally(() => warming.delete(hotlistId));
+}
 
 function runIssuesCli(argv: string[], timeout = 45_000): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -395,7 +427,7 @@ function runIssuesCli(argv: string[], timeout = 45_000): Promise<string> {
  * Open + FIXED/VERIFIED bugs in a hotlist (`status:open` = NEW/ASSIGNED/ACCEPTED; bugs closed as
  * duplicate, obsolete, won't fix, not reproducible, intended or infeasible are excluded). Cached 5 min.
  */
-export async function listHotlistCandidates(hotlistId: string, statusFilter = 'status:(open|fixed|verified)'): Promise<HotlistCandidate[]> {
+export async function listHotlistCandidates(hotlistId: string, statusFilter = 'status:(open|fixed|verified)', warm = true): Promise<HotlistCandidate[]> {
   if (!/^\d{4,12}$/.test(hotlistId)) throw new Error('invalid hotlist');
   const key = `${hotlistId}|${statusFilter}`;
   const cached = hotlistCache.get(key);
@@ -410,6 +442,7 @@ export async function listHotlistCandidates(hotlistId: string, statusFilter = 's
   const unique = [...new Map(bugs.map(b => [b.id, b])).values()];
   hotlistCache.set(key, { at: Date.now(), bugs: unique });
   log(`Buganizer: ${unique.length} candidate bug(s) in hotlist ${hotlistId}`);
+  if (warm) warmDescriptions(hotlistId, unique);
   return unique;
 }
 
@@ -420,8 +453,8 @@ export function parseRenderedDescription(out: string): string {
   return body.replace(/\n\s*Note: Run with verbose[\s\S]*$/, '').trim();
 }
 
-/** Full descriptions for the given issue IDs (read-only `render`, 6 at a time, cached 6 h). */
-export async function fetchIssueDescriptions(ids: string[], concurrency = 6): Promise<Map<string, string>> {
+/** Full descriptions for the given issue IDs (read-only `render`, a few at a time, cached 12 h on disk). */
+export async function fetchIssueDescriptions(ids: string[], concurrency = 8): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   const todo: string[] = [];
   for (const id of ids) {
@@ -436,6 +469,7 @@ export async function fetchIssueDescriptions(ids: string[], concurrency = 6): Pr
       try {
         const desc = parseRenderedDescription(await runIssuesCli(['render', id, '--fields', 'desc'], 30_000)).slice(0, 8000);
         descriptionCache.set(id, { at: Date.now(), desc });
+        saveDescriptionCache();
         out.set(id, desc);
       } catch (e: any) {
         log(`description fetch failed for ${id}: ${e.message}`);
@@ -469,8 +503,11 @@ export function buildRx95MatchMessage(prompt: string, reportId: string, bugCount
 /** Runs one RX95 judging chat for one or more match jobs and returns the raw reply. */
 export async function judgeMatchesWithRx95(jobs: MatchJob[]): Promise<{ reply: string; reportId: string; conversationId: string }> {
   const { prompt, reportId } = buildMatchPrompt(jobs);
+  const message = buildRx95MatchMessage(prompt, reportId, jobs.length);
+  // agentapi takes the prompt as one argv entry (Linux caps a single argument at 128 KiB)
+  if (Buffer.byteLength(message) > MAX_AGENTAPI_PROMPT_BYTES) throw new Error(`Match prompt too large (${Buffer.byteLength(message)} bytes); judge fewer bugs per chat`);
   const title = `RX95 · Repro Match · ${jobs.length === 1 ? (jobs[0].bug.title || jobs[0].bug.note).replace(/\s+/g, ' ').slice(0, 60) : `${jobs.length} bugs`}`;
-  const out = await runAgentApi(['new-conversation', `--title=${title}`, buildRx95MatchMessage(prompt, reportId, jobs.length)]);
+  const out = await runAgentApi(['new-conversation', `--title=${title}`, message]);
   const conversationId = JSON.parse(out.slice(out.indexOf('{')))?.response?.newConversation?.conversationId;
   if (!conversationId) throw new Error('agentapi did not return a conversation ID');
   log('started RX95 match chat', conversationId, 'for', reportId, `(${jobs.length} bug(s), ${jobs.reduce((n, j) => n + j.shortlist.length, 0)} candidates)`);
