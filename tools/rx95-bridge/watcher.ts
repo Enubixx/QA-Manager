@@ -345,13 +345,47 @@ export async function refineWithRx95(payload: RefinePayload): Promise<{ reply: s
   const conversationId = JSON.parse(out.slice(out.indexOf('{')))?.response?.newConversation?.conversationId;
   if (!conversationId) throw new Error('agentapi did not return a conversation ID');
   log('started RX95 refine chat', conversationId, 'for', reportId, `(${payload.bugs.length} bugs)`);
-  const deadline = Date.now() + REPLY_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, 2000));
-    const reply = readReplyFromTranscript(conversationId, reportId);
-    if (reply) return { reply, reportId, conversationId };
+  return waitForReplyThenArchive(conversationId, reportId);
+}
+
+// ---------- background-chat housekeeping ----------
+/**
+ * Refine and match chats are machine-to-machine, so they are archived (not deleted - they stay
+ * under "Archived" in Jetski) as soon as their reply is read, or when they time out. Summary chats
+ * stay visible. Set RX95_ARCHIVE_CHATS=0 to keep everything.
+ */
+const ARCHIVE_CHATS = process.env.RX95_ARCHIVE_CHATS !== '0';
+export async function archiveConversation(conversationId: string): Promise<boolean> {
+  const addr = process.env.ANTIGRAVITY_LS_ADDRESS;
+  const csrf = process.env.ANTIGRAVITY_CSRF_TOKEN;
+  if (!ARCHIVE_CHATS || !addr || !csrf || !/^[\w-]{8,80}$/.test(conversationId)) return false;
+  try {
+    const res = await fetch(`http://${addr}/exa.language_server_pb.LanguageServerService/UpdateConversationAnnotations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-codeium-csrf-token': csrf },
+      body: JSON.stringify({ cascadeIds: [conversationId], annotations: { archived: true }, mergeAnnotations: true }),
+    });
+    if (!res.ok) { log('archive failed', conversationId, res.status); return false; }
+    return true;
+  } catch (e: any) {
+    log('archive failed', conversationId, e.message);
+    return false;
   }
-  throw new Error(`RX95 did not reply within ${Math.round(REPLY_TIMEOUT_MS / 1000)}s (chat ${conversationId})`);
+}
+
+async function waitForReplyThenArchive(conversationId: string, reportId: string): Promise<{ reply: string; reportId: string; conversationId: string }> {
+  const deadline = Date.now() + REPLY_TIMEOUT_MS;
+  try {
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 2000));
+      const reply = readReplyFromTranscript(conversationId, reportId);
+      if (reply) return { reply, reportId, conversationId };
+    }
+    throw new Error(`RX95 did not reply within ${Math.round(REPLY_TIMEOUT_MS / 1000)}s (chat ${conversationId})`);
+  } finally {
+    // Give the chat a moment to finish its last step, then tuck it away.
+    setTimeout(() => { void archiveConversation(conversationId); }, 5000);
+  }
 }
 
 // ---------- match requests ("Repro'd Issue" -> existing hotlist bug) ----------
@@ -511,13 +545,7 @@ export async function judgeMatchesWithRx95(jobs: MatchJob[]): Promise<{ reply: s
   const conversationId = JSON.parse(out.slice(out.indexOf('{')))?.response?.newConversation?.conversationId;
   if (!conversationId) throw new Error('agentapi did not return a conversation ID');
   log('started RX95 match chat', conversationId, 'for', reportId, `(${jobs.length} bug(s), ${jobs.reduce((n, j) => n + j.shortlist.length, 0)} candidates)`);
-  const deadline = Date.now() + REPLY_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, 2000));
-    const reply = readReplyFromTranscript(conversationId, reportId);
-    if (reply) return { reply, reportId, conversationId };
-  }
-  throw new Error(`RX95 did not reply within ${Math.round(REPLY_TIMEOUT_MS / 1000)}s (chat ${conversationId})`);
+  return waitForReplyThenArchive(conversationId, reportId);
 }
 
 /** Attaches the verified shortlist + hotlist info the app needs to validate RX95's reply. */
