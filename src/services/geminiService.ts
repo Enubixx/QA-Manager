@@ -33,7 +33,7 @@ const BATCH_CACHE_MAX_ENTRIES = 12;
 
 // Bump whenever the executive summary prompt or tone rules change, so that
 // cached summaries generated under the previous style are not reused.
-const PROMPT_STYLE_VERSION = 'v7-natural-voice';
+const PROMPT_STYLE_VERSION = 'v8-notable-once';
 
 function stableHash(input: string): string {
   let h1 = 0xdeadbeef;
@@ -1231,11 +1231,12 @@ ${bugLines.join('\n')}
 GOAL: Write 1 to 2 sentences (20 to 45 words) in plain, natural English that say what went wrong most often and why it matters.
 
 EXAMPLE (different product - copy the voice, never the content):
-"Photo uploads are still the weak spot, with some notable issues including uploads that take up to 20 seconds. Other notable bugs include an upload spinner that hangs until the app is restarted."
+"Photo uploads are still the weak spot, with some notable issues including uploads that take up to 20 seconds. Testers also hit an upload spinner that hangs until the app is restarted."
 
 REQUIREMENTS:
 1. NATURAL VOICE: simple everyday words, active voice, concrete nouns. Never use report-speak such as "testing revealed", "characterized by", "failure modes", "friction", "common occurrences", "various" or "it is worth noting".
 2. KEEP NUMBERS: retain specific durations and counts (e.g. "up to 4 minutes").
+2b. Use the word "notable" at most once.
 3. ACCURACY: reflect only the bugs listed above - never invent problems.
 4. NAMING: the AI agent is always called "Gemini" - never "Assistant", "the AI" or "the bot".
 5. Write complete sentences; never end with an ellipsis.
@@ -1579,9 +1580,19 @@ function assembleBatchResult(
   const otherFiledBugs = pickFiledBugs(parsed?.otherFiledBugs, catalog);
 
   const overallSummary = typeof parsed?.overallSummary === 'string'
-    ? parsed.overallSummary.replace(/\s+/g, ' ').trim()
+    ? limitNotable(parsed.overallSummary.replace(/\s+/g, ' ').trim())
     : '';
   return { featureSummaries, featureIssues, featureFiledBugs, otherFiledBugs, overallSummary, matchedCount, uncoveredCount };
+}
+
+/** Keeps only the first "notable"/"notably" in a summary; later ones are dropped (house style). */
+export function limitNotable(text: string): string {
+  let seen = false;
+  return text.replace(/\b([Nn]otabl[ey])\b(\s+)?/g, (m, word: string) => {
+    if (!seen) { seen = true; return m; }
+    // Drop repeats mid-sentence only; a capitalized repeat starts a sentence and is left alone.
+    return word[0] === 'n' ? '' : m;
+  }).replace(/\s{2,}/g, ' ').replace(/\s+([,.])/g, '$1');
 }
 
 /** Everything needed to ask an AI for the batch report and to read its answer back. */
@@ -1677,10 +1688,11 @@ TASK 1 - "features": a complete, de-duplicated issue list for EVERY CUJ above.
 
 TASK 2 - "overallSummary": a short overview of these results (50 to 90 words, 3 to 4 sentences) in plain, natural English - the way a QA lead would say it out loud to their team.
 - Sentence 1: open with the biggest story in these bugs and why it matters (for example a new feature or flow that keeps failing), then name its most important issue: "[What changed or what is struggling], with some notable issues including [issue]." You may open with one short clause about clean CUJs instead.
-- Sentence 2 (include ONLY if there are other distinct issues): "Other notable bugs include [issue B], and [issue C]." List the next most important problems as concrete, specific things. If there are no other issues, skip this sentence entirely - never say that nothing else was reported.
+- Sentence 2 (include ONLY if there are other distinct issues): "Other bugs include [issue B], and [issue C]." (or a similar plain lead-in such as "Testers also hit [issue B] and [issue C].") List the next most important problems as concrete, specific things. If there are no other issues, skip this sentence entirely - never say that nothing else was reported.
 - Sentence 3 (include ONLY if one behaviour clearly repeats across several bugs or CUJs): describe it as a plain cause-and-effect sentence with its real impact, e.g. "Gemini sometimes [does X] when [trigger], which [impact on the user]."
 - Last sentence: a short positive note grounded in this data, such as CUJs that ran clean or kept high pass rates. End it with " ✅".
 - VOICE: simple everyday words, active voice, specific nouns. Write like a person, not a report generator.
+- WORD LIMIT: use the word "notable" (or "notably") AT MOST ONCE in the whole overallSummary. Vary the wording instead of repeating it.
 - NEVER use filler or report-speak such as: "noticeable common occurrences", "notable common occurrences", "common occurrences of", "failure modes", "friction areas", "characterized by", "it is worth noting", "testing revealed", "various", "a number of", "overall,", "in terms of", "observed", "exhibited", "experienced issues with".
 
 STRICT GROUNDING:
@@ -1697,7 +1709,7 @@ F1: "Photo Upload" (pass rate 60%, 4 bugs)
   #3 [Step: Share album] said it shared the album but my friend never got it
   #4 super slow upload again
 Output:
-{"features":[{"featureId":"F1","issues":[{"bugIds":[1,2,4],"summary":"slow photo uploads taking up to 20 seconds"},{"bugIds":[2],"summary":"upload spinner hangs until the app is restarted"},{"bugIds":[3],"summary":"album share reported as sent but never delivered"}]}],"overallSummary":"Photo Upload is still the weak spot, with some notable issues including uploads that take up to 20 seconds. Other notable bugs include an upload spinner that hangs until the app is restarted, and album shares that say they were sent but never arrive. Login ran clean throughout testing ✅."}
+{"features":[{"featureId":"F1","issues":[{"bugIds":[1,2,4],"summary":"slow photo uploads taking up to 20 seconds"},{"bugIds":[2],"summary":"upload spinner hangs until the app is restarted"},{"bugIds":[3],"summary":"album share reported as sent but never delivered"}]}],"overallSummary":"Photo Upload is still the weak spot, with some notable issues including uploads that take up to 20 seconds. Other bugs include an upload spinner that hangs until the app is restarted, and album shares that say they were sent but never arrive. Login ran clean throughout testing ✅."}
 
 Return ONLY the JSON object.`;
 
