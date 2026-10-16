@@ -37,7 +37,64 @@ export interface BugFiled {
   issueId?: string;
   at: string;
   by?: string;
-  via: 'manual' | 'follow-up' | 'new' | 'legacy';
+  via: 'manual' | 'follow-up' | 'new' | 'legacy' | 'bundle';
+  /** True once the RX95 worker found proof in Buganizer (comment / new issue carrying the QA Manager ID). */
+  confirmed?: boolean;
+}
+
+/**
+ * Opened in Buganizer but not yet proven filed. The RX95 worker polls Buganizer (read-only) for
+ * the QA Manager ID and, when found, replaces this with `filed { confirmed: true }`.
+ */
+export interface BugFilePending {
+  kind: 'follow-up' | 'new' | 'bundle';
+  /** Known for follow-ups (the existing bug); filled in by the worker for new bugs. */
+  issueId?: string;
+  /** Hotlist the new bug is expected in (from the plan allowlist). */
+  hotlistId?: string;
+  openedAt: string;
+  /** Set by the worker after 24h without proof. */
+  expired?: boolean;
+  /** Bundle id when the mega bug was opened. */
+  bundleId?: string;
+}
+
+/** A confirmed same-day bundle; stored on every member bug. */
+export interface BugBundle {
+  id: string;
+  memberIds: string[];
+  /** RX95's shared title (no "[Gemini on Glasses] [CUJ]" prefix). */
+  title: string;
+  /** RX95's shared "What happened" text. */
+  summary?: string;
+  at: string;
+  by: 'rx95' | 'manual';
+}
+
+/** RX95's suggested bundles for one plan + day (table rx95_bundle_suggestions). */
+export interface BundleSuggestionSet {
+  /** `${planId}|${day}` */
+  id: string;
+  planId: string;
+  /** YYYY-MM-DD (America/Los_Angeles) */
+  day: string;
+  /** fingerprint of the member texts it was computed from */
+  sig: string;
+  at: string;
+  suggestions: BundleSuggestion[];
+}
+
+export interface BundleSuggestion {
+  /** stable id (hash of sorted member ids) */
+  id: string;
+  memberIds: string[];
+  /** members RX95 was unsure about (shown unticked) */
+  maybeIds?: string[];
+  title: string;
+  summary: string;
+  /** 0-100 */
+  confidence: number;
+  reason: string;
 }
 
 export interface ReproCandidate {
@@ -100,6 +157,10 @@ export interface BugLog {
   filed?: BugFiled;
   /** RX95's possible existing Buganizer bugs for a "Repro'd Issue" (valid while `sig` matches the bug text). */
   reproMatches?: ReproMatches;
+  /** Opened in Buganizer, waiting for the RX95 worker to confirm it was really filed. */
+  filePending?: BugFilePending;
+  /** Confirmed same-day bundle this report belongs to. */
+  bundle?: BugBundle;
   environment?: BuildEnvironment;
 }
 
