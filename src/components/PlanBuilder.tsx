@@ -332,6 +332,35 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
                     className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
                   />
                 </div>
+
+                {(step.imageUrl || step.slideUrl) && (
+                  <div className="flex items-center gap-3 pt-1 bg-slate-950/60 border border-slate-800/80 rounded-xl p-2.5">
+                    {step.imageUrl && (
+                      <a href={step.imageUrl} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
+                        <img
+                          src={step.imageUrl}
+                          alt={step.title}
+                          className="w-16 h-12 object-cover rounded-lg border border-slate-700 hover:border-indigo-400 transition"
+                        />
+                      </a>
+                    )}
+                    <div className="flex-1 min-w-0 text-xs space-y-1">
+                      <div className="text-slate-300 font-semibold truncate">Linked Deck Visual Reference</div>
+                      <div className="flex items-center gap-3 text-[11px]">
+                        {step.imageUrl && (
+                          <a href={step.imageUrl} target="_blank" rel="noopener noreferrer" className="text-sky-400 hover:underline truncate">
+                            View Image ({step.imageUrl.split('/').pop()})
+                          </a>
+                        )}
+                        {step.slideUrl && (
+                          <a href={step.slideUrl} target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline flex-shrink-0">
+                            Open Slide in Deck ↗
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>

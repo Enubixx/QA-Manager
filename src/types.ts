@@ -4,6 +4,8 @@ export interface TestStep {
   description: string;
   expectedOutcome: string;
   feature?: string;
+  imageUrl?: string;
+  slideUrl?: string;
 }
 
 export interface TestPlan {
