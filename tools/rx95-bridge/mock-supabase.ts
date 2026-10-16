@@ -15,6 +15,7 @@
  *   PATCH  /rest/v1/<table>?<filters>   body partial row; Prefer: return=representation
  *   DELETE /rest/v1/<table>?<filters>
  *   Unknown columns -> 400 {code:'PGRST204'} / select -> 400 {code:'42703'}; unknown table -> 404 {code:'PGRST205'}.
+ * Writes containing a NUL character are rejected with 400 {code:'22P05'} like Postgres.
  * Change feed: GET /__events (Server-Sent Events, one `data: {table,type,id}` per write) - the worker's
  *   dev trigger (stands in for Supabase realtime).
  * Admin (for tests):
@@ -77,6 +78,7 @@ function emit(ev: { table: string; type: string; id?: string }) {
   for (const res of listeners) res.write(line);
 }
 const writeLog: unknown[] = [];
+const hasNul = (v: unknown): boolean => typeof v === 'string' ? v.includes('\u0000') : Array.isArray(v) ? v.some(hasNul) : !!v && typeof v === 'object' && Object.entries(v).some(([k, x]) => k.includes('\u0000') || hasNul(x));
 const stats = new Map<string, { requests: number; bytesOut: number }>();
 const logWrite = (entry: unknown) => { writeLog.push({ at: new Date().toISOString(), ...(entry as object) }); if (writeLog.length > 200) writeLog.shift(); };
 
@@ -156,6 +158,8 @@ const server = http.createServer((req, res) => {
   req.on('end', () => {
     let json: any = undefined;
     try { json = body ? JSON.parse(body) : undefined; } catch { return err(res, 400, { message: 'bad json' }); }
+    // Like Postgres: NUL is not allowed in text/jsonb (22P05) - the whole write fails
+    if (hasNul(json)) return err(res, 400, { code: '22P05', details: '\\u0000 cannot be converted to text.', hint: null, message: 'unsupported Unicode escape sequence' });
 
     if (url.pathname === '/__events') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });

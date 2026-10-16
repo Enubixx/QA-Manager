@@ -50,11 +50,13 @@ const B = {
   m2: bug('bug-1792200000010-jjjj', { title: 'Mega 2', filePending: { kind: 'bundle', hotlistId: GM_HOT, openedAt: iso(5 * MIN), bundleId: 'bun-1' } }),
   old: bug('bug-1792100000011-kkkk', { timestamp: iso(9 * 24 * HOUR), title: 'Ten days old' }),   // outside the 7-day window
   press: bug('bug-1792200000012-llll', { planId: PRESS, title: 'Rerouting chimes play over Gemini', note: 'chimes over answers' }),
+  // JSON-only bug whose text carries a NUL (old data): its refine row insert must be scrubbed or Postgres rejects it
+  nul: bug('bug-1792200000013-mmmm', { title: 'Old sig\u0000style title', note: 'note with \u0000 inside' }),
 };
 const rowBugs = [B.rowA, B.rowB, B.repro, B.edit, B.follow, B.fresh, B.expired, B.m1, B.m2, B.old, B.press];
 const seed = {
   bug_logs: rowBugs.map(toRow),
-  test_runs: [{ id: 'run-e2e-1', plan_id: GM, plan_name: 'GM', status: 'in_progress', bug_logs: [...rowBugs.filter(b => b.planId === GM), B.jsonOnly] }],
+  test_runs: [{ id: 'run-e2e-1', plan_id: GM, plan_name: 'GM', status: 'in_progress', bug_logs: [...rowBugs.filter(b => b.planId === GM), B.jsonOnly, B.nul] }],
   archived_runs: [],
   populated_features: [],
   ai_summary_requests: [{ id: 'rx95-stuck', status: 'working', payload: { kind: 'refine', bugs: [] }, created_at: iso(30 * MIN), updated_at: iso(20 * MIN) }],
@@ -120,6 +122,10 @@ async function main() {
   check('JSON-only bug got a minimal row with refine', !!j?.refined && j.note === B.jsonOnly.note && j.plan_id === GM, j ? `note kept, refined=${!!j.refined}` : 'none');
   const e = await waitFor('edited refine', async () => { const r = await bugRow(B.edit.id); return r?.refined && r.refined.sig === bugTextSig({ title: B.edit.title, note: edited.note } as any) && r; }, 60_000).catch(() => null);
   check('edit mid-refine: stale result dropped, re-refined on new text', !!e && e.note === edited.note);
+  const nulRow = await waitFor('nul row', async () => (await bugRow(B.nul.id))?.refined && (await bugRow(B.nul.id)), 60_000).catch(() => null);
+  check('NUL scrubbed from worker writes (mock rejects NUL like Postgres)', !!nulRow && !JSON.stringify(nulRow).includes('\\u0000') && nulRow.refined.sig.includes('\u001f'), nulRow ? 'row inserted' : 'none');
+  const nulProbe = await fetch(`${BASE}/rest/v1/bug_logs?id=eq.${B.rowA.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ note: 'x\u0000y' }) });
+  check('mock rejects unscrubbed NUL with 22P05', nulProbe.status === 400 && /22P05/.test(await nulProbe.text()));
   const old = await bugRow(B.old.id);
   check('bugs older than 7 days are left alone', !old?.refined);
 
@@ -150,7 +156,7 @@ async function main() {
   const badPatch = wlog.filter(w => w.method === 'PATCH' && w.table === 'bug_logs' && Object.keys(w.body || {}).some(k => !ownedCols.has(k) && !(k === 'note' && w.ids?.[0] === B.edit.id)));
   check('worker PATCHes only its own bug_logs columns', badPatch.length === 0, badPatch.length ? JSON.stringify(badPatch[0]).slice(0, 200) : '');
   const inserts = wlog.filter(w => w.method === 'POST' && w.table === 'bug_logs');
-  check('minimal-row inserts use ignore-duplicates and only for JSON-only bugs', inserts.every(w => /ignore-duplicates/.test(w.prefer) && w.ids.every((id: string) => id === B.jsonOnly.id)), `${inserts.length} insert(s)`);
+  check('minimal-row inserts use ignore-duplicates and only for JSON-only bugs', inserts.every(w => /ignore-duplicates/.test(w.prefer) && w.ids.every((id: string) => [B.jsonOnly.id, B.nul.id].includes(id))), `${inserts.length} insert(s)`);
   const runWrites = wlog.filter(w => ['test_runs', 'archived_runs'].includes(w.table));
   check('run JSON never written', runWrites.length === 0);
 
