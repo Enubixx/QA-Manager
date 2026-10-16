@@ -826,7 +826,8 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
                           <b className="text-[12.5px] text-slate-100">{m.title || titleFromNote(m.note)}</b>
                           {unsure && <span className={`ml-2 text-[11px] font-extrabold rounded-full px-2 py-0.5 border ${VERDICT_STYLE.possible}`}>Unsure</span>}
                           <span className="block text-[11px] text-slate-400">
-                            {[m.testerName || 'Unknown', m.deviceName || '?', m.environment?.glassesFirmware].filter(Boolean).join(' · ')} · "{memberReportText(m).slice(0, 120)}"{unsure ? ' · left out by default' : ''}
+                            {[m.testerName || 'Unknown', m.deviceName || '?', m.environment?.glassesFirmware].filter(Boolean).join(' · ')}
+                            {m.title && (m.note || '').trim() && m.note.trim() !== m.title.trim() ? ` · "${m.note.trim().slice(0, 120)}"` : ''}{unsure ? ' · left out by default' : ''}
                           </span>
                         </span>
                       </label>
