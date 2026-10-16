@@ -1,6 +1,24 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Bug, CheckCircle2, Copy, ExternalLink, Eye, Filter, Repeat, Search, ShieldCheck, Sparkles, X } from 'lucide-react';
-import type { BugLog, RefinedBugText, ReproCandidate, ReproMatches, TestPlan } from '../types';
+import type { BugFilePending, BugLog, RefinedBugText, ReproCandidate, ReproMatches, TestPlan } from '../types';
+import type { Rx95SuggestionsData } from '../services/supabaseService';
+import {
+  type BundleGroup,
+  buildBundleFollowUpComment,
+  buildMegaDraft,
+  bundleCuj,
+  bundleQueryBug,
+  groupBundles,
+  isBundleable,
+  loadDismissed,
+  manualBundleTitle,
+  memberReportText,
+  newBundle,
+  pendingFor,
+  saveDismissed,
+  shownSuggestions,
+  syncMegaDraft,
+} from '../utils/bundleDraft';
 import { isRx95Available, requestRx95Match, requestRx95Refine } from '../services/rx95Service';
 import {
   REPROD,
@@ -34,6 +52,7 @@ import {
   loadDrafts,
   syncDraftWithBug,
   saveDrafts,
+  titleFromNote,
 } from '../utils/buganizerDraft';
 
 /**
@@ -56,7 +75,22 @@ interface Props {
   onPatchBugLog?: (bugId: string, patch: Partial<BugLog>) => void;
   /** Persists RX95 repro matches (App sets only `reproMatches`, and only while the bug text matches `sig`). */
   onApplyReproMatches?: (matches: Record<string, ReproMatches>) => void;
+  /** Merges patches into the CURRENT copies of several bugs (bundles, filing a mega bug). */
+  onPatchBugLogs?: (patches: Record<string, Partial<BugLog>>) => void;
+  /** RX95 worker output (read-only): same-day bundle suggestions + background heartbeat. */
+  rx95Suggestions?: Rx95SuggestionsData;
 }
+
+/** The RX95 worker counts as running while its heartbeat is younger than this. */
+const WORKER_FRESH_SEC = 90;
+const fmtTime = (iso?: string) => {
+  const d = new Date(iso || '');
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+};
+const fmtDay = (day: string) => {
+  const d = new Date(`${day}T12:00:00`);
+  return Number.isNaN(d.getTime()) ? day : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+};
 
 /** Max RX95 repro checks one page visit makes on its own (one bug per request). */
 const MAX_AUTO_MATCHES = 10;
@@ -88,7 +122,7 @@ const topComponents = BUGANIZER_COMPONENTS.slice(0, TOP_COMPONENT_COUNT);
 const otherComponents = BUGANIZER_COMPONENTS.slice(TOP_COMPONENT_COUNT).sort((a, b) => a.name.localeCompare(b.name));
 const pathTail = (path: string) => path.split(' > ').slice(-2, -1)[0] || '';
 
-export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPatchBugLog, onApplyReproMatches }: Props) {
+export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPatchBugLog, onApplyReproMatches, onPatchBugLogs, rx95Suggestions }: Props) {
   const planName = (id?: string) => plans.find(p => p.id === id)?.name || id || 'Unknown plan';
   const [drafts, setDrafts] = useState<Record<string, BuganizerDraft>>(() => loadDrafts());
   const [tester, setTester] = useState('all');
@@ -138,6 +172,19 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
   const matchCount = useRef(0);
   const [matchTick, setMatchTick] = useState(0);
 
+  // Same-day bundles
+  const [dismissed, setDismissed] = useState<Set<string>>(() => loadDismissed());
+  const [ticks, setTicks] = useState<Record<string, string[]>>({});
+  const [editingBundle, setEditingBundle] = useState<{ id: string; keep: Set<string> } | null>(null);
+  const [waitingIssue, setWaitingIssue] = useState<Record<string, string>>({});
+
+  // RX95 background worker heartbeat: fresh => the in-tab auto engines stay off (fallback only).
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => { const t = setInterval(() => setNowMs(Date.now()), 10000); return () => clearInterval(t); }, []);
+  const heartbeat = rx95Suggestions?.heartbeat;
+  const hbAgeSec = heartbeat ? Math.max(0, (nowMs - new Date(heartbeat.at).getTime()) / 1000) : Infinity;
+  const workerFresh = Number.isFinite(hbAgeSec) && hbAgeSec < WORKER_FRESH_SEC;
+
   const refinedFor = (bug: BugLog) => currentRefinement(bug, refineCache);
   const ctxFor = (bug: BugLog) => ({ planId: bug.planId, planName: planName(bug.planId), cujName: bug.feature || 'General', refined: refinedFor(bug) });
   const draftFromStore = (store: Record<string, BuganizerDraft>, bug: BugLog): BuganizerDraft =>
@@ -170,11 +217,22 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
     return onBug || localOk;
   };
 
-  /** Everything matching the filters, filed or not. */
+  const groups = useMemo(() => groupBundles(bugs), [bugs]);
+  const bundledIds = useMemo(() => new Set(Array.from(groups.values()).flatMap(g => g.members.map(m => m.id))), [groups]);
+  /** Opened in Buganizer, not yet confirmed (shown in the "Waiting" group instead of the list). */
+  const isPending = (b: BugLog) => !!b.filePending && !isFiled(b);
+  const passesBase = (b: BugLog) =>
+    (tester === 'all' || (b.testerName || '').trim().toLowerCase() === tester.toLowerCase())
+    && (planId === 'all' || b.planId === planId)
+    && (!day || localDay(b.timestamp) === day)
+    && (cuj === 'all' || (b.feature || 'General') === cuj);
+
+  /** Everything matching the filters, filed or not (bundle members and waiting bugs are shown elsewhere). */
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return bugs
       .filter(b => (b.note || '').trim())
+      .filter(b => !bundledIds.has(b.id) && !isPending(b))
       .filter(b => tester === 'all' || (b.testerName || '').trim().toLowerCase() === tester.toLowerCase())
       .filter(b => planId === 'all' || b.planId === planId)
       .filter(b => !day || localDay(b.timestamp) === day)
@@ -183,8 +241,62 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
       .filter(b => !q || `${b.note} ${b.stepTitle} ${draftFor(b).title}`.toLowerCase().includes(q))
       .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bugs, tester, planId, day, cuj, stateFilter, query, drafts]);
-  const filedCount = useMemo(() => filtered.filter(isFiled).length, [filtered]);
+  }, [bugs, tester, planId, day, cuj, stateFilter, query, drafts, bundledIds]);
+
+  // Mega-bug drafts (stored under the bundle id)
+  const megaCtx = (g: BundleGroup) => ({ planId: g.members[0]?.planId, planName: planName(g.members[0]?.planId) });
+  const megaDraftFrom = (store: Record<string, BuganizerDraft>, g: BundleGroup): BuganizerDraft =>
+    store[g.bundle.id] ? syncMegaDraft(store[g.bundle.id], g, megaCtx(g)) : buildMegaDraft(g, megaCtx(g));
+  const megaDraftFor = (g: BundleGroup) => megaDraftFrom(drafts, g);
+  const updateMega = (g: BundleGroup, patch: Partial<BuganizerDraft>) => {
+    const textPatch = ('title' in patch || 'description' in patch) && !('textEdited' in patch) ? { textEdited: true } : {};
+    setDrafts(prev => ({ ...prev, [g.bundle.id]: { ...megaDraftFrom(prev, g), ...patch, ...textPatch, updatedAt: Date.now() } }));
+  };
+  const groupIsFiled = (g: BundleGroup) => g.members.every(isFiled);
+  const groupHasReprod = (g: BundleGroup) => g.members.some(m => !isFiled(m) && effectiveStatus(m.status) === REPROD);
+  /** Bundle shows RX95's possible existing bugs (Repro'd member, or "Check hotlist" clicked). */
+  const isReproGroup = (g: BundleGroup) => {
+    const d = megaDraftFor(g);
+    return !groupIsFiled(g) && !d.fileAsNew && (groupHasReprod(g) || !!d.reproCheck);
+  };
+  const groupMatches = (g: BundleGroup): ReproMatches | undefined => {
+    const q = bundleQueryBug(g);
+    const local = matchCache[g.bundle.id];
+    if (local && local.sig === bugTextSig(q)) return local;
+    // Until the bundle itself is checked, reuse a Repro'd member's matches (the worker checks those).
+    for (const m of g.members) { const mm = effectiveStatus(m.status) === REPROD ? matchesFor(m) : undefined; if (mm) return mm; }
+    return undefined;
+  };
+  const visibleGroups = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return Array.from(groups.values())
+      .filter(g => !g.members.some(isPending))
+      .filter(g => g.members.some(passesBase))
+      .filter(g => stateFilter === 'all' || megaDraftFor(g).state === stateFilter)
+      .filter(g => !q || `${g.bundle.title} ${g.members.map(m => `${m.note} ${m.title || ''} ${m.stepTitle}`).join(' ')}`.toLowerCase().includes(q));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groups, tester, planId, day, cuj, stateFilter, query, drafts]);
+  const filedGroups = visibleGroups.filter(groupIsFiled);
+  const shownGroups = showFiled ? visibleGroups : visibleGroups.filter(g => !groupIsFiled(g));
+
+  /** "Waiting for Buganizer": single bugs, and bundles (grouped by bundle id). */
+  const waitingEntries = useMemo(() => {
+    const out: Array<{ key: string; pending: BugFilePending; members: BugLog[]; group?: BundleGroup }> = [];
+    const seen = new Set<string>();
+    bugs.filter(b => isPending(b) && passesBase(b)).sort((a, b) => String(b.filePending!.openedAt).localeCompare(String(a.filePending!.openedAt))).forEach(b => {
+      const p = b.filePending!;
+      const g = p.bundleId ? groups.get(p.bundleId) : undefined;
+      const key = g ? g.bundle.id : b.id;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({ key, pending: p, members: g ? g.members.filter(isPending) : [b], group: g });
+    });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bugs, groups, tester, planId, day, cuj]);
+  const waitingCount = bugs.filter(isPending).length;
+
+  const filedCount = useMemo(() => filtered.filter(isFiled).length + filedGroups.reduce((n, g) => n + g.members.length, 0), [filtered, filedGroups]);
   const visible = useMemo(() => (showFiled ? filtered : filtered.filter(b => !isFiled(b))), [filtered, showFiled]);
   const reproRows = visible.filter(isReproRow);
 
@@ -197,7 +309,8 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
 
   // Background RX95 refinement of the reporter's wording (newest visible bugs first).
   useEffect(() => {
-    if (!autoRefine || !rx95Ready || refineBusy.current || refineBatches.current >= MAX_AUTO_REFINE_BATCHES) return;
+    // The RX95 background worker does this when it's running; the in-tab engine is only the fallback.
+    if (workerFresh || !autoRefine || !rx95Ready || refineBusy.current || refineBatches.current >= MAX_AUTO_REFINE_BATCHES) return;
     const key = (b: BugLog) => `${b.id}|${bugTextSig(b)}`;
     const todo = visible.filter(b => !refinedFor(b) && !refineAttempted.current.has(key(b))).slice(0, 25);
     if (todo.length === 0) return;
@@ -224,7 +337,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
         setRefineTick(t => t + 1);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, autoRefine, rx95Ready, refineTick]);
+  }, [visible, autoRefine, rx95Ready, refineTick, workerFresh]);
 
   const retryRefine = () => {
     refineAttempted.current.clear();
@@ -268,10 +381,15 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
 
   useEffect(() => {
     if (!rx95Ready || matchPaused || matchBusy.current || matchCount.current >= MAX_AUTO_MATCHES) return;
-    const next = visible.find(b => isReproRow(b) && !matchesFor(b) && !matchAttempted.current.has(`${b.id}|${bugTextSig(b)}`));
-    if (next) runMatch(next, true);
+    const attempted = (b: BugLog) => matchAttempted.current.has(`${b.id}|${bugTextSig(b)}`);
+    // Single Repro'd bugs: the background worker checks them; the in-tab engine is only the fallback.
+    const next = workerFresh ? undefined : visible.find(b => isReproRow(b) && !matchesFor(b) && !attempted(b));
+    if (next) { runMatch(next, true); return; }
+    // Bundles with a Repro'd member are checked here (the worker checks single reports only).
+    const g = shownGroups.find(x => isReproGroup(x) && !groupMatches(x) && !attempted(bundleQueryBug(x)));
+    if (g) runMatch(bundleQueryBug(g), true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, rx95Ready, matchTick, matchPaused]);
+  }, [visible, shownGroups, rx95Ready, matchTick, matchPaused, workerFresh]);
 
   const retryMatches = () => {
     matchAttempted.current.clear();
@@ -303,24 +421,84 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
         flash(`Your browser blocked the pop-up. ${ok ? 'The comment is copied - ' : ''}allow pop-ups for this site and try again. Nothing was stamped.`);
         return;
       }
-      patchBug(bug.id, { filed: newFiled('follow-up', cand.id) });
-      flash(`Opened b/${cand.id} with the comment pre-filled${truncated ? ' (shortened)' : ''}${ok ? ' and copied it' : ''}. Review it and click Post. This bug is now stamped FILED.`);
+      // Filed only when Buganizer confirms it: the RX95 worker looks for the posted comment (it carries the QA Manager ID).
+      patchBug(bug.id, { filePending: pendingFor('follow-up', { issueId: cand.id, hotlistId: matchesFor(bug)?.hotlistId }) });
+      flash(`Opened b/${cand.id} with the comment pre-filled${truncated ? ' (shortened)' : ''}${ok ? ' and copied it' : ''}. Review it and click Post - RX95 stamps it FILED once your comment shows up.`);
     });
   };
 
+  const patchMany = (patches: Record<string, Partial<BugLog>>) => {
+    if (onPatchBugLogs) onPatchBugLogs(patches);
+    else Object.entries(patches).forEach(([id, patch]) => onPatchBugLog?.(id, patch));
+  };
+  const forMembers = (members: BugLog[], patch: (m: BugLog) => Partial<BugLog>) =>
+    patchMany(Object.fromEntries(members.map(m => [m.id, patch(m)])));
+
+  /** Follow up on an existing issue for a whole bundle (comment lists every report). */
+  const followUpBundle = (g: BundleGroup, cand: ReproCandidate) => {
+    const comment = buildBundleFollowUpComment(g, { planName: planName(g.members[0]?.planId), refinedFor });
+    const copied = copyText(comment);
+    const { url, truncated } = followUpUrl(cand.id, comment);
+    const win = window.open(url, '_blank');
+    if (win) { try { win.opener = null; } catch { /* cross-origin - fine */ } }
+    copied.then(ok => {
+      if (!win) {
+        flash(`Your browser blocked the pop-up. ${ok ? 'The comment is copied - ' : ''}allow pop-ups for this site and try again. Nothing was changed.`);
+        return;
+      }
+      const hotlistId = groupMatches(g)?.hotlistId;
+      forMembers(g.members, () => ({ filePending: pendingFor('follow-up', { issueId: cand.id, hotlistId, bundleId: g.bundle.id }) }));
+      flash(`Opened b/${cand.id} with the bundle's comment${truncated ? ' (shortened)' : ''}${ok ? ' (also copied)' : ''}. Review it and click Post - all ${g.members.length} reports get stamped FILED once it shows up.`);
+    });
+  };
+
+  // ---------- same-day bundles ----------
+  const createBundle = (members: BugLog[], title: string, summary: string | undefined, by: 'rx95' | 'manual') => {
+    const ok = members.filter(isBundleable);
+    if (ok.length < 2) return flash('Pick at least two unfiled reports to bundle.');
+    const bd = newBundle(ok.map(m => m.id), title, summary, by);
+    forMembers(ok, () => ({ bundle: bd }));
+    setSelected(new Set());
+    flash(`Bundled ${ok.length} reports into one bug.`);
+  };
+  const unbundle = (g: BundleGroup) => {
+    forMembers(g.members, () => ({ bundle: undefined }));
+    setEditingBundle(null);
+    flash(`Unbundled ${g.members.length} reports.`);
+  };
+  const saveBundleEdit = (g: BundleGroup, keep: Set<string>) => {
+    const kept = g.members.filter(m => keep.has(m.id));
+    if (kept.length < 2) return unbundle(g);
+    const bd = { ...g.bundle, memberIds: kept.map(m => m.id), at: new Date().toISOString() };
+    patchMany(Object.fromEntries(g.members.map(m => [m.id, keep.has(m.id) ? { bundle: bd } : { bundle: undefined }])));
+    setEditingBundle(null);
+  };
+  const dismissSuggestion = (id: string) => setDismissed(prev => { const n = new Set(prev); n.add(id); saveDismissed(n); return n; });
+  const shown = useMemo(
+    () => shownSuggestions(rx95Suggestions?.sets || [], bugs, dismissed).filter(x => (planId === 'all' || x.set.planId === planId) && (!day || x.set.day === day)),
+    [rx95Suggestions, bugs, dismissed, planId, day],
+  );
+
   // Repro'd bugs (match panel) are never opened as new issues in bulk.
   const selectedVisible = visible.filter(b => selected.has(b.id) && !isReproRow(b));
+  const selectedGroups = shownGroups.filter(g => selected.has(g.bundle.id) && !isReproGroup(g));
+  const selectedCount = selectedVisible.length + selectedGroups.length;
+  const selectedBundleable = visible.filter(b => selected.has(b.id) && isBundleable(b));
   const flash = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 4000); };
 
   const toggle = (id: string) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const selectAllReady = () => setSelected(new Set(visible.filter(b => draftFor(b).state === 'ready').map(b => b.id)));
+  const selectAllReady = () => setSelected(new Set([
+    ...visible.filter(b => draftFor(b).state === 'ready').map(b => b.id),
+    ...shownGroups.filter(g => megaDraftFor(g).state === 'ready').map(g => g.bundle.id),
+  ]));
   const markSelected = (state: DraftState) => {
     selectedVisible.forEach(b => updateDraft(b, { state }));
-    flash(`${selectedVisible.length} bug${selectedVisible.length === 1 ? '' : 's'} marked ${STATE_LABEL[state]}.`);
+    selectedGroups.forEach(g => updateMega(g, { state }));
+    flash(`${selectedCount} bug${selectedCount === 1 ? '' : 's'} marked ${STATE_LABEL[state]}.`);
   };
 
   const startOpen = () => {
-    const list = selectedVisible.map(draftFor);
+    const list = [...selectedVisible.map(draftFor), ...selectedGroups.map(megaDraftFor)];
     if (list.length === 0) return flash('Select at least one bug first.');
     setAllowOpen(false);
     setPreviewExpanded(new Set());
@@ -348,8 +526,20 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
       bugs.filter(b => ids.has(b.id)).forEach(b => {
         next[b.id] = { ...(prev[b.id] || draftFor(b)), state: 'opened', updatedAt: Date.now() };
       });
+      groups.forEach(g => {
+        if (ids.has(g.bundle.id)) next[g.bundle.id] = { ...megaDraftFrom(prev, g), state: 'opened', updatedAt: Date.now() };
+      });
       return next;
     });
+    // Not FILED yet: the RX95 worker confirms it by finding a new bug in the hotlist that carries the QA Manager ID(s).
+    const patches: Record<string, Partial<BugLog>> = {};
+    ds.forEach(d => {
+      const hotlistId = d.hotlistIds[0];
+      const g = groups.get(d.bugId);
+      if (g) g.members.forEach(m => { patches[m.id] = { filePending: pendingFor('bundle', { hotlistId, bundleId: g.bundle.id }) }; });
+      else patches[d.bugId] = { filePending: pendingFor('new', { hotlistId }) };
+    });
+    patchMany(patches);
   };
 
   const openTabs = (list: BuganizerDraft[]) => {
@@ -383,13 +573,144 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
     try { await navigator.clipboard.writeText(text); flash('Links copied.'); } catch { flash('Copy blocked by the browser.'); }
   };
 
-  const renderReproPanel = (bug: BugLog) => {
-    const m = matchesFor(bug);
-    const st = matchState[bug.id] || {};
-    const pickedId = picked[bug.id];
+  interface DraftTarget {
+    /** Bug id, or bundle id for a mega bug. */
+    key: string;
+    d: BuganizerDraft;
+    update: (patch: Partial<BuganizerDraft>) => void;
+    planId?: string;
+    top?: React.ReactNode;
+    bottom?: React.ReactNode;
+    /** "Filed as b/" committed (blur/Enter); undefined when cleared. */
+    onFiledAs: (issueId: string | undefined) => void;
+  }
+
+  /** New-issue draft fields (a single bug or a bundle's mega bug). */
+  const renderDraftFields = (t: DraftTarget) => {
+    const d = t.d;
+    const url = buildBuganizerUrl(d);
+    const comp = componentById(d.componentId);
+    const isOpen = expanded === t.key;
+    return (
+                  <div className="space-y-2" data-testid="draft-fields">
+                    {t.top}
+                    <div>
+                      <label className={labelCls}>Title</label>
+                      <input aria-label="Title" className={inputCls} value={d.title} onChange={e => t.update({ title: e.target.value })} />
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                      <div className="col-span-2">
+                        <label className={labelCls}>Component</label>
+                        <select aria-label="Component" className={inputCls} value={d.componentId} onChange={e => t.update({ componentId: e.target.value })}>
+                          <optgroup label="Most used by your team">
+                            {topComponents.map(c => <option key={c.id} value={c.id}>{c.name}{pathTail(c.path) ? ` (${pathTail(c.path)})` : ''} · {c.uses}</option>)}
+                          </optgroup>
+                          <optgroup label="All other components">
+                            {otherComponents.map(c => <option key={c.id} value={c.id}>{c.name}{pathTail(c.path) ? ` (${pathTail(c.path)})` : ''}</option>)}
+                          </optgroup>
+                        </select>
+                      </div>
+                      <div>
+                        <label className={labelCls}>Priority</label>
+                        <select aria-label="Priority" className={inputCls} value={d.priority} onChange={e => t.update({ priority: e.target.value })}>
+                          {BUGANIZER_PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className={labelCls}>Type</label>
+                        <select aria-label="Type" className={inputCls} value={d.type} onChange={e => t.update({ type: e.target.value })}>
+                          {BUGANIZER_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    {comp && <p className="text-[10px] text-slate-500 truncate" title={comp.path}>{comp.path} · <a className="text-blue-400 hover:underline" href={`https://b.corp.google.com/components/${comp.id}`} target="_blank" rel="noreferrer">{comp.id}</a></p>}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                      <div className="col-span-2">
+                        <label className={labelCls}>Hotlist</label>
+                        {(() => {
+                          const cur = d.hotlistIds.join(', ');
+                          const known = KNOWN_HOTLISTS.some(h => h.hotlistId === cur);
+                          return (
+                            <select aria-label="Hotlist" className={inputCls} value={cur}
+                              title={hotlistForPlan(t.planId, planName(t.planId)) ? `Auto-set from test plan: ${hotlistForPlan(t.planId, planName(t.planId))!.name}` : 'No hotlist mapped to this test plan'}
+                              onChange={e => t.update({ hotlistIds: e.target.value ? [e.target.value] : [] })}>
+                              <option value="">None</option>
+                              {KNOWN_HOTLISTS.map(h => <option key={h.hotlistId} value={h.hotlistId}>{h.name} · {h.hotlistId}</option>)}
+                              {cur && !known && <option value={cur}>Custom · {cur}</option>}
+                            </select>
+                          );
+                        })()}
+                      </div>
+                      <div>
+                        <label className={labelCls}>Assignee</label>
+                        <input aria-label="Assignee" className={inputCls} value={d.assignee} placeholder="ldap" onChange={e => t.update({ assignee: e.target.value })} />
+                      </div>
+                      <div>
+                        <label className={labelCls}>CC</label>
+                        <input aria-label="CC" className={inputCls} value={d.cc} placeholder="ldap1, team@google.com" onChange={e => t.update({ cc: e.target.value })} />
+                      </div>
+                    </div>
+                    <div>
+                      <label className={labelCls}>Found in</label>
+                      <input aria-label="Found in" className={inputCls} value={d.foundIn || ''} placeholder="Glasses firmware build (scanned in QA Tester)"
+                        onChange={e => t.update({ foundIn: e.target.value })} />
+                    </div>
+                    {isOpen && (
+                      <div>
+                        <label className={labelCls}>Description (Markdown)</label>
+                        <textarea aria-label="Description" rows={9} className={`${inputCls} font-mono leading-relaxed`} value={d.description} onChange={e => t.update({ description: e.target.value })} />
+                      </div>
+                    )}
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <button className="px-2.5 h-7 rounded-xl text-xs text-slate-300 hover:bg-slate-800" onClick={() => setExpanded(isOpen ? null : t.key)}>
+                        {isOpen ? 'Hide description' : 'Edit description'}
+                      </button>
+                      {d.state === 'draft' && (
+                        <button className="px-2.5 h-7 rounded-xl text-xs font-semibold bg-blue-600/20 text-blue-200 border border-blue-500/40" onClick={() => t.update({ state: 'ready' })}>
+                          <CheckCircle2 className="w-3.5 h-3.5 inline mr-1" />Ready to file
+                        </button>
+                      )}
+                      {d.state !== 'draft' && d.state !== 'filed' && (
+                        <button className="px-2.5 h-7 rounded-xl text-xs text-slate-300 hover:bg-slate-800" onClick={() => t.update({ state: 'draft' })}>Back to draft</button>
+                      )}
+                      <button className="px-2.5 h-7 rounded-xl text-xs text-slate-300 hover:bg-slate-800" onClick={() => { setAllowOpen(false); setPreviewExpanded(new Set([d.bugId])); setPreview([d]); }}>
+                        <Eye className="w-3.5 h-3.5 inline mr-1" />Preview
+                      </button>
+                      <div className="flex items-center gap-1 ml-auto">
+                        <span className="text-[11px] text-slate-400">Filed as b/</span>
+                        <input aria-label="Filed issue id" className="w-28 bg-[#0f172a] border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-100" value={d.issueId || ''} placeholder="573…"
+                          onChange={e => { const id = e.target.value.replace(/[^\d]/g, ''); t.update({ issueId: id || undefined, state: id ? 'filed' : (d.state === 'filed' ? 'opened' : d.state) }); }}
+                          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                          // Stamp FILED once the number is entered (not on every keystroke - it would vanish mid-typing)
+                          onBlur={() => t.onFiledAs(d.issueId)} />
+                      </div>
+                    </div>
+                    {t.bottom}
+                    {url.length > MAX_SAFE_URL_LENGTH && (
+                      <p className="text-[11px] text-amber-300">This link is very long ({url.length} chars). Shorten the description so the form opens reliably.</p>
+                    )}
+                  </div>
+    );
+  };
+
+  interface ReproTarget {
+    /** Bug id, or bundle id */
+    key: string;
+    /** The bug, or a bundle's synthetic query, sent to the matcher */
+    query: BugLog;
+    matches?: ReproMatches;
+    comment: () => string;
+    onFollowUp: (cand: ReproCandidate) => void;
+    onFileNew: () => void;
+  }
+
+  const renderReproPanel = (t: ReproTarget) => {
+    const m = t.matches;
+    const st = matchState[t.key] || {};
+    const pickedId = picked[t.key];
     const cand = m?.candidates.find(c => c.id === pickedId);
-    const comment = cand ? commentFor(bug) : '';
-    const showComment = commentOpen.has(bug.id);
+    const comment = cand ? t.comment() : '';
+    const showComment = commentOpen.has(t.key);
     return (
       <div className="space-y-2" data-testid="repro-panel">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -397,7 +718,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
           <span className="text-[11px] text-slate-400" data-testid="repro-checked">
             {st.running ? 'Checking…' : m ? `checked ${minutesAgo(m.at)}` : st.error ? 'Check failed' : rx95Ready ? 'Not checked yet' : ''}
             {rx95Ready && !st.running && (
-              <> · <button data-testid="repro-recheck" className="text-blue-300 hover:underline" onClick={() => runMatch(bug, false)}>{m ? 're-check' : 'check now'}</button></>
+              <> · <button data-testid="repro-recheck" className="text-blue-300 hover:underline" onClick={() => runMatch(t.query, false)}>{m ? 're-check' : 'check now'}</button></>
             )}
           </span>
         </div>
@@ -411,7 +732,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
           return (
             <label key={c.id} data-testid="repro-candidate"
               className={`flex gap-2.5 items-start rounded-2xl border px-3 py-2.5 cursor-pointer ${sel ? 'border-violet-500 ring-1 ring-violet-500/50 bg-violet-500/[0.07]' : 'border-slate-700 bg-[#0b1220]'} ${c.verdict === 'unlikely' && !sel ? 'opacity-75' : ''}`}>
-              <input type="radio" name={`repro-${bug.id}`} className="mt-1 accent-violet-400" checked={sel} onChange={() => setPicked(prev => ({ ...prev, [bug.id]: c.id }))} />
+              <input type="radio" name={`repro-${t.key}`} className="mt-1 accent-violet-400" checked={sel} onChange={() => setPicked(prev => ({ ...prev, [t.key]: c.id }))} />
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <a href={issueUrl(c.id)} target="_blank" rel="noreferrer" className="font-extrabold text-blue-300 hover:underline text-xs" onClick={e => e.stopPropagation()}>b/{c.id}</a>
@@ -428,14 +749,14 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
           <pre data-testid="followup-comment" className="whitespace-pre-wrap bg-[#0b1220] border border-slate-700 rounded-xl p-3 text-[11px] leading-relaxed text-slate-200 font-mono max-h-64 overflow-auto">{comment}</pre>
         )}
         <div className="flex flex-wrap items-center gap-2 pt-1">
-          <button data-testid="repro-follow-up" disabled={!cand} onClick={() => cand && followUp(bug, cand)}
+          <button data-testid="repro-follow-up" disabled={!cand} onClick={() => cand && t.onFollowUp(cand)}
             className="px-3 h-8 rounded-xl text-xs font-bold flex items-center gap-1.5 bg-violet-500/20 border border-violet-500/50 text-violet-100 hover:bg-violet-500/30 disabled:opacity-40 disabled:cursor-not-allowed">
             <ExternalLink className="w-3.5 h-3.5" /> {cand ? `Follow up on b/${cand.id}` : 'Follow up'}
           </button>
           {cand && (
             <>
               <button data-testid="repro-comment-toggle" className="px-2.5 h-8 rounded-xl text-xs text-slate-300 hover:bg-slate-800"
-                onClick={() => setCommentOpen(prev => { const n = new Set(prev); n.has(bug.id) ? n.delete(bug.id) : n.add(bug.id); return n; })}>
+                onClick={() => setCommentOpen(prev => { const n = new Set(prev); n.has(t.key) ? n.delete(t.key) : n.add(t.key); return n; })}>
                 <Eye className="w-3.5 h-3.5 inline mr-1" />{showComment ? 'Hide comment' : 'Preview comment'}
               </button>
               <button data-testid="repro-copy-comment" className="px-2.5 h-8 rounded-xl text-xs text-slate-300 hover:bg-slate-800"
@@ -445,7 +766,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
             </>
           )}
           <button data-testid="repro-file-new" className="px-3 h-8 rounded-xl text-xs font-semibold border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700"
-            onClick={() => updateDraft(bug, { fileAsNew: true })}>
+            onClick={() => t.onFileNew()}>
             None of these: file as new bug
           </button>
           <span className="text-[11px] text-slate-500 ml-auto">Nothing is posted automatically.</span>
@@ -453,6 +774,264 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
       </div>
     );
   };
+
+
+  /** Same-day bundle suggestion cards (RX95 worker output), grouped by plan-day. */
+  const renderSuggestions = () => {
+    if (shown.length === 0) return null;
+    const bySet = new Map<string, typeof shown>();
+    shown.forEach(x => { const k = x.set.id || `${x.set.planId}|${x.set.day}`; bySet.set(k, [...(bySet.get(k) || []), x]); });
+    return Array.from(bySet.entries()).map(([k, items]) => {
+      const set = items[0].set;
+      const unfiled = bugs.filter(b => b.planId === set.planId && localDay(b.timestamp) === set.day && isBundleable(b)).length;
+      const reports = items.reduce((n, x) => n + x.members.length, 0);
+      return (
+        <div key={k} className="space-y-3" data-testid="bundle-suggestions">
+          <div className="rounded-[20px] border border-violet-500/35 bg-violet-500/10 px-4 py-2.5 flex flex-wrap items-center gap-3 text-xs text-violet-100">
+            <span>✨</span>
+            <div className="flex-1 min-w-[240px]">
+              <b>RX95 same-day check.</b> {planName(set.planId)} · <b>{fmtDay(set.day)}</b>: {unfiled} unfiled report{unfiled === 1 ? '' : 's'} → <b>{items.length} suggested bundle{items.length === 1 ? '' : 's'}</b> ({reports} reports).
+            </div>
+            {set.at && <span className="text-slate-400">checked {minutesAgo(set.at)}</span>}
+          </div>
+          {items.map(({ suggestion: sg, members, maybe }) => {
+            const ticked = new Set(ticks[sg.id] ?? members.filter(m => !maybe.has(m.id)).map(m => m.id));
+            const tickedMembers = members.filter(m => ticked.has(m.id));
+            const testersN = new Set(members.map(m => (m.testerName || '').trim()).filter(Boolean)).size;
+            const devicesN = new Set(members.map(m => (m.deviceName || '').trim()).filter(Boolean)).size;
+            const setTick = (id: string, on: boolean) => setTicks(prev => {
+              const cur = new Set(prev[sg.id] ?? members.filter(m => !maybe.has(m.id)).map(m => m.id));
+              if (on) cur.add(id); else cur.delete(id);
+              return { ...prev, [sg.id]: Array.from(cur) };
+            });
+            return (
+              <div key={sg.id} data-testid="bundle-suggestion" className="rounded-[20px] border border-slate-800 bg-[#111827] p-4">
+                <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                  <span className="px-2 py-0.5 rounded-full border border-violet-500/50 bg-violet-500/15 text-violet-200">🧩 Suggested bundle</span>
+                  <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">{bundleCuj(members)}</span>
+                  <span className={`font-extrabold rounded-full px-2 py-0.5 border ${sg.confidence >= 80 ? VERDICT_STYLE.very_likely : VERDICT_STYLE.possible}`}>Same issue · {Math.round(sg.confidence)}%</span>
+                  <span className="text-slate-400">{members.length} reports · {testersN} tester{testersN === 1 ? '' : 's'} · {devicesN} device{devicesN === 1 ? '' : 's'}</span>
+                </div>
+                <p className="text-[15px] font-extrabold text-white mt-2">{sg.title}</p>
+                {sg.reason && <p className="text-xs text-slate-400 mt-0.5">Why: {sg.reason}</p>}
+                <div className="mt-1.5 space-y-1.5">
+                  {members.map(m => {
+                    const on = ticked.has(m.id);
+                    const unsure = maybe.has(m.id);
+                    return (
+                      <label key={m.id} data-testid="suggestion-member" className={`flex gap-2.5 items-start rounded-xl border border-slate-700 bg-[#0b1220] px-3 py-2 cursor-pointer ${on ? '' : 'opacity-50'}`}>
+                        <input type="checkbox" className="mt-0.5 accent-violet-400" checked={on} onChange={e => setTick(m.id, e.target.checked)} />
+                        <span className="font-mono text-[11.5px] text-violet-300 w-[70px] flex-none">{fmtTime(m.timestamp)}</span>
+                        <span className="min-w-0 flex-1">
+                          <b className="text-[12.5px] text-slate-100">{m.title || titleFromNote(m.note)}</b>
+                          {unsure && <span className={`ml-2 text-[11px] font-extrabold rounded-full px-2 py-0.5 border ${VERDICT_STYLE.possible}`}>Unsure</span>}
+                          <span className="block text-[11px] text-slate-400">
+                            {[m.testerName || 'Unknown', m.deviceName || '?', m.environment?.glassesFirmware].filter(Boolean).join(' · ')} · "{memberReportText(m).slice(0, 120)}"{unsure ? ' · left out by default' : ''}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="flex flex-wrap items-center gap-2 mt-3">
+                  <button data-testid="suggestion-bundle" disabled={tickedMembers.length < 2}
+                    onClick={() => createBundle(tickedMembers, sg.title, sg.summary, 'rx95')}
+                    className="px-3 h-8 rounded-xl text-xs font-bold bg-violet-500/20 border border-violet-500/55 text-violet-50 hover:bg-violet-500/30 disabled:opacity-40 disabled:cursor-not-allowed">
+                    🧩 Bundle {tickedMembers.length} reports into one bug
+                  </button>
+                  <button data-testid="suggestion-dismiss" className="px-3 h-8 rounded-xl text-xs font-semibold border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700" onClick={() => dismissSuggestion(sg.id)}>
+                    Not the same issue
+                  </button>
+                  <span className="text-[11px] text-slate-500 ml-auto">Untick any report to leave it out · nothing is filed until you open it in Buganizer</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    });
+  };
+
+  /** One entry of the "Waiting for Buganizer" group (a single bug or a whole bundle). */
+  const renderWaiting = (e: { key: string; pending: BugFilePending; members: BugLog[]; group?: BundleGroup }) => {
+    const p = e.pending;
+    const first = e.members[0];
+    const n = e.group ? e.group.members.length : 1;
+    const title = e.group ? `${e.group.bundle.title} (reported ${n}×)` : (first.title || titleFromNote(first.note));
+    const kindLabel = p.kind === 'follow-up' ? `Follow-up · b/${p.issueId || '?'}` : p.kind === 'bundle' ? `Bundle · ${n} reports${p.issueId ? ` · b/${p.issueId}` : ''}` : `New bug${p.issueId ? ` · b/${p.issueId}` : ''}`;
+    const via = p.kind === 'follow-up' ? 'follow-up' : p.kind === 'bundle' ? 'bundle' : 'new';
+    const members = e.group ? e.group.members : e.members;
+    const typedId = waitingIssue[e.key] || '';
+    const reopen = () => {
+      let url = '';
+      if (p.kind === 'follow-up' && p.issueId) {
+        const comment = e.group ? buildBundleFollowUpComment(e.group, { planName: planName(first.planId), refinedFor }) : commentFor(first);
+        copyText(comment);
+        url = followUpUrl(p.issueId, comment).url;
+      } else {
+        url = buildBuganizerUrl(e.group ? megaDraftFor(e.group) : draftFor(first));
+      }
+      const win = window.open(url, '_blank');
+      if (!win) return flash('Your browser blocked the pop-up - allow pop-ups for this site and try again.');
+      try { win.opener = null; } catch { /* fine */ }
+      // An expired wait starts over (the worker only looks at issues created after openedAt)
+      if (p.expired) forMembers(members, () => ({ filePending: { ...p, expired: undefined, openedAt: new Date().toISOString() } }));
+    };
+    return (
+      <div key={e.key} data-testid="waiting-item" className="rounded-2xl border border-slate-800 bg-[#111827] p-3">
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+          {p.expired ? (
+            <span data-testid="waiting-expired" className="px-2 py-0.5 rounded-full border border-rose-500/50 bg-rose-500/12 text-rose-200">⚠ Not found in Buganizer</span>
+          ) : (
+            <span className="px-2 py-0.5 rounded-full border border-amber-500/50 bg-amber-500/12 text-amber-200">⏳ Waiting for Buganizer</span>
+          )}
+          <span className="px-2 py-0.5 rounded-full border border-slate-700 bg-slate-800 text-slate-300">{kindLabel}</span>
+        </div>
+        <p className="text-sm font-extrabold text-white mt-1.5">{title}</p>
+        <p className="text-xs text-slate-400 mt-0.5">
+          {p.expired
+            ? `RX95 didn't find it in Buganizer within 24 hours of opening it (${fmtTime(p.openedAt)}). Reopen it, or mark it filed if you did file it.`
+            : p.kind === 'follow-up'
+            ? `Opened b/${p.issueId} with the comment at ${fmtTime(p.openedAt)}. RX95 checks Buganizer every minute for your posted comment (it carries ${n > 1 ? "these reports'" : "this report's"} QA Manager ID).`
+            : `Opened the prefilled new-bug form at ${fmtTime(p.openedAt)}. RX95 looks for a new bug${p.hotlistId ? ` in hotlist ${p.hotlistId}` : ''} that carries ${n > 1 ? "these reports'" : "this report's"} QA Manager ID.`}
+        </p>
+        <div className="flex flex-wrap items-center gap-2 mt-2">
+          <button data-testid="waiting-reopen" className="px-2.5 h-7 rounded-xl text-xs font-semibold border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700" onClick={reopen}>
+            <ExternalLink className="w-3.5 h-3.5 inline mr-1" />Reopen{p.issueId ? ` b/${p.issueId}` : ''}
+          </button>
+          {!p.issueId && (
+            <input data-testid="waiting-issue" aria-label="Filed b/ issue number" className="w-36 bg-[#0f172a] border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-100 font-mono"
+              placeholder="b/ number (optional)" value={typedId}
+              onChange={ev => setWaitingIssue(prev => ({ ...prev, [e.key]: ev.target.value.replace(/[^\d]/g, '').slice(0, 12) }))} />
+          )}
+          <button data-testid="waiting-mark-filed" className="px-2.5 h-7 rounded-xl text-xs font-semibold border border-green-500/40 bg-green-500/10 text-green-200 hover:bg-green-500/20"
+            onClick={() => forMembers(members, () => ({ filed: newFiled(via, p.issueId || typedId), filePending: undefined }))}>
+            Mark filed anyway
+          </button>
+          <button data-testid="waiting-cancel" className="px-2.5 h-7 rounded-xl text-xs text-slate-300 hover:bg-slate-800"
+            onClick={() => forMembers(members, () => ({ filePending: undefined }))}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  /** The bundle's "mega bug" row (replaces its members in the list). */
+  const renderBundleRow = (g: BundleGroup) => {
+    const d = megaDraftFor(g);
+    const n = g.members.length;
+    const filedAll = groupIsFiled(g);
+    const reprodMember = groupHasReprod(g);
+    const showRepro = isReproGroup(g);
+    const editing = editingBundle?.id === g.bundle.id ? editingBundle : null;
+    const firstPlan = g.members[0]?.planId;
+    return (
+      <div key={g.bundle.id} data-testid="bundle-row" className={`rounded-[20px] border bg-[#111827] p-4 ring-1 ${selected.has(g.bundle.id) ? 'border-blue-500/60 ring-blue-500/30' : 'border-violet-500/50 ring-violet-500/25'}`}>
+        <div className="flex items-start gap-3">
+          <input type="checkbox" aria-label={`Select bundle ${g.bundle.id}`} className="mt-1 accent-blue-500" checked={selected.has(g.bundle.id)} onChange={() => toggle(g.bundle.id)} />
+          <div className="flex-1 min-w-0 grid grid-cols-1 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.5fr)] gap-4">
+            <div className="space-y-1.5">
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                <span data-testid="bundle-pill" className="px-2 py-0.5 rounded-full border border-violet-500/50 bg-violet-500/15 text-violet-200">🧩 Bundle · {n} reports</span>
+                {filedAll && <span className="px-2 py-0.5 rounded-full border bg-green-500/15 text-green-300 border-green-500/40 font-bold">FILED{filedStampLine(effectiveFiled(g.members[0])!) ? ` · ${filedStampLine(effectiveFiled(g.members[0])!)}` : ''}</span>}
+                {reprodMember && <span className="px-2 py-0.5 rounded-full border border-violet-500/50 bg-violet-500/15 text-violet-200 flex items-center gap-1"><Repeat className="w-3 h-3" /> Repro'd Issue</span>}
+                {!showRepro && <span className={`px-2 py-0.5 rounded-full border ${STATE_STYLE[d.state]}`}>{STATE_LABEL[d.state]}</span>}
+                <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">{bundleCuj(g.members)}</span>
+              </div>
+              <p className="text-sm font-extrabold text-white leading-snug" data-testid="bundle-title">{g.bundle.title}</p>
+              <p className="text-[11px] text-slate-500">{g.bundle.by === 'rx95' ? "Bundled from RX95's suggestion" : 'Bundled by hand'} · {planName(firstPlan)}</p>
+              {editing ? (
+                <div className="space-y-1" data-testid="bundle-edit-list">
+                  {g.members.map(m => (
+                    <label key={m.id} className="flex items-center gap-2 text-[11.5px] text-slate-200">
+                      <input type="checkbox" data-testid="bundle-edit-member" className="accent-violet-400" checked={editing.keep.has(m.id)}
+                        onChange={ev => setEditingBundle(prev => { if (!prev) return prev; const k = new Set(prev.keep); ev.target.checked ? k.add(m.id) : k.delete(m.id); return { ...prev, keep: k }; })} />
+                      <span className="font-mono text-violet-300">{fmtTime(m.timestamp)}</span>
+                      <span className="truncate">{m.testerName || 'Unknown'} · {m.title || titleFromNote(m.note)}</span>
+                    </label>
+                  ))}
+                  <div className="flex gap-2 pt-1">
+                    <button data-testid="bundle-edit-save" className="px-2.5 h-7 rounded-xl text-xs font-semibold bg-violet-500/20 border border-violet-500/50 text-violet-100" onClick={() => saveBundleEdit(g, editing.keep)}>
+                      Save ({editing.keep.size} report{editing.keep.size === 1 ? '' : 's'})
+                    </button>
+                    <button className="px-2.5 h-7 rounded-xl text-xs text-slate-300 hover:bg-slate-800" onClick={() => setEditingBundle(null)}>Cancel</button>
+                  </div>
+                  {editing.keep.size < 2 && <p className="text-[11px] text-amber-300">Fewer than 2 reports: saving unbundles them.</p>}
+                </div>
+              ) : (
+                <table className="w-full text-[11.5px] mt-1" data-testid="bundle-members">
+                  <thead>
+                    <tr className="text-[10px] uppercase tracking-wide text-slate-400 text-left">
+                      <th className="py-1 pr-2 font-bold">Time</th><th className="py-1 pr-2 font-bold">Tester</th><th className="py-1 pr-2 font-bold">Device</th><th className="py-1 font-bold">Firmware</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {g.members.map(m => (
+                      <tr key={m.id} className="border-t border-slate-800 text-slate-200" title={memberReportText(m)}>
+                        <td className="py-1 pr-2 whitespace-nowrap">{fmtTime(m.timestamp)}</td>
+                        <td className="py-1 pr-2">{m.testerName || 'Unknown'}</td>
+                        <td className="py-1 pr-2">{m.deviceName || '?'}</td>
+                        <td className="py-1 font-mono text-[10.5px]">{m.environment?.glassesFirmware ? `…${m.environment.glassesFirmware.slice(-11)}` : '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              {!editing && (
+                <div className="flex gap-2 pt-1.5">
+                  <button data-testid="bundle-edit" className="px-2.5 h-7 rounded-xl text-xs font-semibold border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700"
+                    onClick={() => setEditingBundle({ id: g.bundle.id, keep: new Set(g.members.map(m => m.id)) })}>Edit reports</button>
+                  <button data-testid="bundle-unbundle" className="px-2.5 h-7 rounded-xl text-xs font-semibold border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700" onClick={() => unbundle(g)}>Unbundle</button>
+                </div>
+              )}
+            </div>
+            {showRepro ? renderReproPanel({
+              key: g.bundle.id,
+              query: bundleQueryBug(g),
+              matches: groupMatches(g),
+              comment: () => buildBundleFollowUpComment(g, { planName: planName(firstPlan), refinedFor }),
+              onFollowUp: cand => followUpBundle(g, cand),
+              onFileNew: () => updateMega(g, { fileAsNew: true, reproCheck: false }),
+            }) : renderDraftFields({
+              key: g.bundle.id,
+              d,
+              update: patch => updateMega(g, patch),
+              planId: firstPlan,
+              top: (reprodMember || d.reproCheck) && d.fileAsNew ? (
+                <button data-testid="repro-back-to-matches" className="px-2 py-0.5 rounded-full border border-violet-500/40 text-[11px] text-violet-200 hover:bg-violet-500/10" onClick={() => updateMega(g, { fileAsNew: false })}>
+                  ← Back to RX95's possible existing bugs
+                </button>
+              ) : undefined,
+              bottom: (
+                <div className="flex flex-wrap items-center gap-2">
+                  <button data-testid="bundle-open" className="px-3 h-8 rounded-xl text-xs font-semibold flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 text-white"
+                    onClick={() => { setAllowOpen(false); setPreviewExpanded(new Set([d.bugId])); setPreview([d]); }}>
+                    <ExternalLink className="w-3.5 h-3.5" /> Open in Buganizer
+                  </button>
+                  <button data-testid="bundle-check-hotlist" disabled={!rx95Ready} className="px-3 h-8 rounded-xl text-xs font-semibold border border-violet-500/45 bg-violet-500/15 text-violet-100 hover:bg-violet-500/25 disabled:opacity-40"
+                    onClick={() => { updateMega(g, { reproCheck: true, fileAsNew: false }); if (!groupMatches(g)) runMatch(bundleQueryBug(g), false); }}>
+                    ✨ Check hotlist for an existing bug
+                  </button>
+                  <span className="text-[11px] text-slate-500 ml-auto">Filing stamps all {n} reports FILED with the same b/ number</span>
+                </div>
+              ),
+              onFiledAs: id => {
+                if (id) forMembers(g.members, () => ({ filed: newFiled('bundle', id), filePending: undefined }));
+                else if (g.members.every(m => m.filed?.via === 'bundle')) forMembers(g.members, () => ({ filed: undefined }));
+              },
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  /** List rows: single bugs and bundles, newest first. */
+  const rows = [
+    ...visible.map(b => ({ kind: 'bug' as const, ts: String(b.timestamp), bug: b })),
+    ...shownGroups.map(g => ({ kind: 'bundle' as const, ts: String(g.members[g.members.length - 1]?.timestamp || ''), group: g })),
+  ].sort((a, b) => b.ts.localeCompare(a.ts));
 
   return (
     <div className="space-y-5" data-testid="buganizer-triage">
@@ -465,8 +1044,19 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
         </div>
       </div>
 
-      {/* RX95 wording refinement status */}
-      <div data-testid="rx95-refine-bar" className="rounded-[20px] border border-violet-500/30 bg-violet-500/10 px-4 py-2.5 flex flex-wrap items-center gap-3 text-xs text-violet-100">
+      {/* RX95 background worker (heartbeat fresh) */}
+      {workerFresh && (
+        <div data-testid="rx95-worker-bar" className="rounded-[20px] border border-green-500/35 bg-green-500/[0.08] px-4 py-2.5 flex flex-wrap items-center gap-2 text-xs text-green-100">
+          <span>🟢</span>
+          <div className="flex-1 min-w-[240px] leading-relaxed">
+            <b>RX95 is working in the background.</b> New reports are cleaned up and checked as they come in.
+            {' '}Last sync {Math.round(hbAgeSec)}s ago · {(heartbeat?.queues?.refine || 0) + (heartbeat?.queues?.match || 0) + (heartbeat?.queues?.bundle || 0)} in progress · {waitingCount} waiting for Buganizer.
+          </div>
+        </div>
+      )}
+
+      {/* RX95 wording refinement status (in-tab fallback when the background worker is offline) */}
+      {!workerFresh && <div data-testid="rx95-refine-bar" className="rounded-[20px] border border-violet-500/30 bg-violet-500/10 px-4 py-2.5 flex flex-wrap items-center gap-3 text-xs text-violet-100">
         <Sparkles className="w-4 h-4 text-violet-300 flex-shrink-0" />
         <div className="flex-1 min-w-[240px] leading-relaxed">
           <b>RX95 wording cleanup.</b>{' '}
@@ -488,7 +1078,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
             <input type="checkbox" data-testid="rx95-auto-refine" className="accent-violet-400" checked={autoRefine} onChange={toggleAutoRefine} /> Auto-refine
           </label>
         )}
-      </div>
+      </div>}
 
       {/* RX95 repro check + filed bugs */}
       {(reproRows.length > 0 || filedCount > 0) && (() => {
@@ -531,6 +1121,24 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
           </div>
         );
       })()}
+
+      {/* Same-day bundle suggestions */}
+      {renderSuggestions()}
+
+      {/* Waiting for Buganizer (opened, not yet confirmed) */}
+      {waitingEntries.length > 0 && (
+        <div data-testid="waiting-group" className="rounded-[20px] border border-amber-500/30 bg-amber-500/[0.04] p-3 space-y-2">
+          <p className="text-xs text-amber-100">
+            <b>⏳ Waiting for Buganizer ({waitingEntries.length})</b>{' '}
+            <span className="text-slate-400">
+              {workerFresh
+                ? 'RX95 checks Buganizer every minute and stamps FILED when it finds proof.'
+                : "RX95's background helper looks offline, so confirmation waits until it's back. Use \"Mark filed anyway\" if you already filed it."}
+            </span>
+          </p>
+          {waitingEntries.map(renderWaiting)}
+        </div>
+      )}
 
       {/* Pop-up blocked help */}
       {openQueue.length > 0 && (
@@ -598,13 +1206,18 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
 
       {/* Bulk actions */}
       <div className="sticky top-2 z-10 rounded-[20px] border border-slate-800 bg-[#0b1220]/95 backdrop-blur px-4 py-2.5 flex flex-wrap items-center gap-2">
-        <span className="text-xs text-slate-300 font-semibold mr-1">{selectedVisible.length} selected</span>
-        <button className="px-2.5 h-7 rounded-xl text-xs text-slate-200 hover:bg-slate-800" onClick={() => setSelected(new Set(visible.map(b => b.id)))}>Select all</button>
+        <span className="text-xs text-slate-300 font-semibold mr-1">{selected.size ? `${selectedCount} to open · ${selected.size} selected` : '0 selected'}</span>
+        <button className="px-2.5 h-7 rounded-xl text-xs text-slate-200 hover:bg-slate-800" onClick={() => setSelected(new Set([...visible.map(b => b.id), ...shownGroups.map(g => g.bundle.id)]))}>Select all</button>
         <button className="px-2.5 h-7 rounded-xl text-xs text-slate-200 hover:bg-slate-800" onClick={selectAllReady}>Select ready</button>
         <button className="px-2.5 h-7 rounded-xl text-xs text-slate-200 hover:bg-slate-800" onClick={() => setSelected(new Set())}>Clear</button>
         <span className="w-px h-5 bg-slate-700 mx-1" />
         <button className="px-2.5 h-7 rounded-xl text-xs text-blue-200 hover:bg-blue-600/20" onClick={() => markSelected('ready')}>Mark ready</button>
         <button className="px-2.5 h-7 rounded-xl text-xs text-slate-300 hover:bg-slate-800" onClick={() => markSelected('draft')}>Back to draft</button>
+        <button data-testid="bundle-selected" disabled={selectedBundleable.length < 2}
+          className="px-2.5 h-7 rounded-xl text-xs font-semibold text-violet-200 hover:bg-violet-500/15 disabled:opacity-40 disabled:cursor-not-allowed"
+          onClick={() => createBundle(selectedBundleable, manualBundleTitle(selectedBundleable, refinedFor), undefined, 'manual')}>
+          🧩 Bundle selected{selectedBundleable.length >= 2 ? ` (${selectedBundleable.length})` : ''}
+        </button>
         <div className="flex-1" />
         {openQueue.length > 0 && (
           <button data-testid="open-remaining" className="px-3 h-8 rounded-xl text-xs font-semibold bg-amber-500/20 text-amber-100 border border-amber-500/40" onClick={openRemaining}>
@@ -613,35 +1226,31 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
         )}
         <button
           data-testid="open-in-buganizer"
-          disabled={selectedVisible.length === 0}
+          disabled={selectedCount === 0}
           onClick={startOpen}
           className="px-3 h-8 rounded-xl text-xs font-semibold flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          <ExternalLink className="w-3.5 h-3.5" /> Open {selectedVisible.length || ''} in Buganizer
+          <ExternalLink className="w-3.5 h-3.5" /> Open {selectedCount || ''} in Buganizer
         </button>
       </div>
 
       {/* Bug list */}
       <div className="space-y-3">
-        {visible.length === 0 && (
+        {rows.length === 0 && (
           <div className="rounded-[20px] border border-slate-800 bg-[#111827] p-8 text-center text-sm text-slate-400">No bugs match these filters.</div>
         )}
-        {visible.map(bug => {
+        {rows.map(row => {
+          if (row.kind === 'bundle') return renderBundleRow(row.group);
+          const bug = row.bug;
           const d = draftFor(bug);
-          const url = buildBuganizerUrl(d);
-          const comp = componentById(d.componentId);
-          const isOpen = expanded === bug.id;
           const filed = effectiveFiled(bug);
           const repro = isReproRow(bug);
           const reprod = !filed && effectiveStatus(bug.status) === REPROD;
           return (
             <div key={bug.id} data-testid="triage-row" className={`rounded-[20px] border bg-[#111827] p-4 ${selected.has(bug.id) ? 'border-blue-500/60 ring-1 ring-blue-500/30' : 'border-slate-800'}`}>
               <div className="flex items-start gap-3">
-                {repro ? (
-                  <span className="w-[13px] mt-1 flex-shrink-0" />
-                ) : (
-                  <input type="checkbox" aria-label={`Select ${bug.id}`} className="mt-1 accent-blue-500" checked={selected.has(bug.id)} onChange={() => toggle(bug.id)} />
-                )}
+                {/* Repro'd rows can be selected for "Bundle selected"; they're never opened as new issues */}
+                <input type="checkbox" aria-label={`Select ${bug.id}`} className="mt-1 accent-blue-500" checked={selected.has(bug.id)} onChange={() => toggle(bug.id)} />
                 <div className="flex-1 min-w-0 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)] gap-4">
                   {/* Original tester note */}
                   <div className="space-y-1.5">
@@ -685,117 +1294,32 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
                     )}
                   </div>
 
-                  {repro ? renderReproPanel(bug) : (
-                  /* Buganizer fields */
-                  <div className="space-y-2">
-                    {reprod && d.fileAsNew && (
+                  {repro ? renderReproPanel({
+                    key: bug.id,
+                    query: bug,
+                    matches: matchesFor(bug),
+                    comment: () => commentFor(bug),
+                    onFollowUp: cand => followUp(bug, cand),
+                    onFileNew: () => updateDraft(bug, { fileAsNew: true }),
+                  }) : renderDraftFields({
+                    key: bug.id,
+                    d,
+                    update: patch => updateDraft(bug, patch),
+                    planId: bug.planId,
+                    top: reprod && d.fileAsNew ? (
                       <button data-testid="repro-back-to-matches" className="px-2 py-0.5 rounded-full border border-violet-500/40 text-[11px] text-violet-200 hover:bg-violet-500/10" onClick={() => updateDraft(bug, { fileAsNew: false })}>
                         ← Back to RX95's possible existing bugs
                       </button>
-                    )}
-                    <div>
-                      <label className={labelCls}>Title</label>
-                      <input aria-label="Title" className={inputCls} value={d.title} onChange={e => updateDraft(bug, { title: e.target.value })} />
-                    </div>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                      <div className="col-span-2">
-                        <label className={labelCls}>Component</label>
-                        <select aria-label="Component" className={inputCls} value={d.componentId} onChange={e => updateDraft(bug, { componentId: e.target.value })}>
-                          <optgroup label="Most used by your team">
-                            {topComponents.map(c => <option key={c.id} value={c.id}>{c.name}{pathTail(c.path) ? ` (${pathTail(c.path)})` : ''} · {c.uses}</option>)}
-                          </optgroup>
-                          <optgroup label="All other components">
-                            {otherComponents.map(c => <option key={c.id} value={c.id}>{c.name}{pathTail(c.path) ? ` (${pathTail(c.path)})` : ''}</option>)}
-                          </optgroup>
-                        </select>
-                      </div>
-                      <div>
-                        <label className={labelCls}>Priority</label>
-                        <select aria-label="Priority" className={inputCls} value={d.priority} onChange={e => updateDraft(bug, { priority: e.target.value })}>
-                          {BUGANIZER_PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
-                        </select>
-                      </div>
-                      <div>
-                        <label className={labelCls}>Type</label>
-                        <select aria-label="Type" className={inputCls} value={d.type} onChange={e => updateDraft(bug, { type: e.target.value })}>
-                          {BUGANIZER_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                        </select>
-                      </div>
-                    </div>
-                    {comp && <p className="text-[10px] text-slate-500 truncate" title={comp.path}>{comp.path} · <a className="text-blue-400 hover:underline" href={`https://b.corp.google.com/components/${comp.id}`} target="_blank" rel="noreferrer">{comp.id}</a></p>}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                      <div className="col-span-2">
-                        <label className={labelCls}>Hotlist</label>
-                        {(() => {
-                          const cur = d.hotlistIds.join(', ');
-                          const known = KNOWN_HOTLISTS.some(h => h.hotlistId === cur);
-                          return (
-                            <select aria-label="Hotlist" className={inputCls} value={cur}
-                              title={hotlistForPlan(bug.planId, planName(bug.planId)) ? `Auto-set from test plan: ${hotlistForPlan(bug.planId, planName(bug.planId))!.name}` : 'No hotlist mapped to this test plan'}
-                              onChange={e => updateDraft(bug, { hotlistIds: e.target.value ? [e.target.value] : [] })}>
-                              <option value="">None</option>
-                              {KNOWN_HOTLISTS.map(h => <option key={h.hotlistId} value={h.hotlistId}>{h.name} · {h.hotlistId}</option>)}
-                              {cur && !known && <option value={cur}>Custom · {cur}</option>}
-                            </select>
-                          );
-                        })()}
-                      </div>
-                      <div>
-                        <label className={labelCls}>Assignee</label>
-                        <input aria-label="Assignee" className={inputCls} value={d.assignee} placeholder="ldap" onChange={e => updateDraft(bug, { assignee: e.target.value })} />
-                      </div>
-                      <div>
-                        <label className={labelCls}>CC</label>
-                        <input aria-label="CC" className={inputCls} value={d.cc} placeholder="ldap1, team@google.com" onChange={e => updateDraft(bug, { cc: e.target.value })} />
-                      </div>
-                    </div>
-                    <div>
-                      <label className={labelCls}>Found in</label>
-                      <input aria-label="Found in" className={inputCls} value={d.foundIn || ''} placeholder="Glasses firmware build (scanned in QA Tester)"
-                        onChange={e => updateDraft(bug, { foundIn: e.target.value })} />
-                    </div>
-                    {isOpen && (
-                      <div>
-                        <label className={labelCls}>Description (Markdown)</label>
-                        <textarea aria-label="Description" rows={9} className={`${inputCls} font-mono leading-relaxed`} value={d.description} onChange={e => updateDraft(bug, { description: e.target.value })} />
-                      </div>
-                    )}
-                    <div className="flex flex-wrap items-center gap-2 pt-1">
-                      <button className="px-2.5 h-7 rounded-xl text-xs text-slate-300 hover:bg-slate-800" onClick={() => setExpanded(isOpen ? null : bug.id)}>
-                        {isOpen ? 'Hide description' : 'Edit description'}
-                      </button>
-                      {d.state === 'draft' && (
-                        <button className="px-2.5 h-7 rounded-xl text-xs font-semibold bg-blue-600/20 text-blue-200 border border-blue-500/40" onClick={() => updateDraft(bug, { state: 'ready' })}>
-                          <CheckCircle2 className="w-3.5 h-3.5 inline mr-1" />Ready to file
-                        </button>
-                      )}
-                      {d.state !== 'draft' && d.state !== 'filed' && (
-                        <button className="px-2.5 h-7 rounded-xl text-xs text-slate-300 hover:bg-slate-800" onClick={() => updateDraft(bug, { state: 'draft' })}>Back to draft</button>
-                      )}
-                      <button className="px-2.5 h-7 rounded-xl text-xs text-slate-300 hover:bg-slate-800" onClick={() => { setAllowOpen(false); setPreviewExpanded(new Set([d.bugId])); setPreview([d]); }}>
-                        <Eye className="w-3.5 h-3.5 inline mr-1" />Preview
-                      </button>
-                      <div className="flex items-center gap-1 ml-auto">
-                        <span className="text-[11px] text-slate-400">Filed as b/</span>
-                        <input aria-label="Filed issue id" className="w-28 bg-[#0f172a] border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-100" value={d.issueId || ''} placeholder="573…"
-                          onChange={e => { const id = e.target.value.replace(/[^\d]/g, ''); updateDraft(bug, { issueId: id || undefined, state: id ? 'filed' : (d.state === 'filed' ? 'opened' : d.state) }); }}
-                          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-                          onBlur={() => {
-                            // Stamp the bug FILED once the number is entered (not on every keystroke - it would vanish mid-typing)
-                            if (d.issueId && bug.filed?.issueId !== d.issueId) {
-                              patchBug(bug.id, { filed: newFiled('new', d.issueId) });
-                              if (!showFiled) flash(`Stamped FILED as b/${d.issueId} and hidden. Use "show" in the filed bar to see it again.`);
-                            } else if (!d.issueId && bug.filed?.via === 'new') {
-                              patchBug(bug.id, { filed: undefined });
-                            }
-                          }} />
-                      </div>
-                    </div>
-                    {url.length > MAX_SAFE_URL_LENGTH && (
-                      <p className="text-[11px] text-amber-300">This link is very long ({url.length} chars). Shorten the description so the form opens reliably.</p>
-                    )}
-                  </div>
-                  )}
+                    ) : undefined,
+                    onFiledAs: id => {
+                      if (id && bug.filed?.issueId !== id) {
+                        patchBug(bug.id, { filed: newFiled('new', id), filePending: undefined });
+                        if (!showFiled) flash(`Stamped FILED as b/${id} and hidden. Use "show" in the filed bar to see it again.`);
+                      } else if (!id && bug.filed?.via === 'new') {
+                        patchBug(bug.id, { filed: undefined });
+                      }
+                    },
+                  })}
                 </div>
               </div>
             </div>

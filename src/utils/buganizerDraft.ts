@@ -38,6 +38,8 @@ export interface BuganizerDraft {
   refinedAt?: string;
   /** "Repro'd Issue" bugs: the user chose "None of these: file as new bug" (show the new-issue draft instead of RX95 matches). */
   fileAsNew?: boolean;
+  /** Mega bugs: "Check hotlist for an existing bug" was clicked (show RX95's possible existing bugs). */
+  reproCheck?: boolean;
   updatedAt: number;
 }
 

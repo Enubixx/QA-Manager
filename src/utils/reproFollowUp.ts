@@ -38,7 +38,8 @@ export function normalizeIssueId(raw: string): string {
  * otherwise the legacy status would bring the stamp straight back.
  */
 export function filedPatch(bug: Pick<BugLog, 'status'>, filed: BugFiled | undefined): Partial<BugLog> {
-  if (filed) return { filed };
+  // Setting the stamp by hand also ends any "waiting for Buganizer" state
+  if (filed) return { filed, filePending: undefined };
   return bug.status === 'Filed' ? { filed: undefined, status: 'New' } : { filed: undefined };
 }
 
@@ -47,13 +48,13 @@ export function newFiled(via: BugFiled['via'], issueId?: string): BugFiled {
   return { ...(id ? { issueId: id } : {}), at: new Date().toISOString(), via };
 }
 
-const VIA_LABEL: Record<BugFiled['via'], string> = { manual: '', 'follow-up': 'follow-up', new: 'filed new', legacy: 'legacy' };
+const VIA_LABEL: Record<BugFiled['via'], string> = { manual: '', 'follow-up': 'follow-up', new: 'filed new', legacy: 'legacy', bundle: 'bundle' };
 
 /** "b/574123047 · follow-up · Oct 15" (parts that are known). */
 export function filedStampLine(filed: BugFiled): string {
   const d = new Date(filed.at);
   const date = Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  return [filed.issueId ? `b/${filed.issueId}` : '', VIA_LABEL[filed.via], date].filter(Boolean).join(' · ');
+  return [filed.issueId ? `b/${filed.issueId}` : '', VIA_LABEL[filed.via], filed.confirmed ? 'confirmed' : '', date].filter(Boolean).join(' · ');
 }
 
 /** RX95 matches that still belong to the bug's current text. */

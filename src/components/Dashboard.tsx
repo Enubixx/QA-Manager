@@ -17,6 +17,7 @@ const BUGANIZER_ENABLED = ((import.meta as any).env?.VITE_BUGANIZER_ENABLED || '
 import type { ExecutiveQAResult, SummaryScopeContext } from '../services/geminiService';
 import { GOOGLE_APPS_SCRIPT_CODE } from '../googleAppsScriptCode';
 import { toBlob } from 'html-to-image';
+import type { Rx95SuggestionsData } from '../services/supabaseService';
 
 /** Identifies an exact set of bugs and their notes, so a stored AI summary is invalidated when notes/titles change. */
 const makeBugsKey = (bugs: BugLog[]): string =>
@@ -43,6 +44,10 @@ interface DashboardProps {
   onApplyBugRefinements?: (refinements: Record<string, RefinedBugText>) => void;
   /** Merges a patch into the CURRENT copy of one bug (Filed stamp, status). */
   onPatchBugLog?: (bugId: string, patch: Partial<BugLog>) => void;
+  /** Merges patches into the CURRENT copies of several bugs (bundles, filing a mega bug). */
+  onPatchBugLogs?: (patches: Record<string, Partial<BugLog>>) => void;
+  /** RX95 worker output: same-day bundle suggestions + heartbeat (read-only). */
+  rx95Suggestions?: Rx95SuggestionsData;
   /** Sets only `reproMatches` on bugs whose current text still matches each result's sig. */
   onApplyReproMatches?: (matches: Record<string, ReproMatches>) => void;
   onWipeAllBugs?: () => void;
@@ -96,6 +101,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onUpdateBugLog,
   onApplyBugRefinements,
   onPatchBugLog,
+  onPatchBugLogs,
+  rx95Suggestions,
   onApplyReproMatches,
   onWipeAllBugs,
   onClonePlan,
@@ -3839,7 +3846,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
       {activeTab === 'bugs' && BUGANIZER_ENABLED && bugsView === 'buganizer' && (
-        <BuganizerTriage bugs={bugLogs} plans={testPlans} onApplyRefinements={onApplyBugRefinements} onPatchBugLog={onPatchBugLog} onApplyReproMatches={onApplyReproMatches} />
+        <BuganizerTriage bugs={bugLogs} plans={testPlans} onApplyRefinements={onApplyBugRefinements} onPatchBugLog={onPatchBugLog} onPatchBugLogs={onPatchBugLogs} onApplyReproMatches={onApplyReproMatches} rx95Suggestions={rx95Suggestions} />
       )}
 
       {/* Tab 3: Bugs Feed */}
@@ -4176,6 +4183,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         {effectiveFiled(bugById.get(bug.id) || bug) && (
                           <span data-testid="feed-filed-chip" className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-black tracking-wider bg-green-500/15 text-green-300 border-green-500/40">
                             FILED
+                          </span>
+                        )}
+                        {!effectiveFiled(bugById.get(bug.id) || bug) && (bugById.get(bug.id) || bug).filePending && (
+                          <span data-testid="feed-waiting-chip" title="Opened in Buganizer - RX95 stamps it FILED once it finds it there" className={`font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold ${(bugById.get(bug.id) || bug).filePending!.expired ? 'bg-rose-500/15 text-rose-200 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
+                            {(bugById.get(bug.id) || bug).filePending!.expired ? '⚠ NOT FOUND' : '⏳ WAITING'}
                           </span>
                         )}
                         {!effectiveFiled(bugById.get(bug.id) || bug) && effectiveStatus(bug.status) === REPROD && (

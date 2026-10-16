@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile } from '../types';
+import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, BundleSuggestion, BundleSuggestionSet } from '../types';
 
 export const fetchAllSupabaseData = async () => {
   if (!supabase || !isSupabaseConfigured) return null;
@@ -98,7 +98,10 @@ export const fetchAllSupabaseData = async () => {
     });
 
     const bugMap = new Map<string, BugLog>();
+    // Worker-owned columns present on each bug_logs row (even when null): the row value wins over the run JSON.
+    const rowOwned = new Map<string, Set<string>>();
     (bugsRes.data || []).forEach((item: any) => {
+      if (item && item.id) rowOwned.set(item.id, new Set(['filed', 'file_pending', 'bundle', 'repro_matches', 'refined'].filter(k => k in item)));
       const itemTs = item.timestamp ? new Date(item.timestamp).getTime() : 0;
       if (bugsWipedAt > 0 && itemTs > 0 && itemTs <= bugsWipedAt) {
         return;
@@ -124,6 +127,8 @@ export const fetchAllSupabaseData = async () => {
         status: typeof item.status === 'string' && item.status ? item.status : undefined,
         filed: item.filed && typeof item.filed === 'object' ? item.filed : undefined,
         reproMatches: item.repro_matches && typeof item.repro_matches === 'object' ? item.repro_matches : undefined,
+        filePending: item.file_pending && typeof item.file_pending === 'object' ? item.file_pending : undefined,
+        bundle: item.bundle && typeof item.bundle === 'object' ? item.bundle : undefined,
       });
     });
 
@@ -142,13 +147,17 @@ export const fetchAllSupabaseData = async () => {
               ...existing,
               environment: existing.environment || b.environment,
               title: existing.title || b.title,
-              refined: existing.refined || b.refined,
+              refined: rowOwned.get(b.id)?.has('refined') ? existing.refined : existing.refined || b.refined,
               originalTimestamp: existing.originalTimestamp || b.originalTimestamp,
               status: existing.status || b.status,
-              filed: existing.filed || b.filed,
-              reproMatches: existing.reproMatches || b.reproMatches,
+              // Worker-owned columns: when the row has the column, its value (including null = cleared) wins,
+              // so e.g. a confirmed filing (file_pending set to null) isn't undone by a stale copy in the run JSON.
+              filed: rowOwned.get(b.id)?.has('filed') ? existing.filed : existing.filed || b.filed,
+              reproMatches: rowOwned.get(b.id)?.has('repro_matches') ? existing.reproMatches : existing.reproMatches || b.reproMatches,
+              filePending: rowOwned.get(b.id)?.has('file_pending') ? existing.filePending : existing.filePending || b.filePending,
+              bundle: rowOwned.get(b.id)?.has('bundle') ? existing.bundle : existing.bundle || b.bundle,
             };
-            const keys = ['environment', 'title', 'refined', 'originalTimestamp', 'status', 'filed', 'reproMatches'] as const;
+            const keys = ['environment', 'title', 'refined', 'originalTimestamp', 'status', 'filed', 'reproMatches', 'filePending', 'bundle'] as const;
             if (keys.some(k => merged[k] !== existing[k])) bugMap.set(b.id, merged);
           }
         }
@@ -320,7 +329,7 @@ export const deleteArchivedRunFromSupabase = async (runId: string) => {
 };
 
 /** Optional bug_logs columns; each flips to false if that column hasn't been added yet. */
-const optionalBugColumns = { environment: true, title: true, refined: true, original_timestamp: true, status: true, filed: true, repro_matches: true };
+const optionalBugColumns = { environment: true, title: true, refined: true, original_timestamp: true, status: true, filed: true, repro_matches: true, file_pending: true, bundle: true };
 
 export const syncBugLogToSupabase = async (bug: BugLog) => {
   if (!supabase || !isSupabaseConfigured) return;
@@ -356,8 +365,11 @@ export const syncBugLogToSupabase = async (bug: BugLog) => {
     if (optionalBugColumns.status) row.status = bug.status || null;
     if (optionalBugColumns.filed) row.filed = bug.filed || null;
     if (bug.reproMatches && optionalBugColumns.repro_matches) row.repro_matches = bug.reproMatches;
+    // Sent as null when unset so cancelling a pending filing / unbundling syncs too
+    if (optionalBugColumns.file_pending) row.file_pending = bug.filePending || null;
+    if (optionalBugColumns.bundle) row.bundle = bug.bundle || null;
     let { error } = await supabase.from('bug_logs').upsert(row);
-    // Optional columns (environment, title, refined, original_timestamp, status, filed, repro_matches) may not exist yet - drop the one the error
+    // Optional columns (environment, title, refined, original_timestamp, status, filed, repro_matches, file_pending, bundle) may not exist yet - drop the one the error
     // names and retry. The values still travel inside the run's bug_logs JSON.
     for (let attempt = 0; error && attempt < Object.keys(optionalBugColumns).length; attempt++) {
       const msg = String((error as any).message || '');
@@ -712,5 +724,71 @@ export const broadcastBootSignal = async (signal: BootSignal) => {
     });
   } catch (err) {
     console.error('broadcastBootSignal error:', err);
+  }
+};
+
+/** RX95 worker heartbeat (row '_heartbeat' in rx95_bundle_suggestions). */
+export interface Rx95Heartbeat {
+  at: string;
+  queues?: { refine?: number; match?: number; bundle?: number; confirm?: number };
+}
+
+export interface Rx95SuggestionsData {
+  sets: BundleSuggestionSet[];
+  heartbeat?: Rx95Heartbeat;
+}
+
+/** Local-only (no Supabase) source for sandboxes/tests: localStorage 'qa_rx95_suggestions_local' = rows like the table. */
+const LOCAL_SUGGESTIONS_KEY = 'qa_rx95_suggestions_local';
+
+function parseSuggestionRows(rows: any[]): Rx95SuggestionsData {
+  const sets: BundleSuggestionSet[] = [];
+  let heartbeat: Rx95Heartbeat | undefined;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row || typeof row !== 'object') continue;
+    const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+    if (row.id === '_heartbeat') {
+      const at = typeof payload.at === 'string' ? payload.at : (typeof row.updated_at === 'string' ? row.updated_at : '');
+      if (at) heartbeat = { at, queues: payload.queues && typeof payload.queues === 'object' ? payload.queues : undefined };
+      continue;
+    }
+    const suggestions = Array.isArray(payload.suggestions) ? payload.suggestions : [];
+    sets.push({
+      id: String(payload.id || row.id || ''),
+      planId: String(payload.planId || row.plan_id || ''),
+      day: String(payload.day || row.day || ''),
+      sig: String(payload.sig || row.sig || ''),
+      at: String(payload.at || row.updated_at || ''),
+      suggestions: suggestions
+        .filter((x: any) => x && typeof x === 'object' && Array.isArray(x.memberIds))
+        .map((x: any) => ({
+          id: String(x.id || ''),
+          memberIds: x.memberIds.map((m: any) => String(m)),
+          maybeIds: Array.isArray(x.maybeIds) ? x.maybeIds.map((m: any) => String(m)) : undefined,
+          title: String(x.title || ''),
+          summary: String(x.summary || ''),
+          confidence: Number.isFinite(Number(x.confidence)) ? Math.max(0, Math.min(100, Number(x.confidence))) : 0,
+          reason: String(x.reason || ''),
+        }))
+        .filter((x: BundleSuggestion) => x.id && x.memberIds.length >= 2),
+    });
+  }
+  return { sets, heartbeat };
+}
+
+/** Read-only: the app never writes rx95_bundle_suggestions. */
+export const fetchRx95Suggestions = async (): Promise<Rx95SuggestionsData | null> => {
+  if (!supabase || !isSupabaseConfigured) {
+    try {
+      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(LOCAL_SUGGESTIONS_KEY) : null;
+      return raw ? parseSuggestionRows(JSON.parse(raw)) : null;
+    } catch { return null; }
+  }
+  try {
+    const { data, error } = await supabase.from('rx95_bundle_suggestions').select('*');
+    if (error) return null; // table may not exist yet
+    return parseSuggestionRows(data || []);
+  } catch {
+    return null;
   }
 };

@@ -7,6 +7,8 @@ import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, RefinedBugText
 import { bugTextSig } from './utils/bugRefine';
 import {
   fetchAllSupabaseData,
+  fetchRx95Suggestions,
+  type Rx95SuggestionsData,
   syncTestPlanToSupabase,
   deleteTestPlanFromSupabase,
   syncTestRunToSupabase,
@@ -184,6 +186,22 @@ export function App() {
     } catch (e) {}
     return [];
   });
+
+  // RX95 worker output (read-only): same-day bundle suggestions + background heartbeat.
+  const [rx95Suggestions, setRx95Suggestions] = useState<Rx95SuggestionsData>({ sets: [] });
+  const refreshSuggestionsRef = useRef<() => void>(() => {});
+  refreshSuggestionsRef.current = () => {
+    fetchRx95Suggestions().then(d => {
+      if (d) setRx95Suggestions(prev => (JSON.stringify(prev) === JSON.stringify(d) ? prev : d));
+    }).catch(() => {});
+  };
+  useEffect(() => {
+    refreshSuggestionsRef.current();
+    const t = setInterval(() => refreshSuggestionsRef.current(), 10000);
+    const onStorage = (e: StorageEvent) => { if (e.key === 'qa_rx95_suggestions_local') refreshSuggestionsRef.current(); };
+    window.addEventListener('storage', onStorage);
+    return () => { clearInterval(t); window.removeEventListener('storage', onStorage); };
+  }, []);
 
   const [bugLogs, setBugLogs] = useState<BugLog[]>(() => {
     try {
@@ -523,7 +541,7 @@ export function App() {
     const unsubscribe = subscribeToSupabaseRealtime(() => {
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
-        if (!disposed) loadCloudData();
+        if (!disposed) { loadCloudData(); refreshSuggestionsRef.current(); }
       }, 250);
     });
 
@@ -1574,6 +1592,12 @@ export function App() {
     applyBugTransform(b => (b.id === bugId ? { ...b, ...patch, id: b.id } : b));
   };
 
+  /** Merge a patch into the CURRENT copy of several bugs at once (bundles, filing a mega bug). */
+  const handlePatchBugLogs = (patches: Record<string, Partial<BugLog>>) => {
+    if (!patches || Object.keys(patches).length === 0) return;
+    applyBugTransform(b => (patches[b.id] ? { ...b, ...patches[b.id], id: b.id } : b));
+  };
+
   /** RX95 repro matches: sets ONLY `reproMatches`, and only while the bug's text still matches `sig`. */
   const handleApplyReproMatches = (matches: Record<string, ReproMatches>) => {
     if (!matches || Object.keys(matches).length === 0) return;
@@ -2068,6 +2092,8 @@ export function App() {
             onUpdateBugLog={handleUpdateBugLog}
             onApplyBugRefinements={handleApplyBugRefinements}
             onPatchBugLog={handlePatchBugLog}
+            onPatchBugLogs={handlePatchBugLogs}
+            rx95Suggestions={rx95Suggestions}
             onApplyReproMatches={handleApplyReproMatches}
             onWipeAllBugs={handleWipeAllBugs}
             onClonePlan={handleClonePlan}
