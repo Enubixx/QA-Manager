@@ -893,8 +893,8 @@ const cleanBugTitle = (title: string) => {
   return stripped || (title || '').trim();
 };
 const priorityTag = (b: ReportFiledBug) => (b.priority && /^P[0-4]$/.test(b.priority) ? `[${b.priority}] ` : '');
-/** Existing bugs a Repro'd report was followed up on are marked "(updated)". */
-const updatedTag = (b: ReportFiledBug) => (b.kind === 'follow-up' ? '(updated) ' : '');
+/** Existing bugs a Repro'd report was followed up on are marked "(KI, updated)" (known issue). */
+const updatedTag = (b: ReportFiledBug) => (b.kind === 'follow-up' ? '(KI, updated) ' : '');
 const capFirst = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 const lineItemText = (item: ReportLineItem) => capFirst(item.count > 1 ? `${item.summary} (${item.count}x)` : item.summary);
 

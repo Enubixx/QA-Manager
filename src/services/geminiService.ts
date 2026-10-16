@@ -1269,7 +1269,7 @@ export interface FiledBug {
   title: string;
   priority?: string;
   status?: string;
-  /** 'follow-up' = an existing bug a Repro'd report was followed up on (shown as "(updated)"). */
+  /** 'follow-up' = an existing bug a Repro'd report was followed up on (shown as "(KI, updated)"). */
   kind?: 'new' | 'follow-up';
 }
 
