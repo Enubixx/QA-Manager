@@ -1739,43 +1739,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   </p>
                 </div>
 
-                {/* Deck Visual Reference Thumbnail & Slide Link */}
-                {(currentStep.imageUrl || currentStep.slideUrl) && (
-                  <div className="bg-zinc-900/90 border border-zinc-800 rounded-2xl p-2.5 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[10px] font-bold text-sky-400 uppercase tracking-wider flex items-center gap-1">
-                        <Image className="w-3 h-3 text-sky-400" />
-                        <span>Deck Reference Visual</span>
-                      </span>
-                      {currentStep.slideUrl && (
-                        <a
-                          href={currentStep.slideUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-[10px] font-bold text-indigo-300 hover:text-white bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/30 px-2 py-0.5 rounded-lg transition"
-                        >
-                          Open Slide ↗
-                        </a>
-                      )}
-                    </div>
-                    {currentStep.imageUrl && (
-                      <div
-                        onClick={() => setPreviewImageUrl(currentStep.imageUrl!)}
-                        className="rounded-xl overflow-hidden border border-zinc-800 max-h-40 relative group cursor-pointer bg-zinc-950"
-                      >
-                        <img
-                          src={currentStep.imageUrl}
-                          alt={currentStep.title}
-                          className="w-full object-contain max-h-40"
-                        />
-                        <div className="absolute bottom-1.5 right-1.5 px-2 py-0.5 bg-black/75 backdrop-blur-sm text-zinc-200 border border-zinc-700 rounded-lg text-[10px] font-bold flex items-center gap-1">
-                          <Image className="w-3 h-3 text-sky-400" /> Tap to Expand
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
                 {/* Expected Result Box */}
                 <div className="bg-emerald-950/20 border border-emerald-500/30 rounded-2xl p-3.5 space-y-1">
                   <div className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">Expected Outcome</div>
