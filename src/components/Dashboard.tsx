@@ -448,40 +448,36 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return {};
   });
 
+  // Stored bugs by id (the Filed stamp reads the stored status, not the categorization override)
+  const bugById = useMemo(() => new Map(bugLogs.map(b => [b.id, b])), [bugLogs]);
   // Unsaved "b/ issue number" inputs next to the Filed switch (per bug)
   const [filedIssueDrafts, setFiledIssueDrafts] = useState<Record<string, string>>({});
 
   const handleUpdateBugCategorization = (bugId: string, field: 'bugType' | 'priority' | 'status', value: any) => {
+    const nextCat = { ...(bugCategorizations[bugId] || {}), [field]: value };
     setBugCategorizations(prev => {
-      const existing = prev[bugId] || {};
-      const nextCat = {
-        ...existing,
-        [field]: value
-      };
-      const updated = {
-        ...prev,
-        [bugId]: nextCat
-      };
+      const updated = { ...prev, [bugId]: { ...(prev[bugId] || {}), [field]: value } };
       try {
         localStorage.setItem('qa_bug_categorizations', JSON.stringify(updated));
       } catch (e) {}
-      const targetBug = bugLogs.find(b => b.id === bugId);
-      if (targetBug && onUpdateBugLog) {
-        // A status change on a bug with the legacy stored status 'Filed' keeps its Filed stamp as real data.
-        const keepLegacyFiled = field === 'status' && targetBug.status === 'Filed' && !targetBug.filed
-          ? { filed: { via: 'legacy' as const, at: targetBug.timestamp } }
-          : {};
-        onUpdateBugLog({
-          ...targetBug,
-          ...keepLegacyFiled,
-          bugType: nextCat.bugType || targetBug.bugType || 'Bug',
-          priority: nextCat.priority || targetBug.priority || (targetBug.severity === 'critical' ? 'P0' : targetBug.severity === 'high' ? 'P1' : 'P2'),
-          // No default: 'Filed' used to be written here even when only type/priority changed
-          status: nextCat.status || targetBug.status
-        });
-      }
       return updated;
     });
+    // Outside the state updater: updating App's state while React renders Dashboard is not allowed
+    const targetBug = bugLogs.find(b => b.id === bugId);
+    if (targetBug && onUpdateBugLog) {
+      // A status change on a bug with the legacy stored status 'Filed' keeps its Filed stamp as real data.
+      const keepLegacyFiled = field === 'status' && targetBug.status === 'Filed' && !targetBug.filed
+        ? { filed: { via: 'legacy' as const, at: targetBug.timestamp } }
+        : {};
+      onUpdateBugLog({
+        ...targetBug,
+        ...keepLegacyFiled,
+        bugType: nextCat.bugType || targetBug.bugType || 'Bug',
+        priority: nextCat.priority || targetBug.priority || (targetBug.severity === 'critical' ? 'P0' : targetBug.severity === 'high' ? 'P1' : 'P2'),
+        // No default: 'Filed' used to be written here even when only type/priority changed
+        status: nextCat.status || targetBug.status
+      });
+    }
   };
 
   const [googleSheetUrl, setGoogleSheetUrl] = useState<string>(() => {
@@ -4177,6 +4173,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             {bug.priority}
                           </span>
                         )}
+                        {effectiveFiled(bugById.get(bug.id) || bug) && (
+                          <span data-testid="feed-filed-chip" className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-black tracking-wider bg-green-500/15 text-green-300 border-green-500/40">
+                            FILED
+                          </span>
+                        )}
+                        {!effectiveFiled(bugById.get(bug.id) || bug) && effectiveStatus(bug.status) === REPROD && (
+                          <span data-testid="feed-reprod-chip" className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold bg-violet-500/15 text-violet-200 border-violet-500/40">
+                            REPRO'D
+                          </span>
+                        )}
                       </div>
 
                       <div className="flex items-center gap-3 ml-auto">
@@ -4433,7 +4439,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 )}
                                 {(() => {
                                   // Filed stamp: from the stored bug (a legacy stored status 'Filed' counts as filed)
-                                  const rawBug = bugLogs.find(b => b.id === bug.id) || bug;
+                                  const rawBug = bugById.get(bug.id) || bug;
                                   const filed = effectiveFiled(rawBug);
                                   const canEdit = !!(onPatchBugLog || onUpdateBugLog);
                                   const setFiled = (next: ReturnType<typeof effectiveFiled>) => {
@@ -4450,7 +4456,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                           {filedStampLine(filed) && <small className="block text-[11px] tracking-normal font-bold text-green-300 mt-0.5">{filedStampLine(filed)}</small>}
                                         </div>
                                       )}
-                                      <label className={`flex items-center gap-2.5 mt-2 text-xs font-bold text-slate-200 ${canEdit ? 'cursor-pointer' : 'opacity-60'}`}>
+                                      {/* Not a <label>: a label would re-dispatch the click to the switch and toggle it twice */}
+                                      <div className={`flex items-center gap-2.5 mt-2 text-xs font-bold text-slate-200 ${canEdit ? '' : 'opacity-60'}`}>
                                         <button
                                           type="button"
                                           role="switch"
@@ -4469,7 +4476,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                           <span className={`absolute top-[3px] w-4 h-4 rounded-full bg-white transition-all ${filed ? 'right-[3px]' : 'left-[3px]'}`} />
                                         </button>
                                         {filed ? <>Filed <span className="text-[11px] font-medium text-slate-400">(hidden from the Buganizer tab)</span></> : 'Mark as filed'}
-                                      </label>
+                                      </div>
                                       {!filed && canEdit && (
                                         <input
                                           data-testid="feed-filed-issue"
