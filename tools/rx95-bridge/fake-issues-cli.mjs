@@ -5,6 +5,7 @@
  *   readonly search '<query>' --limit N --fields a,b [--page_token T]
  *   readonly render <id> --fields desc
  *   readonly list-updates <id> [--limit N]
+ *   readonly batch-get <id,id,...>
  * Data: JSON file at $FAKE_ISSUES_FILE (re-read on every call, so tests can edit it live):
  *   { "issues": [ { "id": "900000001", "title": "...", "status": "NEW", "priority": "P2",
  *       "hotlistIds": ["8682925"], "description": "...", "created": "2026-10-16T18:00:00Z",
@@ -62,6 +63,11 @@ if (cmd === 'search') {
   const i = issues.find(x => x.id === String(id));
   if (!i) { console.error(`issue ${id} not found`); process.exit(1); }
   console.log(`Status: ${i.status}\nTitle: ${i.title}\n\nDescription by fake@google.com at ${i.created}:\n${i.description || ''}\n`);
+} else if (cmd === 'batch-get') {
+  const ids = String(flag('issue_ids') || positional[0] || '').split(',').filter(Boolean);
+  const found = ids.map(id => issues.find(x => x.id === id)).filter(Boolean);
+  console.log(`Found ${found.length} issues:`);
+  for (const i of found) console.log(`- Issue ${i.id}: ${i.title} [${String(i.status || 'NEW').split(' ')[0]}] (Priority: ${i.priority || 'P2'}, Assignee: )`);
 } else if (cmd === 'list-updates') {
   const id = flag('issue_id') || positional[0];
   const i = issues.find(x => x.id === String(id));

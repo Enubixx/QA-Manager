@@ -86,6 +86,9 @@ export function sanitizePayload(raw: unknown): SummaryPayload {
       testerName: str(b?.testerName, 120),
       deviceName: str(b?.deviceName, 120),
       timestamp: str(b?.timestamp, 60),
+      // Existing Buganizer bug this QA bug was filed as / followed up on (validated raw, never truncated)
+      ...(typeof b?.filedIssueId === 'string' && /^\d{4,12}$/.test(b.filedIssueId) ? { filedIssueId: b.filedIssueId } : {}),
+      ...(['follow-up', 'new', 'bundle', 'manual'].includes(b?.filedVia) ? { filedVia: b.filedVia } : {}),
     }) as unknown as BugLog);
     bugTotal += bugs.length;
     return {
@@ -134,7 +137,7 @@ export function sanitizeRefinePayload(raw: unknown): RefinePayload {
 }
 
 // ---------- Buganizer (filed bugs for the report day) ----------
-export interface FiledBug { id: string; title: string; priority?: string; status?: string }
+export interface FiledBug { id: string; title: string; priority?: string; status?: string; kind?: 'new' | 'follow-up' }
 /** Read-only Buganizer CLI. RX95_ISSUES_CLI points dev/mock runs at tools/rx95-bridge/fake-issues-cli.mjs. */
 export const ISSUES_CLI = process.env.RX95_ISSUES_CLI || '/google/bin/releases/issues-cli/issues';
 const HOTLISTS_FILE = process.env.RX95_HOTLISTS_FILE
@@ -172,6 +175,38 @@ export function parseIssuesSearchOutput(out: string): FiledBug[] {
     bugs.push({ id, title: field('Title').slice(0, 300), priority: field('Priority') || undefined, status: field('Status') || undefined });
   }
   return bugs;
+}
+
+/** Parses `issues readonly batch-get` lines: "- Issue <id>: <title> [<STATUS>] (Priority: P2, ...)". */
+export function parseBatchGetOutput(out: string): FiledBug[] {
+  const bugs: FiledBug[] = [];
+  for (const line of out.split('\n')) {
+    const m = line.match(/^- Issue (\d+): (.*) \[([A-Z_]+(?: [A-Za-z_]+)*)\] \(Priority: ([^,)]*)/);
+    if (m) bugs.push({ id: m[1], title: m[2].trim().slice(0, 300), status: m[3], priority: m[4].trim() || undefined });
+  }
+  return bugs;
+}
+
+const issueMetaCache = new Map<string, { at: number; bug: FiledBug | null }>();
+/** Title / status / priority of specific issues (read-only batch-get, cached 10 min; unknown ids -> skipped). */
+export async function fetchIssueMeta(ids: string[]): Promise<Map<string, FiledBug>> {
+  const out = new Map<string, FiledBug>();
+  const todo: string[] = [];
+  for (const id of [...new Set(ids)].filter(id => /^\d{4,12}$/.test(id)).slice(0, 100)) {
+    const c = issueMetaCache.get(id);
+    if (c && Date.now() - c.at < 10 * 60_000) { if (c.bug) out.set(id, c.bug); } else todo.push(id);
+  }
+  for (let i = 0; i < todo.length; i += 25) {
+    const part = todo.slice(i, i + 25);
+    const text = await runIssuesCli(['batch-get', part.join(',')], 45_000);
+    const found = new Map(parseBatchGetOutput(text).map(b => [b.id, b]));
+    for (const id of part) {
+      const bug = found.get(id) || null;
+      issueMetaCache.set(id, { at: Date.now(), bug });
+      if (bug) out.set(id, bug);
+    }
+  }
+  return out;
 }
 
 /** Bugs added to the plan's hotlist that were created on the report day (Pacific time). */
@@ -230,7 +265,17 @@ function runAgentApi(argv: string[]): Promise<string> {
 /** Neutralizes our data-block markers inside untrusted text so it can't close a block early. */
 const neutralizeMarkers = (text: string) => text.replace(/<{3,}|>{3,}/g, m => m[0].repeat(2));
 
-export function buildRx95Message(prompt: string, reportId: string, scopeLabel: string, filedBugs: FiledBug[] = [], cujsWithoutNotes: string[] = []): string {
+/** Numbered QA bugs that are already filed as a Buganizer bug (from buildChatSummaryPrompt, when it provides them). */
+export interface FiledLink { label: string; issueId: string; via?: string }
+export function filedLinksOf(built: unknown): FiledLink[] {
+  const list = (built as any)?.filedLinks;
+  return (Array.isArray(list) ? list : [])
+    .filter((l: any) => typeof l?.label === 'string' && /^F\d{1,3} #\d{1,4}$/.test(l.label) && typeof l?.issueId === 'string' && /^\d{4,12}$/.test(l.issueId))
+    .map((l: any) => ({ label: l.label, issueId: l.issueId, via: typeof l.via === 'string' ? l.via.replace(/[^\w-]/g, '').slice(0, 20) : undefined }))
+    .slice(0, 500);
+}
+
+export function buildRx95Message(prompt: string, reportId: string, scopeLabel: string, filedBugs: FiledBug[] = [], cujsWithoutNotes: string[] = [], filedLinks: FiledLink[] = []): string {
   const lines = [
     `── RX95 QA Summary · ${scopeLabel} · ${reportId} ──`,
     '',
@@ -247,10 +292,15 @@ export function buildRx95Message(prompt: string, reportId: string, scopeLabel: s
   if (filedBugs.length > 0) {
     lines.push(
       '',
-      'Real Buganizer bugs filed on the report day (ID, priority, title):',
+      'Real Buganizer bugs (ID, priority, title). "new" = filed on the report day; "existing" = an older bug that QA bugs in this report were followed up on (re-reproduced):',
       '<<<FILED_BUGS>>>',
-      ...filedBugs.map(b => `- ${b.id} [${(b.priority || 'P?').replace(/[^\w?]/g, '').slice(0, 4)}] ${neutralizeMarkers(b.title.replace(/\s+/g, ' '))}`),
+      ...filedBugs.map(b => `- ${b.id} [${(b.priority || 'P?').replace(/[^\w?]/g, '').slice(0, 4)}]${b.kind === 'follow-up' ? ' (existing)' : ' (new)'} ${neutralizeMarkers(b.title.replace(/\s+/g, ' '))}`),
       '<<<END_FILED_BUGS>>>',
+      ...(filedLinks.length ? [
+        'These numbered QA bugs are ALREADY filed as these Buganizer bugs; the app links them automatically to the issue that covers them:',
+        ...filedLinks.map(l => `- ${l.label} -> ${l.issueId}`),
+        '- Do NOT put those IDs in any other issue, feature or list; you may also leave them out of "filedBugs" entirely.',
+      ] : []),
       '',
       cujsWithoutNotes.length > 0 ? `CUJs in this report that have no tester bug notes: ${neutralizeMarkers(cujsWithoutNotes.join('; '))}` : '',
       'Link the filed bugs into the same JSON object with these extra fields:',
@@ -306,15 +356,32 @@ export async function summarizeWithRx95(payload: SummaryPayload): Promise<{ repl
   let filedBugs: FiledBug[] = [];
   try {
     const fetched = await fetchFiledBugs(payload.reportScope);
-    filedBugs = fetched.bugs;
+    filedBugs = fetched.bugs.map(b => ({ ...b, kind: 'new' as const }));
     if (!filedBugs.length) log('no filed bugs linked:', fetched.note);
   } catch (e: any) {
     log('Buganizer fetch failed, continuing without filed bugs:', e.message);
   }
+  // Existing bugs QA bugs were filed as / followed up on (e.g. Repro'd issues): add them to the catalog
+  const filedLinks = filedLinksOf(built);
+  const knownIds = new Set(filedBugs.map(b => b.id));
+  const followUpIds = [...new Set(allBugs.map(b => String((b as any).filedIssueId || '')).filter(id => /^\d{4,12}$/.test(id) && !knownIds.has(id)))];
+  if (followUpIds.length) {
+    try {
+      const meta = await fetchIssueMeta(followUpIds);
+      for (const id of followUpIds) {
+        const m = meta.get(id);
+        filedBugs.push({ id, title: m?.title || `b/${id}`, priority: m?.priority, status: m?.status, kind: 'follow-up' });
+      }
+      log(`linked ${followUpIds.length} existing bug(s) QA bugs were filed on / followed up (${meta.size} with details)`);
+    } catch (e: any) {
+      log('follow-up bug lookup failed, linking ids without details:', e.message);
+      for (const id of followUpIds) filedBugs.push({ id, title: `b/${id}`, kind: 'follow-up' });
+    }
+  }
   const cujsWithoutNotes = payload.featuresPayload.filter(f => !f.bugs.some(b => (b.note || '').trim())).map(f => f.featureName).filter(Boolean);
 
   const title = `RX95 · QA Summary · ${payload.scopeContext.scopeLabel}`.slice(0, 120);
-  const out = await runAgentApi(['new-conversation', `--title=${title}`, buildRx95Message(built.prompt, built.reportId, payload.scopeContext.scopeLabel, filedBugs, cujsWithoutNotes)]);
+  const out = await runAgentApi(['new-conversation', `--title=${title}`, buildRx95Message(built.prompt, built.reportId, payload.scopeContext.scopeLabel, filedBugs, cujsWithoutNotes, filedLinks)]);
   const conversationId = JSON.parse(out.slice(out.indexOf('{')))?.response?.newConversation?.conversationId;
   if (!conversationId) throw new Error('agentapi did not return a conversation ID');
   log('started RX95 chat', conversationId, 'for', built.reportId, `(${built.bugCount} bugs / ${built.cujCount} CUJs / ${filedBugs.length} filed)`);
