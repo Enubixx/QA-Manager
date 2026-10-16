@@ -290,6 +290,7 @@ Return ONLY a JSON object: {"bugs":[{"n":1,"matches":[{"id":"...","verdict":"...
 
 // ---------- reply parsing ----------
 const VERDICTS = new Set(['very_likely', 'possible', 'unlikely']);
+const VERDICT_BANDS: Record<ReproCandidate['verdict'], [number, number]> = { very_likely: [80, 100], possible: [35, 79], unlikely: [0, 34] };
 
 function extractJson(reply: string): any {
   const fenced = reply.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -310,7 +311,9 @@ export function cleanMatches(items: unknown, catalog: CatalogEntry[]): ReproCand
     if (!VERDICTS.has(verdict)) continue;
     let confidence = Math.round(Number((it as any)?.confidence));
     if (!Number.isFinite(confidence)) continue;
-    confidence = Math.max(0, Math.min(100, confidence));
+    // Keep confidence inside its verdict's band so the ranking never contradicts the verdicts
+    const [lo, hi] = VERDICT_BANDS[verdict as ReproCandidate['verdict']];
+    confidence = Math.max(lo, Math.min(hi, confidence));
     if (verdict === 'unlikely' && confidence < MATCH_MIN_UNLIKELY_CONFIDENCE) continue;
     const reason = String((it as any)?.reason ?? '').replace(/\s+/g, ' ').trim().slice(0, MATCH_REASON_MAX);
     seen.add(id);
