@@ -79,7 +79,9 @@ class Rest {
     return { apikey: this.key, Authorization: `Bearer ${this.key}`, 'Content-Type': 'application/json', ...extra };
   }
   async req(method: string, pathAndQuery: string, body?: unknown, prefer?: string): Promise<{ ok: boolean; status: number; data: any }> {
-    const res = await fetch(`${this.base}/rest/v1/${pathAndQuery}`, { method, headers: this.headers(prefer ? { Prefer: prefer } : {}), body: body === undefined ? undefined : JSON.stringify(body) });
+    // Postgres rejects NUL in text/jsonb: scrub any \u0000 (old fingerprints) to \u001f before sending
+    const json = body === undefined ? undefined : JSON.stringify(body).replace(/(?<!\\)((?:\\\\)*)\\u0000/g, '$1\\u001f');
+    const res = await fetch(`${this.base}/rest/v1/${pathAndQuery}`, { method, headers: this.headers(prefer ? { Prefer: prefer } : {}), body: json });
     const text = await res.text();
     let data: any = null;
     try { data = text ? JSON.parse(text) : null; } catch { data = text; }

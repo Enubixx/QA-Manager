@@ -20,7 +20,8 @@ export interface RefineBugInput {
 
 /** Fingerprint of the reporter's own text; a refinement is only valid for the text it was written from. */
 export function bugTextSig(bug: Pick<BugLog, 'title' | 'note'>): string {
-  return `${REFINE_STYLE_VERSION}|${(bug.title || '').trim()}\u0000${(bug.note || '').trim()}`;
+  // \u001f (unit separator), never \u0000: Postgres jsonb/text rejects NUL characters.
+  return `${REFINE_STYLE_VERSION}|${(bug.title || '').trim()}\u001f${(bug.note || '').trim()}`;
 }
 
 /** The bug's refinement if it still matches the reporter's current text. */
