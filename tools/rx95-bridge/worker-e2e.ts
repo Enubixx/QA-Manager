@@ -154,6 +154,20 @@ async function main() {
   const runWrites = wlog.filter(w => ['test_runs', 'archived_runs'].includes(w.table));
   check('run JSON never written', runWrites.length === 0);
 
+  // load: a burst of 50 step taps (run results change, bug JSON doesn't) must not trigger reloads
+  await sleep(3000);
+  await api('/__admin/stats/reset', { method: 'POST' });
+  for (let i = 0; i < 50; i++) {
+    await api(`/rest/v1/test_runs?id=eq.run-e2e-1`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ results: { [`step-${i}`]: { status: 'green', timestamp: new Date().toISOString() } }, current_step_index: i }) });
+    await sleep(40);
+  }
+  await sleep(6000);
+  const st: Record<string, { requests: number; bytesOut: number }> = await api('/__admin/stats');
+  const gets = Object.entries(st).filter(([k]) => k.startsWith('GET '));
+  const getReq = gets.reduce((n, [, v]) => n + v.requests, 0);
+  const getBytes = gets.reduce((n, [, v]) => n + v.bytesOut, 0);
+  check('50 step taps: coalesced, no full reload (<=3 GETs, <20 KB read)', getReq <= 3 && getBytes < 20_000 && !st['GET bug_logs'], `${getReq} GET(s), ${getBytes} bytes: ${JSON.stringify(Object.fromEntries(gets))}`);
+
   // degradation: drop file_pending + the suggestions table; worker must keep refining and not crash
   await api('/__admin/schema', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ table: 'bug_logs', drop: ['file_pending'] }) });
   await api('/__admin/schema', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ table: 'rx95_bundle_suggestions', dropTable: true }) });

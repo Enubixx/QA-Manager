@@ -708,10 +708,13 @@ async function startSupabase() {
     const reset = res.ok ? await res.json().catch(() => []) : [];
     if (Array.isArray(reset) && reset.length) log(`re-queued ${reset.length} request(s) left 'working' by a previous watcher`);
   } catch (e: any) { log('could not re-queue stuck requests:', e.message); }
+  const ports = await workerPorts();
   if (args.worker !== 'off') {
     const { startWorker } = await import('./worker');
-    startWorker({ url: base, key, events: MODE === 'dev-supabase' ? 'sse' : 'realtime', ports: await workerPorts() });
+    startWorker({ url: base, key, events: MODE === 'dev-supabase' ? 'sse' : 'realtime', ports });
   }
+  // dev + --rx95=fake: app requests are answered by the same fakes (never a real RX95 chat)
+  const serve = FAKE_RX95 ? (raw: unknown) => handleRequestFake(raw, ports) : handleRequest;
   if (args.requests === 'off') { log('request queue polling is off (--requests=off)'); return; }
   log(`supabase bridge polling ai_summary_requests${MODE === 'dev-supabase' ? ` (DEV mock ${base})` : ''}`);
   for (;;) {
@@ -725,7 +728,7 @@ async function startSupabase() {
         const claimed = claim.ok ? await claim.json() : [];
         if (Array.isArray(claimed) && claimed.length) {
           try {
-            const result = await handleRequest(row.payload);
+            const result = await serve(row.payload);
             await patch(row.id, { status: 'done', reply: result.reply, report_id: result.reportId, conversation_id: result.conversationId });
           } catch (e: any) {
             log('error', row.id, e.message);
@@ -741,6 +744,24 @@ async function startSupabase() {
   }
 }
 
+const FAKE_RX95 = MODE === 'dev-supabase' && args.rx95 === 'fake';
+
+/** Dev-only: validates an app request like handleRequest, but answers with the fake RX95 ports. */
+async function handleRequestFake(raw: unknown, ports: Awaited<ReturnType<typeof workerPorts>>): Promise<{ reply: string; reportId: string; conversationId: string }> {
+  if (isMatchRequest(raw)) {
+    const p = sanitizeMatchPayload(raw);
+    if (!allowRequest('match')) throw new Error(rateLimitMessage('match'));
+    return { reply: await ports.match(p.bug, p.planId), reportId: 'RM-fake', conversationId: 'fake' };
+  }
+  if (isRefineRequest(raw)) {
+    const p = sanitizeRefinePayload(raw);
+    if (!allowRequest('refine')) throw new Error(rateLimitMessage('refine'));
+    return { reply: await ports.refine(p.bugs), reportId: 'RF-fake', conversationId: 'fake' };
+  }
+  sanitizePayload(raw);
+  throw new Error('Summaries are not available with --rx95=fake (dev)');
+}
+
 /** Allowlisted hotlist ids (Cloudtop config). */
 export function allowedHotlists(): string[] {
   try {
@@ -751,7 +772,7 @@ export function allowedHotlists(): string[] {
 
 /** RX95 + Buganizer hooks for the worker: real ones, or deterministic fakes with --rx95=fake (dev only). */
 async function workerPorts() {
-  const { WORKER_FAKE_RX95 } = { WORKER_FAKE_RX95: MODE === 'dev-supabase' && args.rx95 === 'fake' };
+  const WORKER_FAKE_RX95 = FAKE_RX95;
   const delay = Number(process.env.RX95_FAKE_DELAY_MS || 1500);
   const sleepMs = (ms: number) => new Promise(r => setTimeout(r, ms));
   const base = {

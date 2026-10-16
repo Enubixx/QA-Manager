@@ -23,6 +23,7 @@
  *   POST /__admin/schema {table, drop?:[cols], add?:[cols], dropTable?:bool, createTable?:[cols]}
  *   POST /__admin/reset {seed?}             reload seed (or the given seed object)
  *   GET  /__admin/log                       last 200 writes (method, table, filter, body) - check who wrote what
+ *   GET  /__admin/stats, POST /__admin/stats/reset   REST requests + bytes served per "METHOD table" (load checks)
  */
 import fs from 'node:fs';
 import http from 'node:http';
@@ -76,20 +77,35 @@ function emit(ev: { table: string; type: string; id?: string }) {
   for (const res of listeners) res.write(line);
 }
 const writeLog: unknown[] = [];
+const stats = new Map<string, { requests: number; bytesOut: number }>();
 const logWrite = (entry: unknown) => { writeLog.push({ at: new Date().toISOString(), ...(entry as object) }); if (writeLog.length > 200) writeLog.shift(); };
 
 // ---------- filtering ----------
 function parseFilters(q: URLSearchParams) {
   const filters: Array<(r: Row) => boolean> = [];
   const used: string[] = [];
+  const conds: Array<[string, string]> = [];
   for (const [k, v] of q) {
     if (['select', 'order', 'limit', 'offset', 'on_conflict'].includes(k)) continue;
+    if (k === 'or') {
+      // or=(a.op.v,b.op.v): any of the conditions
+      const parts = v.replace(/^\(|\)$/g, '').split(',').map(p => { const i = p.indexOf('.'); return [p.slice(0, i), p.slice(i + 1)] as [string, string]; });
+      parts.forEach(([c]) => used.push(c));
+      const subs = parts.map(([c, cond]) => parseFilters(new URLSearchParams([[c, cond]])).match);
+      filters.push(r => subs.some(f => f(r)));
+      continue;
+    }
+    conds.push([k, v]);
+  }
+  for (const [k, v0] of conds) {
     used.push(k);
+    const neg = v0.startsWith('not.');
+    const v = neg ? v0.slice(4) : v0;
     const m = v.match(/^(eq|neq|lt|lte|gt|gte|like|ilike|is|in)\.(.*)$/s);
     if (!m) continue;
     const [, op, raw] = m;
+    const test = (r: Row): boolean => {
     const cmp = (a: any) => (a === null || a === undefined ? '' : typeof a === 'object' ? JSON.stringify(a) : String(a));
-    filters.push(r => {
       const val = r[k];
       switch (op) {
         case 'eq': return cmp(val) === raw;
@@ -103,10 +119,11 @@ function parseFilters(q: URLSearchParams) {
           return re.test(cmp(val));
         }
         case 'is': return raw === 'null' ? val === null || val === undefined : String(val) === raw;
-        case 'in': return raw.replace(/^\(|\)$/g, '').split(',').includes(cmp(val));
+        case 'in': return raw.replace(/^\(|\)$/g, '').split(',').map(x => x.replace(/^"|"$/g, '')).includes(cmp(val));
       }
       return true;
-    });
+    };
+    filters.push(r => (neg ? !test(r) : test(r)));
   }
   return { match: (r: Row) => filters.every(f => f(r)), used };
 }
@@ -123,6 +140,17 @@ const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
   if (req.method === 'OPTIONS') return ok(res, 204);
   const url = new URL(req.url || '/', `http://127.0.0.1:${PORT}`);
+  if (!url.pathname.startsWith('/__')) {
+    const key = `${req.method} ${url.pathname.replace('/rest/v1/', '')}`;
+    const end = res.end.bind(res) as (...a: any[]) => http.ServerResponse;
+    (res as any).end = (chunk?: any, ...rest: any[]) => {
+      const st = stats.get(key) || { requests: 0, bytesOut: 0 };
+      st.requests++;
+      st.bytesOut += chunk ? Buffer.byteLength(chunk) : 0;
+      stats.set(key, st);
+      return end(chunk, ...rest);
+    };
+  }
   let body = '';
   req.on('data', c => { body += c; });
   req.on('end', () => {
@@ -133,11 +161,13 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
       res.write(': connected\n\n');
       listeners.add(res);
-      req.on('close', () => listeners.delete(res));
+      res.on('close', () => listeners.delete(res)); // (req 'close' fires as soon as the GET body is read)
       return;
     }
     if (url.pathname === '/__admin/state') return ok(res, 200, { tables: Object.fromEntries([...tables].map(([k, t]) => [k, { columns: [...t.columns], rows: t.rows }])) });
     if (url.pathname === '/__admin/log') return ok(res, 200, writeLog);
+    if (url.pathname === '/__admin/stats') return ok(res, 200, Object.fromEntries(stats));
+    if (url.pathname === '/__admin/stats/reset' && req.method === 'POST') { stats.clear(); return ok(res, 200, { ok: true }); }
     if (url.pathname === '/__admin/fire' && req.method === 'POST') { emit({ table: json?.table || 'bug_logs', type: 'UPDATE', id: json?.id }); return ok(res, 200, { ok: true }); }
     if (url.pathname === '/__admin/reset' && req.method === 'POST') { load(json?.seed); persist(); emit({ table: 'bug_logs', type: 'RESET' }); return ok(res, 200, { ok: true }); }
     if (url.pathname === '/__admin/schema' && req.method === 'POST') {

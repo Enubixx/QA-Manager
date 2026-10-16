@@ -29,6 +29,11 @@ const DAY_MS = 86_400_000;
 const WATCH_DAYS = 7;
 const COALESCE_MS = Number(process.env.RX95_WORKER_COALESCE_MS || 3000);
 const SWEEP_MS = Number(process.env.RX95_WORKER_SWEEP_MS || 60_000);
+/** Full re-read of rows + recent runs (everything else is incremental from change events). */
+const FULL_RELOAD_MS = Number(process.env.RX95_WORKER_FULL_RELOAD_MS || 5 * 60_000);
+/** bug_logs columns the worker reads (never image_url: rows/JSON may carry base64 screenshots). */
+const BASE_COLS = ['id', 'test_run_id', 'plan_id', 'step_id', 'step_title', 'feature', 'tester_name', 'device_name', 'severity', 'note', 'timestamp', 'formatted_time'];
+const RUN_TABLES = ['test_runs', 'archived_runs'] as const;
 const HEARTBEAT_MS = Number(process.env.RX95_WORKER_HEARTBEAT_MS || 30_000);
 const CONFIRM_EVERY_MS = Number(process.env.RX95_WORKER_CONFIRM_MS || 60_000);
 const CONFIRM_WINDOW_MS = DAY_MS;
@@ -65,7 +70,7 @@ const OWNED: Owned[] = ['refined', 'repro_matches', 'filed', 'file_pending', 'bu
 const PROBED = [...OWNED, 'status', 'title', 'environment', 'original_timestamp'] as const;
 
 /** A merged report as the app sees it, plus where it lives. */
-export interface WBug extends BugLog { _hasRow: boolean; _runJson?: any }
+export interface WBug extends BugLog { _hasRow: boolean; _runJson?: any; _runId?: string }
 
 // ---------- REST ----------
 class Rest {
@@ -126,7 +131,7 @@ export function mergeBugs(rows: any[], runs: any[], wipedAt = 0): Map<string, WB
       if (wipedAt && ts && ts <= wipedAt) continue;
       const existing = map.get(b.id);
       if (!existing) {
-        map.set(b.id, { ...b, planId: b.planId || run.plan_id, testRunId: b.testRunId || run.id, _hasRow: false, _runJson: b });
+        map.set(b.id, { ...b, planId: b.planId || run.plan_id, testRunId: b.testRunId || run.id, _hasRow: false, _runJson: b, _runId: run.id });
         continue;
       }
       const keys = rowKeys.get(b.id)!;
@@ -197,6 +202,7 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
       const r = await rest.req('GET', `bug_logs?select=id,${c}&limit=1`);
       if (r.ok) { if (!cols.has(c)) { cols.add(c); warned.delete(`col:${c}`); } } else if (isMissingColumn(r.data)) cols.delete(c);
     }
+    for (const c of PROBED) if (cols.has(c)) for (const k of [...warned]) if (k.startsWith(`col:${c}:`)) warned.delete(k);
     const t = await rest.req('GET', `${SUGGESTIONS}?select=id&limit=1`);
     suggestionsTable = t.ok;
     if (t.ok) warned.delete('table');
@@ -207,18 +213,122 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
     return true;
   };
 
-  // snapshot
-  async function loadSnapshot(): Promise<Map<string, WBug>> {
-    const [rows, runs, archived, features] = await Promise.all([
-      rest.get('bug_logs?select=*&limit=10000'),
-      rest.get('test_runs?select=id,plan_id,bug_logs&limit=5000'),
-      rest.get('archived_runs?select=id,plan_id,bug_logs&limit=5000'),
+  // ---------- in-memory store (full read at start + every 5 min; change events re-read only what changed) ----------
+  const rowsById = new Map<string, { row: any; hash: string }>();
+  const runsById = new Map<string, { run: { id: string; plan_id: string; bug_logs: any[] }; hash: string; table: string }>();
+  let wipedAt = 0;
+  let merged: Map<string, WBug> = new Map();
+  const rowSelect = () => [...BASE_COLS, ...PROBED.filter(c => cols.has(c))].join(',');
+  /** GET bug_logs rows; if a column vanished (schema changed under us), re-probe once and retry. */
+  async function getRows(query: (select: string) => string): Promise<any[]> {
+    try { return await rest.get(query(rowSelect())); } catch (e: any) {
+      if (!isMissingColumn(e?.data)) throw e;
+      await probe(true);
+      return rest.get(query(rowSelect()));
+    }
+  }
+  const stripBugs = (bugs: unknown) => (Array.isArray(bugs) ? bugs : []).filter(b => b && typeof b === 'object').map((b: any) => { const { imageUrl, ...rest } = b; return rest; });
+  const hashOf = (v: unknown) => { const str = JSON.stringify(v); let h = 0x811c9dc5; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); } return `${(h >>> 0).toString(36)}:${str.length}`; };
+  function ingestRow(r: any): boolean {
+    if (!r?.id) return false;
+    const { image_url, ...row } = r;
+    const hash = hashOf(row);
+    if (rowsById.get(row.id)?.hash === hash) return false;
+    rowsById.set(row.id, { row, hash });
+    return true;
+  }
+  function ingestRun(table: string, r: any): boolean {
+    if (!r?.id) return false;
+    const run = { id: r.id, plan_id: r.plan_id, bug_logs: stripBugs(r.bug_logs) };
+    const hash = hashOf([run.plan_id, run.bug_logs]); // step taps (results) don't change this
+    if (runsById.get(r.id)?.hash === hash) return false;
+    runsById.set(r.id, { run, hash, table });
+    return true;
+  }
+  const remerge = () => { merged = mergeBugs([...rowsById.values()].map(x => x.row), [...runsById.values()].map(x => x.run), wipedAt); return merged; };
+
+  async function fullLoad() {
+    const since = new Date(Date.now() - (WATCH_DAYS + 1) * DAY_MS).toISOString();
+    const getRuns = async (table: string) => {
+      try { return await rest.get(`${table}?select=id,plan_id,bug_logs&or=(started_at.gte.${since},started_at.is.null)&limit=5000`); }
+      catch { return rest.get(`${table}?select=id,plan_id,bug_logs&limit=5000`); } // no started_at column
+    };
+    const [rows, pendingRows, runs, archived, features] = await Promise.all([
+      getRows(sel => `bug_logs?select=${sel}&timestamp=gte.${since}&limit=10000`),
+      cols.has('file_pending') ? getRows(sel => `bug_logs?select=${sel}&file_pending=not.is.null&limit=1000`).catch(() => [] as any[]) : Promise.resolve([] as any[]),
+      getRuns('test_runs'),
+      getRuns('archived_runs'),
       rest.get('populated_features?select=feature_name&feature_name=like.__GLOBAL_BUGS_WIPED_AT__*&limit=100').catch(() => [] as any[]),
     ]);
-    let wipedAt = 0;
+    rowsById.clear(); runsById.clear();
+    for (const r of [...rows, ...pendingRows]) ingestRow(r);
+    for (const r of runs) ingestRun('test_runs', r);
+    for (const r of archived) ingestRun('archived_runs', r);
+    wipedAt = 0;
     for (const f of features) { const ts = parseInt(String(f.feature_name || '').split(':')[1], 10); if (ts > wipedAt) wipedAt = ts; }
-    return mergeBugs(rows, [...runs, ...archived], wipedAt);
+    lastFull = Date.now();
+    return remerge();
   }
+  let lastFull = 0;
+
+  const inList = (ids: string[]) => `in.(${ids.map(id => `"${String(id).replace(/["\\]/g, '')}"`).join(',')})`;
+  /** Re-reads specific rows / runs by id (change events, and guards right before writing). Returns true if anything changed. */
+  async function refetch(rowIds: string[], runIds: Array<{ table: string; id: string }>): Promise<boolean> {
+    let changed = false;
+    for (let i = 0; i < rowIds.length; i += 50) {
+      const ids = rowIds.slice(i, i + 50);
+      const got = await getRows(sel => `bug_logs?select=${sel}&id=${inList(ids)}`);
+      const seen = new Set(got.map(r => r.id));
+      for (const r of got) changed = ingestRow(r) || changed;
+      for (const id of ids) if (!seen.has(id) && rowsById.delete(id)) changed = true; // row deleted
+    }
+    for (const table of RUN_TABLES) {
+      const ids = [...new Set(runIds.filter(r => r.table === table).map(r => r.id))];
+      for (let i = 0; i < ids.length; i += 20) {
+        const part = ids.slice(i, i + 20);
+        const got = await rest.get(`${table}?select=id,plan_id,bug_logs&id=${inList(part)}`);
+        const seen = new Set(got.map(r => r.id));
+        for (const r of got) changed = ingestRun(table, r) || changed;
+        for (const id of part) if (!seen.has(id) && runsById.get(id)?.table === table && runsById.delete(id)) changed = true;
+      }
+    }
+    if (changed) remerge();
+    return changed;
+  }
+  /** Fresh copies of these bugs: their rows and the runs that carry them are re-read first. */
+  async function fresh(ids: string[]): Promise<Map<string, WBug>> {
+    const runRefs: Array<{ table: string; id: string }> = [];
+    for (const { run, table } of runsById.values()) if (run.bug_logs.some((b: any) => ids.includes(b.id))) runRefs.push({ table, id: run.id });
+    await refetch(ids, runRefs);
+    remerge();
+    return merged;
+  }
+
+  /** Applies queued change events: realtime payloads are used directly, SSE ids are re-read. */
+  const pendingEvents = new Map<string, { table: string; type: string; id: string; record?: any }>();
+  async function applyEvents(): Promise<boolean> {
+    const events = [...pendingEvents.values()];
+    pendingEvents.clear();
+    let changed = false;
+    const rowIds: string[] = [];
+    const runIds: Array<{ table: string; id: string }> = [];
+    for (const ev of events) {
+      if (ev.type === 'DELETE') {
+        if (ev.table === 'bug_logs') changed = rowsById.delete(ev.id) || changed;
+        else changed = runsById.delete(ev.id) || changed;
+        continue;
+      }
+      if (ev.table === 'bug_logs') {
+        if (ev.record && typeof ev.record.note === 'string') changed = ingestRow(ev.record) || changed; else rowIds.push(ev.id);
+      } else if ((RUN_TABLES as readonly string[]).includes(ev.table)) {
+        if (ev.record && Array.isArray(ev.record.bug_logs)) changed = ingestRun(ev.table, ev.record) || changed; else runIds.push({ table: ev.table, id: ev.id });
+      } else if (ev.type === 'RESET') { await fullLoad(); return true; }
+    }
+    if (rowIds.length || runIds.length) changed = (await refetch(rowIds, runIds)) || changed;
+    if (changed) remerge();
+    return changed;
+  }
+
   const recent = (b: BugLog) => { const t = Date.parse(b.originalTimestamp || b.timestamp || ''); return Number.isFinite(t) && Date.now() - t <= WATCH_DAYS * DAY_MS; };
 
   /** Writes worker-owned columns for one bug (PATCH, or minimal-row insert for JSON-only bugs). */
@@ -228,8 +338,15 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
     if (!Object.keys(body).length) return false;
     if (!fresh._hasRow) {
       if (!recent(fresh)) return false;
-      const ins = await rest.req('POST', 'bug_logs', { ...minimalRow(fresh, cols), ...body }, 'resolution=ignore-duplicates,return=representation');
-      if (ins.ok && Array.isArray(ins.data) && ins.data.length) return true;
+      // The in-memory copy has no screenshot (stripped); read it from the run so the new row keeps it
+      // (the app takes image_url from the row once one exists).
+      const ref = fresh._runId ? runsById.get(fresh._runId) : undefined;
+      if (!ref) return false;
+      const raw = await rest.get(`${ref.table}?select=bug_logs&id=eq.${encodeURIComponent(ref.run.id)}`);
+      const original = (Array.isArray(raw[0]?.bug_logs) ? raw[0].bug_logs : []).find((x: any) => x?.id === fresh.id);
+      if (!original) return false; // deleted meanwhile - never resurrect
+      const ins = await rest.req('POST', 'bug_logs', { ...minimalRow({ ...fresh, imageUrl: original.imageUrl }, cols), ...body }, 'resolution=ignore-duplicates,return=representation');
+      if (ins.ok && Array.isArray(ins.data) && ins.data.length) { ingestRow(ins.data[0]); remerge(); return true; }
       if (!ins.ok && isMissingColumn(ins.data)) { probedAt = 0; log('insert failed (schema):', JSON.stringify(ins.data).slice(0, 200)); return false; }
       if (!ins.ok) { log('insert failed', fresh.id, ins.status, JSON.stringify(ins.data).slice(0, 200)); return false; }
       // a row appeared meanwhile (the app saved it) - fall through to PATCH
@@ -240,6 +357,9 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
       log('patch failed', fresh.id, r.status, JSON.stringify(r.data).slice(0, 200));
       return false;
     }
+    // reflect our own write right away, so the next plan pass doesn't redo the job before the change event lands
+    const cur = rowsById.get(fresh.id);
+    if (cur) { ingestRow({ ...cur.row, ...body }); remerge(); }
     return true;
   }
 
@@ -289,11 +409,11 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
         const inputs = batch.map(toRefineInput);
         const reply = await ports.refine(inputs);
         const results = parseRefineReply(reply, batch);
-        const fresh = await loadSnapshot();
+        const freshMap = await fresh(batch.map(b => b.id));
         let wrote = 0;
         for (const b of batch) {
           const r: RefinedBugText | undefined = results[b.id];
-          const f = fresh.get(b.id);
+          const f = freshMap.get(b.id);
           if (!r || !f || bugTextSig(f) !== r.sig || currentRefine(f)) continue; // edited meanwhile, gone, or already refined
           if (await writeOwned(f, { refined: r })) wrote++;
         }
@@ -312,7 +432,7 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
         const { meta, candidates } = parseMatchReply(reply);
         if (!meta.hotlistId) throw new Error('match reply without hotlist');
         const result: ReproMatches = { sig, hotlistId: meta.hotlistId, searched: meta.searched, at: new Date().toISOString(), candidates };
-        const f = (await loadSnapshot()).get(b.id);
+        const f = (await fresh([b.id])).get(b.id);
         if (!f || bugTextSig(f) !== sig || f.status !== REPROD || isFiled(f) || currentMatches(f)) { log('match: dropped stale result for', b.id); return; }
         if (await writeOwned(f, { repro_matches: result })) log(`match: ${b.id} -> ${candidates.length} candidate(s)`);
       },
@@ -334,8 +454,8 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
           if (!parsed) throw new Error('unreadable bundle reply');
           suggestions.push(...parsed);
         }
-        const fresh = await loadSnapshot();
-        const now = [...fresh.values()].filter(b => b.planId === planId && bugDay(b) === day && isBundleCandidate(b));
+        const freshMap = await fresh(cands.map(b => b.id));
+        const now = [...freshMap.values()].filter(b => b.planId === planId && bugDay(b) === day && isBundleCandidate(b));
         if (bundleGroupSig(now) !== sig) { log(`bundle: ${id} changed meanwhile; will re-run`); return; }
         await writeSuggestions(planId, day, sig, suggestions);
         log(`bundle: ${id} -> ${suggestions.length} suggestion(s) from ${cands.length} report(s)`);
@@ -355,7 +475,6 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
   }
 
   // ---------- planning (one pass over a fresh snapshot) ----------
-  let lastSnapshot: Map<string, WBug> = new Map();
   let planning = false;
   let dirty = false;
   async function plan() {
@@ -365,9 +484,8 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
       do {
         dirty = false;
         await probe();
-        const snap = await loadSnapshot();
-        lastSnapshot = snap;
-        const live = [...snap.values()].filter(recent);
+        if (!lastFull || Date.now() - lastFull >= FULL_RELOAD_MS) await fullLoad();
+        const live = [...merged.values()].filter(recent);
 
         // refine: newest first, unfiled reports without a current refinement
         if (need('refine', 'refined')) {
@@ -440,8 +558,8 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
     confirming = true;
     try {
       if (!need('confirm', 'filed', 'file_pending')) return;
-      const snap = await loadSnapshot();
-      const pending = [...snap.values()].filter(b => b.filePending && !b.filePending.expired && !isFiled(b));
+      if (!lastFull) return;
+      const pending = [...merged.values()].filter(b => b.filePending && !b.filePending.expired && !isFiled(b));
       // one unit per bundle (any member's id proves the mega bug), else per bug
       const units = new Map<string, WBug[]>();
       for (const b of pending) {
@@ -456,7 +574,11 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
         if (!Number.isFinite(openedAt)) continue;
         if (Date.now() - openedAt > CONFIRM_WINDOW_MS) {
           let n = 0;
-          for (const m of members) if (await writeOwned(m, { file_pending: { ...m.filePending, expired: true } })) n++;
+          const f = await fresh(members.map(m => m.id));
+          for (const m of members) {
+            const fm = f.get(m.id);
+            if (fm?.filePending && !fm.filePending.expired && fm.filePending.openedAt === p.openedAt && !isFiled(fm) && await writeOwned(fm, { file_pending: { ...fm.filePending, expired: true } })) n++;
+          }
           if (n) log(`confirm: ${unitKey} expired after 24h without proof`);
           continue;
         }
@@ -494,9 +616,9 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
           continue;
         }
         if (!issueId) continue;
-        const fresh = await loadSnapshot();
+        const freshMap = await fresh(members.map(m => m.id));
         for (const m of members) {
-          const f = fresh.get(m.id);
+          const f = freshMap.get(m.id);
           if (!f || !f.filePending || f.filePending.openedAt !== p.openedAt || isFiled(f)) continue;
           const filed: BugFiled = { issueId, via: p.kind === 'follow-up' ? 'follow-up' : p.kind === 'bundle' ? 'bundle' : 'new', confirmed: true, at: new Date().toISOString(), by: 'rx95' };
           if (await writeOwned(f, { filed, file_pending: null })) log(`confirm: ${f.id} filed as b/${issueId} (${filed.via})`);
@@ -512,7 +634,7 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
   // ---------- heartbeat ----------
   const queueSizes = () => {
     const count = (k: Job['kind']) => queue.filter(j => j.kind === k).reduce((n, j) => n + j.size, 0) + (running?.kind === k ? running.size : 0);
-    const confirm = [...lastSnapshot.values()].filter(b => b.filePending && !b.filePending.expired && !isFiled(b)).length;
+    const confirm = [...merged.values()].filter(b => b.filePending && !b.filePending.expired && !isFiled(b)).length;
     return { refine: count('refine'), match: count('match'), bundle: count('bundle'), confirm };
   };
   async function heartbeat() {
@@ -527,15 +649,25 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
 
   // ---------- triggers ----------
   let coalesce: NodeJS.Timeout | null = null;
-  const kick = () => {
+  /** Queues a change and (re)starts the ~3 s coalescing timer; one pass handles the whole burst. */
+  const DEBUG = process.env.RX95_WORKER_DEBUG === '1';
+  const onChange = (ev?: { table: string; type: string; id: string; record?: any }) => {
+    if (DEBUG) log('event', ev?.table, ev?.type, ev?.id);
+    if (ev?.id) pendingEvents.set(`${ev.table}:${ev.id}`, ev);
     if (coalesce) clearTimeout(coalesce);
-    coalesce = setTimeout(() => { coalesce = null; void plan(); }, COALESCE_MS);
+    coalesce = setTimeout(async () => {
+      coalesce = null;
+      try { if (!lastFull || (await applyEvents())) await plan(); } catch (e: any) { log('event pass failed:', e.message); }
+    }, COALESCE_MS);
   };
+  const kick = () => onChange();
   let stopEvents = () => {};
   if (cfg.events === 'realtime') {
     const client = createClient(cfg.url, cfg.key, { auth: { persistSession: false, autoRefreshToken: false } });
     const channel = client.channel('rx95-worker');
-    for (const table of ['bug_logs', 'test_runs', 'archived_runs']) channel.on('postgres_changes' as any, { event: '*', schema: 'public', table }, () => kick());
+    for (const table of ['bug_logs', 'test_runs', 'archived_runs'])
+      channel.on('postgres_changes' as any, { event: '*', schema: 'public', table }, (p: any) =>
+        onChange({ table, type: String(p?.eventType || 'UPDATE'), id: String(p?.new?.id || p?.old?.id || ''), record: p?.eventType === 'DELETE' ? undefined : p?.new }));
     channel.subscribe((status: string) => log('realtime:', status));
     stopEvents = () => { void client.removeChannel(channel); };
   } else if (cfg.events === 'sse') {
@@ -547,10 +679,18 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
           const res = await fetch(`${cfg.url.replace(/\/$/, '')}/__events`, { signal: controller.signal });
           const reader = res.body!.getReader();
           log('sse: connected');
+          const decoder = new TextDecoder();
+          let buf = '';
           for (;;) {
             const { value, done } = await reader.read();
             if (done) break;
-            if (new TextDecoder().decode(value).includes('data:')) kick();
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split('\n');
+            buf = lines.pop() || '';
+            for (const line of lines) {
+              if (!line.startsWith('data:')) continue;
+              try { const ev = JSON.parse(line.slice(5)); onChange({ table: String(ev.table), type: String(ev.type || 'UPDATE'), id: String(ev.id || '') }); } catch { onChange(); }
+            }
           }
         } catch (e: any) { if (!stopped) log('sse: disconnected', e.message); }
         if (!stopped) await new Promise(r => setTimeout(r, 2000));
@@ -563,8 +703,8 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
     setInterval(() => void heartbeat(), HEARTBEAT_MS),
     setInterval(() => void confirmTick(), Math.min(CONFIRM_EVERY_MS, 60_000)),
   ];
-  void probe(true).then(() => { void heartbeat(); void plan(); void confirmTick(); });
-  log(`started (${cfg.events} trigger, sweep ${SWEEP_MS / 1000}s)`);
+  void probe(true).then(() => { void heartbeat(); void plan().then(() => confirmTick()); });
+  log(`started (${cfg.events} trigger, sweep ${SWEEP_MS / 1000}s, full reload ${FULL_RELOAD_MS / 1000}s)`);
 
   return {
     stop: () => { timers.forEach(clearInterval); stopEvents(); if (coalesce) clearTimeout(coalesce); },
