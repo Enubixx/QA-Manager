@@ -11,8 +11,6 @@ import {
   type Rx95SuggestionsData,
   syncTestPlanToSupabase,
   deleteTestPlanFromSupabase,
-  syncTestRunToSupabase,
-  syncArchivedRunToSupabase,
   deleteTestRunFromSupabase,
   deleteArchivedRunFromSupabase,
   syncBugLogToSupabase,
@@ -709,7 +707,7 @@ export function App() {
       setTestRuns(prev => prev.map(r => {
         if (r.planId === savedPlan.id && r.planName !== savedPlan.name) {
           const updated = { ...r, planName: savedPlan.name };
-          syncTestRunToSupabase(updated);
+          safeSyncTestRun(updated);
           return updated;
         }
         return r;
@@ -717,7 +715,7 @@ export function App() {
       setArchivedRuns(prev => prev.map(r => {
         if (r.planId === savedPlan.id && r.planName !== savedPlan.name) {
           const updated = { ...r, planName: savedPlan.name };
-          syncArchivedRunToSupabase(updated);
+          safeSyncArchivedRun(updated);
           return updated;
         }
         return r;
@@ -738,7 +736,7 @@ export function App() {
         startedAt: new Date().toISOString()
       };
       setTestRuns(prev => [newRun, ...prev]);
-      syncTestRunToSupabase(newRun);
+      safeSyncTestRun(newRun);
     }
 
     setSelectedPlanId(savedPlan.id);
@@ -789,7 +787,7 @@ export function App() {
       startedAt: new Date().toISOString()
     };
     setTestRuns(prev => [newRun, ...prev]);
-    syncTestRunToSupabase(newRun);
+    safeSyncTestRun(newRun);
   };
 
   const handleLoadSampleData = () => {
@@ -882,7 +880,7 @@ export function App() {
     };
 
     setArchivedRuns(prev => [completedRun, ...prev]);
-    syncArchivedRunToSupabase(completedRun);
+    safeSyncArchivedRun(completedRun);
   };
 
   const handleClearAllData = () => {
@@ -912,12 +910,12 @@ export function App() {
     if (data.testRuns && Array.isArray(data.testRuns)) {
       const validRuns = normalizeRuns(data.testRuns);
       setTestRuns(validRuns);
-      validRuns.forEach(syncTestRunToSupabase);
+      validRuns.forEach(safeSyncTestRun);
     }
     if (data.archivedRuns && Array.isArray(data.archivedRuns)) {
       const validArchived = normalizeRuns(data.archivedRuns);
       setArchivedRuns(validArchived);
-      validArchived.forEach(syncArchivedRunToSupabase);
+      validArchived.forEach(safeSyncArchivedRun);
     }
     if (data.bugLogs && Array.isArray(data.bugLogs)) {
       const validBugs = normalizeBugs(data.bugLogs);
@@ -1334,7 +1332,7 @@ export function App() {
             status: (remainingKeys === 0 ? 'not_started' : 'in_progress') as TestRun['status'],
             completedAt: remainingKeys === 0 ? undefined : run.completedAt
           };
-          syncTestRunToSupabase(updated);
+          safeSyncTestRun(updated);
           return updated;
         }
         return run;
@@ -1380,7 +1378,7 @@ export function App() {
             bugLogs: updatedBugs,
             status: (remainingKeys === 0 ? 'not_started' : run.status) as TestRun['status']
           };
-          syncArchivedRunToSupabase(updated);
+          safeSyncArchivedRun(updated);
           remainingRuns.push(updated);
         } else {
           remainingRuns.push(run);
@@ -1441,14 +1439,14 @@ export function App() {
     setTestRuns(prev => prev.map(r => {
       const hasBug = (r.bugLogs || []).some(b => b.id === bugId);
       const updated = { ...r, bugLogs: (r.bugLogs || []).filter(b => b.id !== bugId) };
-      if (hasBug) syncTestRunToSupabase(updated);
+      if (hasBug) safeSyncTestRun(updated);
       return updated;
     }));
 
     setArchivedRuns(prev => prev.map(r => {
       const hasBug = (r.bugLogs || []).some(b => b.id === bugId);
       const updated = { ...r, bugLogs: (r.bugLogs || []).filter(b => b.id !== bugId) };
-      if (hasBug) syncArchivedRunToSupabase(updated);
+      if (hasBug) safeSyncArchivedRun(updated);
       return updated;
     }));
   };
@@ -1483,14 +1481,14 @@ export function App() {
     setTestRuns(prev => prev.map(r => {
       if (!(r.bugLogs || []).some(b => updateMap.has(b.id))) return r;
       const updated = { ...r, bugLogs: (r.bugLogs || []).map(b => (b ? merge(b) : b)) };
-      syncTestRunToSupabase(updated);
+      safeSyncTestRun(updated);
       return updated;
     }));
 
     setArchivedRuns(prev => prev.map(r => {
       if (!(r.bugLogs || []).some(b => updateMap.has(b.id))) return r;
       const updated = { ...r, bugLogs: (r.bugLogs || []).map(b => (b ? merge(b) : b)) };
-      syncArchivedRunToSupabase(updated);
+      safeSyncArchivedRun(updated);
       return updated;
     }));
 
@@ -1541,7 +1539,7 @@ export function App() {
       const nextLogs = logs.map(applyTo);
       if (nextLogs.every((b, i) => b === logs[i])) return r;
       const updated = { ...r, bugLogs: nextLogs };
-      syncTestRunToSupabase(updated);
+      safeSyncTestRun(updated);
       return updated;
     }));
 
@@ -1550,7 +1548,7 @@ export function App() {
       const nextLogs = logs.map(applyTo);
       if (nextLogs.every((b, i) => b === logs[i])) return r;
       const updated = { ...r, bugLogs: nextLogs };
-      syncArchivedRunToSupabase(updated);
+      safeSyncArchivedRun(updated);
       return updated;
     }));
   };
@@ -1597,8 +1595,8 @@ export function App() {
       sync(updated);
       return updated;
     };
-    setTestRuns(prev => prev.map(r => mapRuns(r, syncTestRunToSupabase)));
-    setArchivedRuns(prev => prev.map(r => mapRuns(r, syncArchivedRunToSupabase)));
+    setTestRuns(prev => prev.map(r => mapRuns(r, safeSyncTestRun)));
+    setArchivedRuns(prev => prev.map(r => mapRuns(r, safeSyncArchivedRun)));
   };
 
   /** Merge `patch` into the CURRENT copy of one bug (e.g. the Filed stamp, status). */
@@ -1637,14 +1635,14 @@ export function App() {
     setTestRuns(prev => prev.map(r => {
       if (!r.bugLogs || r.bugLogs.length === 0) return r;
       const updated = { ...r, bugLogs: [] };
-      syncTestRunToSupabase(updated);
+      safeSyncTestRun(updated);
       return updated;
     }));
 
     setArchivedRuns(prev => prev.map(r => {
       if (!r.bugLogs || r.bugLogs.length === 0) return r;
       const updated = { ...r, bugLogs: [] };
-      syncArchivedRunToSupabase(updated);
+      safeSyncArchivedRun(updated);
       return updated;
     }));
   };
@@ -1806,7 +1804,7 @@ export function App() {
             ...r,
             bugLogs: exists ? (r.bugLogs || []).map(b => b.id === newBug.id ? keepWorker(b) : b) : [...(r.bugLogs || []), newBug]
           };
-          syncTestRunToSupabase(updatedRun);
+          safeSyncTestRun(updatedRun);
           return updatedRun;
         }
         return r;
@@ -1819,7 +1817,7 @@ export function App() {
             ...r,
             bugLogs: exists ? (r.bugLogs || []).map(b => b.id === newBug.id ? keepWorker(b) : b) : [...(r.bugLogs || []), newBug]
           };
-          syncArchivedRunToSupabase(updatedRun);
+          safeSyncArchivedRun(updatedRun);
           return updatedRun;
         }
         return r;
@@ -2052,7 +2050,7 @@ export function App() {
       });
       if (!modified) return run;
       const updatedRun = { ...run, results: nextResults, bugLogs: nextBugs };
-      syncTestRunToSupabase(updatedRun);
+      safeSyncTestRun(updatedRun);
       return updatedRun;
     }));
 
@@ -2077,7 +2075,7 @@ export function App() {
       });
       if (!modified) return run;
       const updatedRun = { ...run, results: nextResults, bugLogs: nextBugs };
-      syncArchivedRunToSupabase(updatedRun);
+      safeSyncArchivedRun(updatedRun);
       return updatedRun;
     }));
   };

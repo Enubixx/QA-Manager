@@ -147,6 +147,69 @@ export const enqueueOfflineMutation = (type: OfflineMutationType, payload: any) 
   saveOfflineQueue(queue);
 };
 
+/**
+ * Errors that will fail the same way on every retry: HTTP 4xx (except 408/429), and Postgres
+ * data/constraint/schema errors (22xxx e.g. 22P05 NUL in text, 23xxx, 42xxx). A missing optional
+ * column (42703 / PGRST204) stays retryable: the sync functions drop that column and the retry succeeds.
+ */
+export function isPermanentSyncError(err: any): boolean {
+  const status = Number(err?.status || err?.statusCode || 0);
+  if (status >= 400 && status < 500 && status !== 408 && status !== 429) return true;
+  const code = String(err?.code || '').toUpperCase();
+  if (code === '42703' || code === 'PGRST204') return false;
+  return /^(22|23|42)[0-9A-Z]{3}$/.test(code);
+}
+
+/** Dropped mutations are kept here (last 20, images stripped) for diagnosis instead of vanishing silently. */
+const FAILED_SYNCS_KEY = 'qa_failed_syncs';
+const MAX_FAILED_SYNCS = 20;
+const MAX_FAILED_PAYLOAD_CHARS = 50_000;
+
+export const getFailedSyncs = (): any[] => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(FAILED_SYNCS_KEY) || '[]');
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+};
+
+function recordFailedSync(mut: OfflineMutation, err: any, reason: 'permanent' | 'max-retries') {
+  try {
+    const stripped = stripBase64ImagesFromMutation(mut);
+    let payload: any = stripped.payload;
+    const json = JSON.stringify(payload ?? null);
+    if (json.length > MAX_FAILED_PAYLOAD_CHARS) payload = { truncated: true, chars: json.length, id: payload?.id ?? payload?.bug?.id };
+    const entry = {
+      at: new Date().toISOString(),
+      reason,
+      type: mut.type,
+      entity: getMutationEntityKey(mut),
+      code: err?.code ?? null,
+      status: err?.status ?? err?.statusCode ?? null,
+      message: String(err?.message || err || '').slice(0, 500),
+      retryCount: mut.retryCount || 0,
+      payload,
+    };
+    const next = [...getFailedSyncs(), entry].slice(-MAX_FAILED_SYNCS);
+    localStorage.setItem(FAILED_SYNCS_KEY, JSON.stringify(next));
+  } catch { /* storage full - the console.error below still records it */ }
+}
+
+/**
+ * A newer save of the same entity just succeeded: drop older queued copies so a later drain can't
+ * overwrite the fresh cloud data with a stale snapshot.
+ */
+function supersedeQueued(type: OfflineMutationType, payload: any, since: number) {
+  try {
+    const key = getMutationEntityKey({ id: '', type, payload, timestamp: since });
+    if (!key) return;
+    const queue = getOfflineQueue();
+    const next = queue.filter(m => !(getMutationEntityKey(m) === key && m.timestamp <= since));
+    if (next.length !== queue.length) saveOfflineQueue(next);
+  } catch { /* ignore */ }
+}
+
 let isDraining = false;
 
 export const drainOfflineQueue = async () => {
@@ -188,13 +251,13 @@ export const drainOfflineQueue = async () => {
         }
       } catch (err: any) {
         const nextRetry = (mut.retryCount || 0) + 1;
-        const status = Number(err?.status || err?.statusCode || 0);
-        const isPermanentClientError = status >= 400 && status < 500 && status !== 408 && status !== 429;
-        if (!isPermanentClientError && nextRetry < MAX_RETRY_COUNT) {
+        const permanent = isPermanentSyncError(err);
+        if (!permanent && nextRetry < MAX_RETRY_COUNT) {
           console.warn(`Failed to sync offline mutation (attempt ${nextRetry}/${MAX_RETRY_COUNT}), retaining in queue:`, mut.type, err);
           failedToRetain.push({ ...mut, retryCount: nextRetry });
         } else {
-          console.error('Dropping poison-pill offline mutation after max retries or permanent error:', mut.type, err);
+          console.error(`Dropping offline mutation (${permanent ? 'permanent error' : 'max retries'}); kept in localStorage '${FAILED_SYNCS_KEY}':`, mut.type, err);
+          recordFailedSync({ ...mut, retryCount: nextRetry }, err, permanent ? 'permanent' : 'max-retries');
         }
       }
     }
@@ -213,8 +276,10 @@ export const safeSyncTestRun = async (run: TestRun) => {
     enqueueOfflineMutation('syncTestRun', run);
     return;
   }
+  const startedAt = Date.now();
   try {
     await syncTestRunToSupabase(run);
+    supersedeQueued('syncTestRun', run, startedAt);
   } catch (e) {
     enqueueOfflineMutation('syncTestRun', run);
   }
@@ -225,8 +290,10 @@ export const safeSyncArchivedRun = async (run: TestRun) => {
     enqueueOfflineMutation('syncArchivedRun', run);
     return;
   }
+  const startedAt = Date.now();
   try {
     await syncArchivedRunToSupabase(run);
+    supersedeQueued('syncArchivedRun', run, startedAt);
   } catch (e) {
     enqueueOfflineMutation('syncArchivedRun', run);
   }
@@ -237,8 +304,10 @@ export const safeSyncBugLog = async (bug: BugLog) => {
     enqueueOfflineMutation('syncBugLog', bug);
     return;
   }
+  const startedAt = Date.now();
   try {
     await syncBugLogToSupabase(bug);
+    supersedeQueued('syncBugLog', bug, startedAt);
   } catch (e) {
     enqueueOfflineMutation('syncBugLog', bug);
   }
@@ -251,8 +320,10 @@ export const safePatchBugColumns = async (bug: BugLog, fields: BugWorkerField[])
     enqueueOfflineMutation('patchBugColumns', { bug, fields });
     return;
   }
+  const startedAt = Date.now();
   try {
     await patchBugWorkerColumns(bug, fields);
+    supersedeQueued('patchBugColumns', { bug, fields }, startedAt);
   } catch (e) {
     enqueueOfflineMutation('patchBugColumns', { bug, fields });
   }
