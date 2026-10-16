@@ -71,7 +71,7 @@ async function sendRx95(
   payload: object,
   onProgress?: (elapsedSec: number) => void,
   signal?: { cancelled: boolean },
-  what: 'summary' | 'refine' = 'summary'
+  what: 'summary' | 'refine' | 'match' = 'summary'
 ): Promise<Rx95Result> {
   const started = Date.now();
   const tick = () => onProgress?.(Math.round((Date.now() - started) / 1000));
@@ -122,4 +122,23 @@ export async function requestRx95Refine(
   if (batch.length === 0) return {};
   const { reply } = await sendRx95({ kind: 'refine', bugs: batch.map(toRefineInput) }, undefined, signal, 'refine');
   return parseRefineReply(reply, batch);
+}
+
+/**
+ * Asks RX95 which existing Buganizer bugs (in the plan's hotlist) a "Repro'd Issue" most likely
+ * reproduces. The bridge picks the hotlist from its own allowlist; the app only sends the bug and
+ * plan id. Resolves with at most 5 candidates (best first, only IDs the bridge shortlisted).
+ * Rejects when the plan has no hotlist or the bridge / RX95 fails.
+ */
+export async function requestRx95Match(
+  bug: BugLog,
+  planId: string | undefined,
+  signal?: { cancelled: boolean }
+): Promise<ReproMatches> {
+  const plan = String(planId || bug.planId || '');
+  if (!/^[\w-]{1,80}$/.test(plan)) throw new Error('This bug has no test plan, so RX95 does not know which hotlist to search.');
+  const { reply } = await sendRx95({ kind: 'match', bug: toMatchInput(bug), planId: plan }, undefined, signal, 'match');
+  const { meta, candidates } = parseMatchReply(reply);
+  if (!meta.hotlistId) throw new Error("RX95's match reply was incomplete (no hotlist). Try again.");
+  return { sig: bugTextSig(bug), hotlistId: meta.hotlistId, searched: meta.searched, at: new Date().toISOString(), candidates };
 }
