@@ -38,6 +38,10 @@ const slimBug = (b: BugLog) => ({
   testerName: b.testerName,
   deviceName: b.deviceName,
   timestamp: b.timestamp,
+  // Filed in Buganizer (confirmed or marked by hand, never pending): the report links that issue to this bug's line.
+  ...(b.filed?.issueId && /^\d{4,12}$/.test(String(b.filed.issueId))
+    ? { filedIssueId: String(b.filed.issueId), filedVia: b.filed.via === 'legacy' ? 'manual' : b.filed.via }
+    : {}),
 });
 
 /** Which plan and day the report covers - lets the bridge pull that day's Buganizer bugs. */

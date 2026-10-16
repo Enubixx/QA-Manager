@@ -882,7 +882,7 @@ export function getPlanPickerOptions(input: { plans: TestPlan[]; runs: TestRun[]
 // ---------------------------------------------------------------------------
 
 /** A real Buganizer bug linked into the report (structurally matches geminiService.FiledBug). */
-export interface ReportFiledBug { id: string; title: string; priority?: string; status?: string }
+export interface ReportFiledBug { id: string; title: string; priority?: string; status?: string; kind?: 'new' | 'follow-up' }
 /** One summarized issue shown as its own line item (structurally matches geminiService.ReportIssue). */
 export interface ReportLineItem { summary: string; count: number; filedBugs: ReportFiledBug[] }
 
@@ -893,6 +893,8 @@ const cleanBugTitle = (title: string) => {
   return stripped || (title || '').trim();
 };
 const priorityTag = (b: ReportFiledBug) => (b.priority && /^P[0-4]$/.test(b.priority) ? `[${b.priority}] ` : '');
+/** Existing bugs a Repro'd report was followed up on are marked "(updated)". */
+const updatedTag = (b: ReportFiledBug) => (b.kind === 'follow-up' ? '(updated) ' : '');
 const capFirst = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 const lineItemText = (item: ReportLineItem) => capFirst(item.count > 1 ? `${item.summary} (${item.count}x)` : item.summary);
 
@@ -932,9 +934,9 @@ export function buildCujReportText(data: CujReportData, opts: {
     let out = '';
     issuesOf(m).forEach(item => {
       out += `  • ${lineItemText(item)}\n`;
-      item.filedBugs.forEach(b => { out += `      ↳ b/${b.id} ${priorityTag(b)}${cleanBugTitle(b.title)}\n`; });
+      item.filedBugs.forEach(b => { out += `      ↳ b/${b.id} ${updatedTag(b)}${priorityTag(b)}${cleanBugTitle(b.title)}\n`; });
     });
-    filedOf(m).forEach(b => { out += `  • 🐞 Filed: b/${b.id} ${priorityTag(b)}${cleanBugTitle(b.title)}\n`; });
+    filedOf(m).forEach(b => { out += `  • 🐞 Filed: b/${b.id} ${updatedTag(b)}${priorityTag(b)}${cleanBugTitle(b.title)}\n`; });
     return out;
   };
 
@@ -1039,7 +1041,7 @@ export function buildCujReportText(data: CujReportData, opts: {
   const summaryHtml = (summary: string) =>
     `<div style="color: #475569; font-size: 12px; margin-top: 1px; margin-left: 12px;">↳ <i>Summary: ${escapeHtml(summary)}</i></div>`;
   const bugLinkHtml = (b: ReportFiledBug) =>
-    `<a href="${BUG_URL(b.id)}" style="color: #2563eb; text-decoration: none; font-weight: 600;">b/${escapeHtml(b.id)}</a> ${escapeHtml(priorityTag(b))}${escapeHtml(cleanBugTitle(b.title))}`;
+    `<a href="${BUG_URL(b.id)}" style="color: #2563eb; text-decoration: none; font-weight: 600;">b/${escapeHtml(b.id)}</a> ${escapeHtml(updatedTag(b))}${escapeHtml(priorityTag(b))}${escapeHtml(cleanBugTitle(b.title))}`;
   const lineItemsHtml = (m: CujMetric) => {
     let out = `<ul style="margin: 2px 0 2px 0; padding-left: 26px; color: #334155; font-size: 12px;">`;
     issuesOf(m).forEach(item => {

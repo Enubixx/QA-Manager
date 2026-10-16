@@ -33,7 +33,7 @@ const BATCH_CACHE_MAX_ENTRIES = 12;
 
 // Bump whenever the executive summary prompt or tone rules change, so that
 // cached summaries generated under the previous style are not reused.
-const PROMPT_STYLE_VERSION = 'v8-notable-once';
+const PROMPT_STYLE_VERSION = 'v9-followup-links';
 
 function stableHash(input: string): string {
   let h1 = 0xdeadbeef;
@@ -1263,12 +1263,38 @@ REQUIREMENTS:
   return fallback;
 }
 
-/** A real Buganizer bug filed on the report day (supplied by the RX95 bridge, never invented by the AI). */
+/** A real Buganizer bug linked into the report (supplied by the RX95 bridge or the QA bug itself, never invented by the AI). */
 export interface FiledBug {
   id: string;
   title: string;
   priority?: string;
   status?: string;
+  /** 'follow-up' = an existing bug a Repro'd report was followed up on (shown as "(updated)"). */
+  kind?: 'new' | 'follow-up';
+}
+
+/** Where a QA bug was filed: full BugLog (`filed`) or the slim summary payload (`filedIssueId`/`filedVia`). Pending filings don't count. */
+function filedInfoOf(b: any): { id: string; via: string } | null {
+  const fromBug = b?.filed && typeof b.filed === 'object' ? String(b.filed.issueId ?? '') : '';
+  const id = (fromBug || String(b?.filedIssueId ?? '')).replace(/[^\d]/g, '');
+  if (!/^\d{4,12}$/.test(id)) return null;
+  const via = String((fromBug ? b.filed.via : b?.filedVia) || 'manual');
+  return { id, via: ['follow-up', 'new', 'bundle', 'manual', 'legacy'].includes(via) ? via : 'manual' };
+}
+
+/** Local catalog entry for a QA bug's filed issue (used when the reply carries no catalog, e.g. the Gemini path). */
+function localFiledBug(b: any, info: { id: string; via: string }): FiledBug {
+  const kind: FiledBug['kind'] = info.via === 'follow-up' ? 'follow-up' : 'new';
+  const cand = Array.isArray(b?.reproMatches?.candidates) ? b.reproMatches.candidates.find((c: any) => String(c?.id) === info.id) : undefined;
+  const title = String(cand?.title || b?.refined?.title || b?.title || '').replace(/\s+/g, ' ').trim()
+    || condenseNoteFaithfully(String(b?.note || ''), 14) || `b/${info.id}`;
+  return {
+    id: info.id,
+    title: title.slice(0, 300),
+    priority: typeof cand?.priority === 'string' ? cand.priority.slice(0, 4) : undefined,
+    status: typeof cand?.status === 'string' ? cand.status.slice(0, 30) : undefined,
+    kind,
+  };
 }
 
 /** One summarized issue for a CUJ: shown as its own line item in the report. */
@@ -1365,6 +1391,16 @@ interface LabeledBug {
   n: number;
   note: string;
   step: string;
+  /** The Buganizer issue this QA bug was filed as / followed up on (attached to its issue line deterministically). */
+  filed?: { id: string; via: string; local: FiledBug };
+}
+
+/** One numbered bug that is already filed in Buganizer (the RX95 bridge tells RX95 not to re-link it elsewhere). */
+export interface FiledLink {
+  /** e.g. "F2 #3" */
+  label: string;
+  issueId: string;
+  via: string;
 }
 
 interface LabeledFeature {
@@ -1445,6 +1481,7 @@ function readFiledBugsCatalog(parsed: any): Map<string, FiledBug> {
       title: String(b?.title ?? '').replace(/\s+/g, ' ').trim().slice(0, 300),
       priority: typeof b?.priority === 'string' ? b.priority.slice(0, 4) : undefined,
       status: typeof b?.status === 'string' ? b.status.slice(0, 30) : undefined,
+      kind: b?.kind === 'follow-up' ? 'follow-up' : b?.kind === 'new' ? 'new' : undefined,
     });
   }
   return catalog;
@@ -1496,6 +1533,8 @@ function assembleBatchResult(
   const featureFiledBugs: Record<string, FiledBug[]> = {};
   let matchedCount = 0;
   let uncoveredCount = 0;
+  /** Filed issues already attached to a QA bug's line item (not repeated under "other"). */
+  const attachedAnywhere = new Set<string>();
 
   labeledFeatures.forEach((feature, index) => {
     const entry = byIndex.get(index + 1) || byName.get(feature.featureName.trim().toLowerCase());
@@ -1505,6 +1544,27 @@ function assembleBatchResult(
     const covered = new Set<number>();
     const merged = new Map<string, { summary: string; ids: Set<number>; filed: FiledBug[] }>();
     const usedInFeature = new Set<string>();
+    // Issues the QA bugs themselves were filed as / followed up on: attached to the line item that covers
+    // the bug (deterministic, never AI-guessed). Reserved up front so the AI can't link them elsewhere in this CUJ.
+    const filedByBug = new Map<number, FiledBug>();
+    for (const b of feature.bugs) {
+      if (!b.filed) continue;
+      const fromCatalog = catalog.get(b.filed.id);
+      filedByBug.set(b.n, fromCatalog ? { ...b.filed.local, ...fromCatalog, kind: fromCatalog.kind || b.filed.local.kind } : b.filed.local);
+      usedInFeature.add(b.filed.id);
+    }
+    const attached = new Set<string>();
+    /** This item's own filed issues (follow-ups first), each issue at most once per CUJ. */
+    const attachFor = (ids: Iterable<number>): FiledBug[] => {
+      const out: FiledBug[] = [];
+      Array.from(ids).sort((a, b) => a - b).forEach(n => {
+        const fb = filedByBug.get(n);
+        if (!fb || attached.has(fb.id)) return;
+        attached.add(fb.id);
+        out.push(fb);
+      });
+      return [...out.filter(f => f.kind === 'follow-up'), ...out.filter(f => f.kind !== 'follow-up')];
+    };
 
     const issues: any[] = Array.isArray(entry?.issues) ? entry.issues : [];
     for (const issue of issues) {
@@ -1532,11 +1592,11 @@ function assembleBatchResult(
     const lineItems: ReportIssue[] = [];
     merged.forEach(({ summary, ids, filed }) => {
       phrases.push(ids.size > 1 ? `${summary} (${ids.size}x)` : summary);
-      lineItems.push({ summary, count: ids.size, filedBugs: filed });
+      lineItems.push({ summary, count: ids.size, filedBugs: [...attachFor(ids), ...filed] });
     });
 
     // Guarantee coverage: any bug the model skipped is added from the tester's own note
-    const skipped = new Map<string, { phrase: string; count: number }>();
+    const skipped = new Map<string, { phrase: string; count: number; ids: number[] }>();
     for (const bug of feature.bugs) {
       if (covered.has(bug.n)) continue;
       const phrase = condenseNoteFaithfully(bug.note, 24);
@@ -1546,14 +1606,16 @@ function assembleBatchResult(
       const existing = skipped.get(key);
       if (existing) {
         existing.count += 1;
+        existing.ids.push(bug.n);
       } else {
-        skipped.set(key, { phrase, count: 1 });
+        skipped.set(key, { phrase, count: 1, ids: [bug.n] });
       }
     }
-    skipped.forEach(({ phrase, count }) => {
+    skipped.forEach(({ phrase, count, ids }) => {
       phrases.push(count > 1 ? `${phrase} (${count}x)` : phrase);
-      lineItems.push({ summary: phrase, count, filedBugs: [] });
+      lineItems.push({ summary: phrase, count, filedBugs: attachFor(ids) });
     });
+    attached.forEach(id => attachedAnywhere.add(id));
 
     const sentence = joinIssuePhrases(phrases);
     if (sentence) featureSummaries[feature.featureName] = sentence;
@@ -1570,14 +1632,14 @@ function assembleBatchResult(
     for (const [name, ids] of Object.entries(cujFiled)) {
       const cleanName = String(name).replace(/\s+/g, ' ').trim().slice(0, 200);
       if (!cleanName) continue;
-      const bugs = pickFiledBugs(ids, catalog);
+      const bugs = pickFiledBugs(ids, catalog).filter(b => !attachedAnywhere.has(b.id));
       if (bugs.length === 0) continue;
       const existing = featureFiledBugs[cleanName] || [];
       featureFiledBugs[cleanName] = [...existing, ...bugs.filter(b => !existing.some(e => e.id === b.id))];
     }
   }
 
-  const otherFiledBugs = pickFiledBugs(parsed?.otherFiledBugs, catalog);
+  const otherFiledBugs = pickFiledBugs(parsed?.otherFiledBugs, catalog).filter(b => !attachedAnywhere.has(b.id));
 
   const overallSummary = typeof parsed?.overallSummary === 'string'
     ? limitNotable(parsed.overallSummary.replace(/\s+/g, ' ').trim())
@@ -1604,6 +1666,10 @@ interface BatchSummaryRequest {
   /** Fingerprint of exactly the bugs in the prompt - detects replies to an outdated prompt. */
   reportId: string;
   buildOfflineOverall: () => string;
+  /** Numbered bugs already filed in Buganizer ("F2 #3" -> b/ID). */
+  filedLinks: FiledLink[];
+  /** Changes when any bug's filed issue changes (part of cache keys; not of the prompt). */
+  filedSig: string;
 }
 
 /**
@@ -1626,7 +1692,14 @@ function prepareBatchSummaryRequest(
       healthScorePct: f.healthScorePct,
       totalStepsExecuted: f.totalStepsExecuted,
       notes: (f.bugs || [])
-        .map(b => ({ note: cleanNoteForPrompt(b.note), step: (b.stepTitle || '').replace(/\s+/g, ' ').trim() }))
+        .map(b => {
+          const info = filedInfoOf(b);
+          return {
+            note: cleanNoteForPrompt(b.note),
+            step: (b.stepTitle || '').replace(/\s+/g, ' ').trim(),
+            filed: info ? { ...info, local: localFiledBug(b, info) } : undefined,
+          };
+        })
         .filter(b => b.note.length > 0)
     }))
     .filter(f => f.notes.length > 0)
@@ -1635,8 +1708,11 @@ function prepareBatchSummaryRequest(
       featureName: f.featureName,
       healthScorePct: f.healthScorePct,
       totalStepsExecuted: f.totalStepsExecuted,
-      bugs: f.notes.map((b, j) => ({ n: j + 1, note: b.note, step: b.step }))
+      bugs: f.notes.map((b, j) => ({ n: j + 1, note: b.note, step: b.step, ...(b.filed ? { filed: b.filed } : {}) }))
     }));
+  const filedLinks: FiledLink[] = labeledFeatures.flatMap(f =>
+    f.bugs.filter(b => b.filed).map(b => ({ label: `${f.id} #${b.n}`, issueId: b.filed!.id, via: b.filed!.via })));
+  const filedSig = filedLinks.map(l => `${l.label}=${l.issueId}:${l.via}`).join(',');
 
   // Format all defect logs cleanly grouped by feature
   const formattedFeaturesList = labeledFeatures.map(f => {
@@ -1715,7 +1791,7 @@ Return ONLY the JSON object.`;
 
   const reportId = `QA-${stableHash(`${PROMPT_STYLE_VERSION}|${context?.scopeKey ?? ''}|${cleanFeaturesSummary}|${formattedFeaturesList}`)}`;
 
-  return { labeledFeatures, formattedFeaturesList, cleanFeaturesSummary, prompt, reportId, buildOfflineOverall };
+  return { labeledFeatures, formattedFeaturesList, cleanFeaturesSummary, prompt, reportId, buildOfflineOverall, filedLinks, filedSig };
 }
 
 /**
@@ -1745,7 +1821,8 @@ export async function generateBatchExecutiveSummaryWithGemini(
     formattedFeaturesList,
     cleanFeaturesSummary,
     prompt,
-    buildOfflineOverall
+    buildOfflineOverall,
+    filedSig
   } = prepareBatchSummaryRequest(features, allBugs, context);
 
   const userApiKey = getStoredGeminiApiKey();
@@ -1757,7 +1834,7 @@ export async function generateBatchExecutiveSummaryWithGemini(
   // invalidates previously cached summaries instead of serving stale-style text.
   // The report scope (plan + day) is part of it too, so another scope never reuses it.
   const cacheKey = stableHash(
-    `${PROMPT_STYLE_VERSION}|${context?.scopeKey ?? ''}|${userApiKey}|${preferredModel}|${cleanFeaturesSummary}|${formattedFeaturesList}`
+    `${PROMPT_STYLE_VERSION}|${context?.scopeKey ?? ''}|${userApiKey}|${preferredModel}|${cleanFeaturesSummary}|${formattedFeaturesList}|${filedSig}`
   );
   const cached = readBatchCache(cacheKey);
   if (cached) {
@@ -1883,6 +1960,8 @@ export interface ChatSummaryPrompt {
   reportId: string;
   cujCount: number;
   bugCount: number;
+  /** Numbered bugs already filed in Buganizer (the RX95 bridge adds catalog entries + prompt hints for them). */
+  filedLinks: FiledLink[];
 }
 
 /**
@@ -1908,7 +1987,8 @@ This request comes through a chat window, so:
     prompt,
     reportId: request.reportId,
     cujCount: request.labeledFeatures.length,
-    bugCount: request.labeledFeatures.reduce((sum, f) => sum + f.bugs.length, 0)
+    bugCount: request.labeledFeatures.reduce((sum, f) => sum + f.bugs.length, 0),
+    filedLinks: request.filedLinks
   };
 }
 
