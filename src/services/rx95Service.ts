@@ -1,5 +1,6 @@
-import type { BugLog, RefinedBugText } from '../types';
-import { REFINE_MAX_BUGS_PER_REQUEST, parseRefineReply, toRefineInput } from '../utils/bugRefine';
+import type { BugLog, RefinedBugText, ReproMatches } from '../types';
+import { REFINE_MAX_BUGS_PER_REQUEST, bugTextSig, parseRefineReply, toRefineInput } from '../utils/bugRefine';
+import { parseMatchReply, toMatchInput } from '../utils/reproMatch';
 import type { FeaturePayload, SummaryScopeContext } from './geminiService';
 import { supabase } from '../lib/supabase';
 
