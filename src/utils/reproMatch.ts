@@ -9,7 +9,7 @@ import { bugTextSig } from './bugRefine';
  * Pipeline: hotlist bugs -> shortlist(top 25 by fuzzy word overlap + same CUJ) -> full
  * descriptions -> RX95 judges symptom / trigger / CUJ -> at most 5 ranked candidates.
  */
-export const MATCH_STYLE_VERSION = 'm1';
+export const MATCH_STYLE_VERSION = 'm2';
 export const MATCH_SHORTLIST_SIZE = 30;
 export const MATCH_MAX_RESULTS = 5;
 export const MATCH_MIN_UNLIKELY_CONFIDENCE = 25;
@@ -276,7 +276,7 @@ HOW TO JUDGE each candidate against the QA bug - compare three things:
 2. TRIGGER: what the user was doing when it happened (the command, app, action or condition).
 3. CUJ / feature area.
 Verdicts:
-- "very_likely": the SAME symptom AND the SAME trigger (same feature/action). Specific details agree (app, command, error, what Gemini said or did). If the symptom differs OR the trigger differs, it can NEVER be "very_likely" - at most "possible".
+- "very_likely": the SAME symptom AND the SAME trigger (same feature/action). Specific details agree (app, command, error, what Gemini said or did). If the symptom differs OR the trigger differs, it can NEVER be "very_likely" - at most "possible". The symptom differs when one bug has a major failure the other does not mention (e.g. one crashes, freezes or ends the session and the other just repeats itself or answers wrongly).
 - "possible": clearly related (same symptom with a vaguer or slightly different trigger, or same trigger with a related symptom), but you cannot be sure it is the same bug.
 - "unlikely": only shares the feature area or generic words.
 Confidence (0-100) is how sure you are that it is the same bug: very_likely 80-100, possible 35-79, unlikely 0-34. At most one or two candidates per QA bug should be very_likely; when several look alike, prefer the most specific match.
