@@ -32,6 +32,35 @@ export interface BuildEnvironment {
   capturedAt?: string;
 }
 
+export interface BugFiled {
+  /** Buganizer issue number, digits only (optional for manual stamps). */
+  issueId?: string;
+  at: string;
+  by?: string;
+  via: 'manual' | 'follow-up' | 'new' | 'legacy';
+}
+
+export interface ReproCandidate {
+  id: string;
+  title: string;
+  status?: string;
+  priority?: string;
+  /** 0-100 */
+  confidence: number;
+  verdict: 'very_likely' | 'possible' | 'unlikely';
+  reason: string;
+}
+
+export interface ReproMatches {
+  /** bugTextSig() of the bug when checked */
+  sig: string;
+  hotlistId: string;
+  /** How many hotlist bugs were considered */
+  searched: number;
+  at: string;
+  candidates: ReproCandidate[];
+}
+
 export interface RefinedBugText {
   sig: string;
   title: string;
@@ -65,7 +94,12 @@ export interface BugLog {
   formattedTime: string; // Human readable time
   bugType?: 'Bug' | 'Setup Issue' | 'Known Issue' | 'Feature Request' | 'Misc Issue';
   priority?: 'P0' | 'P1' | 'P2' | '0' | '1' | '2';
+  /** Triage status. 'Filed' is legacy (now shown as the `filed` stamp); new values are 'New' | "Repro'd Issue". */
   status?: 'Filed' | 'New' | "Repro'd Issue";
+  /** Set when the bug is filed in Buganizer (Bugs Feed "Filed" switch, a follow-up, or "Filed as b/"). Filed bugs are hidden on the Buganizer tab. */
+  filed?: BugFiled;
+  /** RX95's possible existing Buganizer bugs for a "Repro'd Issue" (valid while `sig` matches the bug text). */
+  reproMatches?: ReproMatches;
   environment?: BuildEnvironment;
 }
 
