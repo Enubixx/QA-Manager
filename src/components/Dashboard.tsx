@@ -1,6 +1,7 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota, RefinedBugText } from '../types';
+import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota, RefinedBugText, ReproMatches } from '../types';
+import { REPROD, TRIAGE_STATUS_OPTIONS, effectiveFiled, effectiveStatus, filedPatch, filedStampLine, newFiled, normalizeIssueId } from '../utils/reproFollowUp';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers, FileSpreadsheet, ExternalLink, MessageSquareText, ClipboardPaste, Bot } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard, copySingleBugToClipboard } from '../utils/exportUtils';
 import { isRunFullyCompleted, buildStepFirstSeenIndex } from '../utils/runUtils';
@@ -40,6 +41,10 @@ interface DashboardProps {
   onUpdateBugLog?: (updatedBug: BugLog | BugLog[]) => void;
   /** Sets only `refined` on bugs whose current text still matches each refinement's sig. */
   onApplyBugRefinements?: (refinements: Record<string, RefinedBugText>) => void;
+  /** Merges a patch into the CURRENT copy of one bug (Filed stamp, status). */
+  onPatchBugLog?: (bugId: string, patch: Partial<BugLog>) => void;
+  /** Sets only `reproMatches` on bugs whose current text still matches each result's sig. */
+  onApplyReproMatches?: (matches: Record<string, ReproMatches>) => void;
   onWipeAllBugs?: () => void;
   onClonePlan: (planId: string) => void;
   onEditPlan?: (plan: TestPlan) => void;
@@ -90,6 +95,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onDeleteBug,
   onUpdateBugLog,
   onApplyBugRefinements,
+  onPatchBugLog,
+  onApplyReproMatches,
   onWipeAllBugs,
   onClonePlan,
   onEditPlan,
@@ -441,6 +448,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return {};
   });
 
+  // Unsaved "b/ issue number" inputs next to the Filed switch (per bug)
+  const [filedIssueDrafts, setFiledIssueDrafts] = useState<Record<string, string>>({});
+
   const handleUpdateBugCategorization = (bugId: string, field: 'bugType' | 'priority' | 'status', value: any) => {
     setBugCategorizations(prev => {
       const existing = prev[bugId] || {};
@@ -457,11 +467,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
       } catch (e) {}
       const targetBug = bugLogs.find(b => b.id === bugId);
       if (targetBug && onUpdateBugLog) {
+        // A status change on a bug with the legacy stored status 'Filed' keeps its Filed stamp as real data.
+        const keepLegacyFiled = field === 'status' && targetBug.status === 'Filed' && !targetBug.filed
+          ? { filed: { via: 'legacy' as const, at: targetBug.timestamp } }
+          : {};
         onUpdateBugLog({
           ...targetBug,
+          ...keepLegacyFiled,
           bugType: nextCat.bugType || targetBug.bugType || 'Bug',
           priority: nextCat.priority || targetBug.priority || (targetBug.severity === 'critical' ? 'P0' : targetBug.severity === 'high' ? 'P1' : 'P2'),
-          status: nextCat.status || targetBug.status || 'Filed'
+          // No default: 'Filed' used to be written here even when only type/priority changed
+          status: nextCat.status || targetBug.status
         });
       }
       return updated;
@@ -520,7 +536,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
           imageUrl: (b.imageUrl && b.imageUrl.startsWith('data:')) ? undefined : b.imageUrl,
           bugType: cat?.bugType || b.bugType || 'Bug',
           priority: cat?.priority || b.priority || (b.severity === 'critical' ? 'P0' : b.severity === 'high' ? 'P1' : 'P2'),
-          status: cat?.status || b.status || 'Filed'
+          // Sheet column: 'Filed' when stamped (or legacy), else New / Repro'd Issue
+          status: effectiveFiled(b) ? 'Filed' : effectiveStatus(cat?.status || b.status)
         };
       });
 
@@ -551,7 +568,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 syncedToSheet: true,
                 bugType: cat?.bugType || b.bugType || 'Bug',
                 priority: cat?.priority || b.priority || (b.severity === 'critical' ? 'P0' : b.severity === 'high' ? 'P1' : 'P2'),
-                status: cat?.status || b.status || 'Filed'
+                status: cat?.status || b.status
               };
             });
             onUpdateBugLog(markedSynced);
@@ -1511,7 +1528,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         ...b,
         bugType: cat?.bugType || b.bugType || 'Bug',
         priority: cat?.priority || b.priority || (b.severity === 'critical' ? 'P0' : b.severity === 'high' ? 'P1' : 'P2'),
-        status: cat?.status || b.status || 'Filed'
+        status: cat?.status || b.status
       };
     });
 
@@ -3826,7 +3843,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
       {activeTab === 'bugs' && BUGANIZER_ENABLED && bugsView === 'buganizer' && (
-        <BuganizerTriage bugs={bugLogs} plans={testPlans} onApplyRefinements={onApplyBugRefinements} />
+        <BuganizerTriage bugs={bugLogs} plans={testPlans} onApplyRefinements={onApplyBugRefinements} onPatchBugLog={onPatchBugLog} onApplyReproMatches={onApplyReproMatches} />
       )}
 
       {/* Tab 3: Bugs Feed */}
@@ -4374,16 +4391,22 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   <div>
                                     <label className="text-[10px] uppercase font-mono text-slate-400 block font-semibold mb-1">Status</label>
                                     <select
-                                      value={bugCategorizations[bug.id]?.status || bug.status || 'Filed'}
+                                      data-testid="feed-status"
+                                      value={effectiveStatus(bugCategorizations[bug.id]?.status || bug.status)}
                                       onChange={e => handleUpdateBugCategorization(bug.id, 'status', e.target.value)}
-                                      className="w-full bg-[#0f172a] border border-slate-700/80 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 font-semibold focus:outline-none focus:border-blue-500 cursor-pointer"
+                                      className={`w-full bg-[#0f172a] border rounded-xl px-2.5 py-1.5 text-xs font-semibold focus:outline-none focus:border-blue-500 cursor-pointer ${effectiveStatus(bugCategorizations[bug.id]?.status || bug.status) === REPROD ? 'border-violet-500/70 text-violet-200 bg-violet-500/10' : 'border-slate-700/80 text-slate-200'}`}
                                     >
-                                      {(['Filed', 'New', "Repro'd Issue"] as const).map(opt => (
+                                      {TRIAGE_STATUS_OPTIONS.map(opt => (
                                         <option key={opt} value={opt} className="bg-slate-900">{opt}</option>
                                       ))}
                                     </select>
                                   </div>
                                 </div>
+                                {effectiveStatus(bugCategorizations[bug.id]?.status || bug.status) === REPROD && (
+                                  <p className="text-[11px] text-slate-400" data-testid="feed-repro-hint">
+                                    💡 "Repro'd Issue" tells RX95 to look for an existing Buganizer bug in this plan's hotlist (shown on the Buganizer tab).
+                                  </p>
+                                )}
                               </div>
 
                               {/* Evidence Image Preview Box */}
@@ -4408,6 +4431,59 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                     No Photo Attached
                                   </div>
                                 )}
+                                {(() => {
+                                  // Filed stamp: from the stored bug (a legacy stored status 'Filed' counts as filed)
+                                  const rawBug = bugLogs.find(b => b.id === bug.id) || bug;
+                                  const filed = effectiveFiled(rawBug);
+                                  const canEdit = !!(onPatchBugLog || onUpdateBugLog);
+                                  const setFiled = (next: ReturnType<typeof effectiveFiled>) => {
+                                    const patch = filedPatch(rawBug, next);
+                                    if (onPatchBugLog) onPatchBugLog(bug.id, patch);
+                                    else if (onUpdateBugLog) onUpdateBugLog({ ...rawBug, ...patch });
+                                  };
+                                  const draftId = filedIssueDrafts[bug.id] ?? '';
+                                  return (
+                                    <div data-testid="feed-filed" className="mt-3">
+                                      {filed && (
+                                        <div data-testid="feed-filed-stamp" className="mt-1 mb-2 border-4 border-green-500 text-green-500 rounded-[14px] py-2.5 text-center font-black text-[34px] tracking-[0.25em] -rotate-3 bg-green-500/[0.08] shadow-[0_0_30px_rgba(34,197,94,0.25)] select-none">
+                                          FILED
+                                          {filedStampLine(filed) && <small className="block text-[11px] tracking-normal font-bold text-green-300 mt-0.5">{filedStampLine(filed)}</small>}
+                                        </div>
+                                      )}
+                                      <label className={`flex items-center gap-2.5 mt-2 text-xs font-bold text-slate-200 ${canEdit ? 'cursor-pointer' : 'opacity-60'}`}>
+                                        <button
+                                          type="button"
+                                          role="switch"
+                                          aria-checked={!!filed}
+                                          data-testid="feed-filed-toggle"
+                                          disabled={!canEdit}
+                                          onClick={() => {
+                                            if (filed) setFiled(undefined);
+                                            else {
+                                              setFiled(newFiled('manual', draftId));
+                                              setFiledIssueDrafts(prev => { const n = { ...prev }; delete n[bug.id]; return n; });
+                                            }
+                                          }}
+                                          className={`relative w-10 h-[22px] rounded-full transition flex-shrink-0 ${filed ? 'bg-green-500' : 'bg-slate-700'}`}
+                                        >
+                                          <span className={`absolute top-[3px] w-4 h-4 rounded-full bg-white transition-all ${filed ? 'right-[3px]' : 'left-[3px]'}`} />
+                                        </button>
+                                        {filed ? <>Filed <span className="text-[11px] font-medium text-slate-400">(hidden from the Buganizer tab)</span></> : 'Mark as filed'}
+                                      </label>
+                                      {!filed && canEdit && (
+                                        <input
+                                          data-testid="feed-filed-issue"
+                                          aria-label="Filed b/ issue number"
+                                          value={draftId}
+                                          inputMode="numeric"
+                                          onChange={e => setFiledIssueDrafts(prev => ({ ...prev, [bug.id]: normalizeIssueId(e.target.value) }))}
+                                          placeholder="b/ issue number (optional)"
+                                          className="mt-2 w-full bg-[#0f172a] border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-green-500"
+                                        />
+                                      )}
+                                    </div>
+                                  );
+                                })()}
                               </div>
                             </div>
 

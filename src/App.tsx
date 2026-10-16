@@ -3,7 +3,7 @@ import { Dashboard } from './components/Dashboard';
 import { PlanBuilder } from './components/PlanBuilder';
 import { MobileTester } from './components/MobileTester';
 import { SAMPLE_PLANS, SAMPLE_RUNS, SAMPLE_BUG_LOGS } from './data/mockData';
-import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, RefinedBugText } from './types';
+import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, RefinedBugText, ReproMatches } from './types';
 import { bugTextSig } from './utils/bugRefine';
 import {
   fetchAllSupabaseData,
@@ -1528,6 +1528,63 @@ export function App() {
     }));
   };
 
+  /**
+   * Applies `applyTo` to every copy of each bug (bugLogs, test runs, archived runs) inside the
+   * functional state updates, so it always works on the CURRENT bug, never a stale copy. Changed
+   * bugs are persisted and synced like handleUpdateBugLog (bug sync deduped per call because
+   * StrictMode runs state updaters twice).
+   */
+  const patchSyncedRef = useRef<Set<string>>(new Set());
+  const applyBugTransform = (applyTo: (b: BugLog) => BugLog) => {
+    const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    markUserMutation();
+    setBugLogs(prev => {
+      let changed = false;
+      const next = prev.map(b => { const u = b ? applyTo(b) : b; if (u !== b) changed = true; return u; });
+      if (!changed) return prev;
+      safeSetStorageItem(
+        'qa_bug_logs',
+        JSON.stringify(next),
+        () => JSON.stringify(next.map((b, idx) => (idx >= 5 && b?.imageUrl?.startsWith('data:')) ? { ...b, imageUrl: undefined } : b))
+      );
+      next.forEach((b, i) => {
+        if (b === prev[i]) return;
+        const key = `${token}|${b.id}`;
+        if (patchSyncedRef.current.has(key)) return;
+        patchSyncedRef.current.add(key);
+        safeSyncBugLog(b);
+      });
+      return next;
+    });
+    const mapRuns = <R extends { bugLogs?: BugLog[] }>(r: R, sync: (r: R) => void): R => {
+      const logs = r.bugLogs || [];
+      const nextLogs = logs.map(b => (b ? applyTo(b) : b));
+      if (nextLogs.every((b, i) => b === logs[i])) return r;
+      const updated = { ...r, bugLogs: nextLogs };
+      sync(updated);
+      return updated;
+    };
+    setTestRuns(prev => prev.map(r => mapRuns(r, syncTestRunToSupabase)));
+    setArchivedRuns(prev => prev.map(r => mapRuns(r, syncArchivedRunToSupabase)));
+  };
+
+  /** Merge `patch` into the CURRENT copy of one bug (e.g. the Filed stamp, status). */
+  const handlePatchBugLog = (bugId: string, patch: Partial<BugLog>) => {
+    if (!bugId || !patch) return;
+    applyBugTransform(b => (b.id === bugId ? { ...b, ...patch, id: b.id } : b));
+  };
+
+  /** RX95 repro matches: sets ONLY `reproMatches`, and only while the bug's text still matches `sig`. */
+  const handleApplyReproMatches = (matches: Record<string, ReproMatches>) => {
+    if (!matches || Object.keys(matches).length === 0) return;
+    applyBugTransform(b => {
+      const m = matches[b.id];
+      if (!m || bugTextSig(b) !== m.sig) return b;
+      if (b.reproMatches && b.reproMatches.sig === m.sig && b.reproMatches.at === m.at) return b;
+      return { ...b, reproMatches: m };
+    });
+  };
+
   const handleWipeAllBugs = () => {
     markUserMutation();
     const wipedAt = Date.now();
@@ -2010,6 +2067,8 @@ export function App() {
             onDeleteBug={handleDeleteBug}
             onUpdateBugLog={handleUpdateBugLog}
             onApplyBugRefinements={handleApplyBugRefinements}
+            onPatchBugLog={handlePatchBugLog}
+            onApplyReproMatches={handleApplyReproMatches}
             onWipeAllBugs={handleWipeAllBugs}
             onClonePlan={handleClonePlan}
             onEditPlan={handleEditPlan}

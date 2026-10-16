@@ -1,5 +1,6 @@
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile } from '../types';
 import { getLocalDateStr } from './dateUtils';
+import { effectiveFiled, effectiveStatus } from './reproFollowUp';
 
 /**
  * Escapes HTML special characters to prevent XSS and attribute breakout in rich clipboard HTML.
@@ -259,7 +260,8 @@ export const getBugCategorization = (bug: BugLog) => {
     else if (bug.severity === 'high') priority = 'P1';
     else priority = 'P2';
   }
-  const status = bug.status || 'Filed';
+  // 'Filed' now comes from the filed stamp (or a legacy stored status); otherwise New / Repro'd Issue
+  const status = effectiveFiled(bug) ? 'Filed' : effectiveStatus(bug.status);
   return { bugType, priority, status };
 };
 

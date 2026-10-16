@@ -36,6 +36,8 @@ export interface BuganizerDraft {
   textEdited?: boolean;
   /** `at` of the RX95 refinement currently applied to title/description, if any. */
   refinedAt?: string;
+  /** "Repro'd Issue" bugs: the user chose "None of these: file as new bug" (show the new-issue draft instead of RX95 matches). */
+  fileAsNew?: boolean;
   updatedAt: number;
 }
 

@@ -1,7 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Bug, CheckCircle2, Copy, ExternalLink, Eye, Filter, Search, ShieldCheck, Sparkles, X } from 'lucide-react';
-import type { BugLog, RefinedBugText, TestPlan } from '../types';
-import { isRx95Available, requestRx95Refine } from '../services/rx95Service';
+import { Bug, CheckCircle2, Copy, ExternalLink, Eye, Filter, Repeat, Search, ShieldCheck, Sparkles, X } from 'lucide-react';
+import type { BugLog, RefinedBugText, ReproCandidate, ReproMatches, TestPlan } from '../types';
+import { isRx95Available, requestRx95Match, requestRx95Refine } from '../services/rx95Service';
+import {
+  REPROD,
+  buildFollowUpComment,
+  currentReproMatches,
+  effectiveFiled,
+  effectiveStatus,
+  filedStampLine,
+  followUpUrl,
+  issueUrl,
+  minutesAgo,
+  newFiled,
+} from '../utils/reproFollowUp';
 import { bugTextSig, currentRefinement, isAutoRefineOn, loadRefineCache, saveRefineCache, setAutoRefineOn } from '../utils/bugRefine';
 import {
   BUGANIZER_COMPONENTS,
@@ -40,7 +52,20 @@ interface Props {
    * (even after this view unmounted) never overwrite it.
    */
   onApplyRefinements?: (refinements: Record<string, RefinedBugText>) => void;
+  /** Merges a patch into the CURRENT copy of a bug (used for the Filed stamp). */
+  onPatchBugLog?: (bugId: string, patch: Partial<BugLog>) => void;
+  /** Persists RX95 repro matches (App sets only `reproMatches`, and only while the bug text matches `sig`). */
+  onApplyReproMatches?: (matches: Record<string, ReproMatches>) => void;
 }
+
+/** Max RX95 repro checks one page visit makes on its own (one bug per request). */
+const MAX_AUTO_MATCHES = 10;
+const VERDICT_LABEL: Record<ReproCandidate['verdict'], string> = { very_likely: 'Very likely', possible: 'Possible', unlikely: 'Unlikely' };
+const VERDICT_STYLE: Record<ReproCandidate['verdict'], string> = {
+  very_likely: 'bg-green-500/15 text-green-300 border-green-500/40',
+  possible: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+  unlikely: 'bg-slate-500/20 text-slate-300 border-slate-600',
+};
 
 /** Max RX95 refine requests one page visit will make on its own (each covers up to 25 bugs). */
 const MAX_AUTO_REFINE_BATCHES = 4;
@@ -63,7 +88,7 @@ const topComponents = BUGANIZER_COMPONENTS.slice(0, TOP_COMPONENT_COUNT);
 const otherComponents = BUGANIZER_COMPONENTS.slice(TOP_COMPONENT_COUNT).sort((a, b) => a.name.localeCompare(b.name));
 const pathTail = (path: string) => path.split(' > ').slice(-2, -1)[0] || '';
 
-export default function BuganizerTriage({ bugs, plans, onApplyRefinements }: Props) {
+export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPatchBugLog, onApplyReproMatches }: Props) {
   const planName = (id?: string) => plans.find(p => p.id === id)?.name || id || 'Unknown plan';
   const [drafts, setDrafts] = useState<Record<string, BuganizerDraft>>(() => loadDrafts());
   const [tester, setTester] = useState('all');
@@ -97,6 +122,21 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements }: Pro
   // Latest handler, so a reply that arrives after unmount still reaches App's sig-guarded apply.
   const applyRef = useRef(onApplyRefinements);
   applyRef.current = onApplyRefinements;
+  const applyMatchesRef = useRef(onApplyReproMatches);
+  applyMatchesRef.current = onApplyReproMatches;
+
+  // Filed bugs (stamp, follow-up, "Filed as b/", or legacy status 'Filed') are hidden unless shown.
+  const [showFiled, setShowFiled] = useState(false);
+  // RX95 repro matches: results also kept here so they show even before App persists them.
+  const [matchCache, setMatchCache] = useState<Record<string, ReproMatches>>({});
+  const [matchState, setMatchState] = useState<Record<string, { running?: boolean; error?: string }>>({});
+  const [matchPaused, setMatchPaused] = useState<string | undefined>();
+  const [picked, setPicked] = useState<Record<string, string>>({});
+  const [commentOpen, setCommentOpen] = useState<Set<string>>(new Set());
+  const matchAttempted = useRef<Set<string>>(new Set());
+  const matchBusy = useRef(false);
+  const matchCount = useRef(0);
+  const [matchTick, setMatchTick] = useState(0);
 
   const refinedFor = (bug: BugLog) => currentRefinement(bug, refineCache);
   const ctxFor = (bug: BugLog) => ({ planId: bug.planId, planName: planName(bug.planId), cujName: bug.feature || 'General', refined: refinedFor(bug) });
@@ -119,7 +159,19 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements }: Pro
   const cujs = useMemo(() => Array.from(new Set(bugs.map(b => b.feature || 'General'))).sort(), [bugs]);
   const planIds = useMemo(() => Array.from(new Set(bugs.map(b => b.planId).filter(Boolean))), [bugs]);
 
-  const visible = useMemo(() => {
+  const isFiled = (b: BugLog) => !!effectiveFiled(b);
+  /** "Repro'd Issue" bugs show RX95's possible existing bugs instead of a new-issue draft. */
+  const isReproRow = (b: BugLog) => !isFiled(b) && effectiveStatus(b.status) === REPROD && !draftFor(b).fileAsNew;
+  const matchesFor = (b: BugLog): ReproMatches | undefined => {
+    const onBug = currentReproMatches(b);
+    const local = matchCache[b.id];
+    const localOk = local && local.sig === bugTextSig(b) ? local : undefined;
+    if (onBug && localOk) return localOk.at > onBug.at ? localOk : onBug;
+    return onBug || localOk;
+  };
+
+  /** Everything matching the filters, filed or not. */
+  const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return bugs
       .filter(b => (b.note || '').trim())
@@ -132,6 +184,9 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements }: Pro
       .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bugs, tester, planId, day, cuj, stateFilter, query, drafts]);
+  const filedCount = useMemo(() => filtered.filter(isFiled).length, [filtered]);
+  const visible = useMemo(() => (showFiled ? filtered : filtered.filter(b => !isFiled(b))), [filtered, showFiled]);
+  const reproRows = visible.filter(isReproRow);
 
   const counts = useMemo(() => {
     const c: Record<DraftState, number> = { draft: 0, ready: 0, opened: 0, filed: 0 };
@@ -185,7 +240,76 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements }: Pro
   };
   const refinedVisible = visible.filter(b => refinedFor(b)).length;
 
-  const selectedVisible = visible.filter(b => selected.has(b.id));
+  /** Ask RX95 for possible existing bugs (auto: one at a time, newest first; manual: re-check). */
+  const runMatch = (bug: BugLog, auto: boolean) => {
+    matchAttempted.current.add(`${bug.id}|${bugTextSig(bug)}`);
+    if (auto) { matchBusy.current = true; matchCount.current += 1; }
+    setMatchState(s => ({ ...s, [bug.id]: { running: true } }));
+    requestRx95Match(bug, bug.planId, { cancelled: false })
+      .then(m => {
+        // App applies only `reproMatches`, checked against the bug's CURRENT text (never a stale copy).
+        applyMatchesRef.current?.({ [bug.id]: m });
+        if (mountedRef.current) {
+          setMatchCache(prev => ({ ...prev, [bug.id]: m }));
+          setMatchState(s => ({ ...s, [bug.id]: {} }));
+        }
+      })
+      .catch(err => {
+        if (!mountedRef.current) return;
+        const msg = String(err?.message || err);
+        setMatchState(s => ({ ...s, [bug.id]: { error: msg } }));
+        if (auto) setMatchPaused(msg);
+      })
+      .finally(() => {
+        if (auto) matchBusy.current = false;
+        if (mountedRef.current) setMatchTick(t => t + 1);
+      });
+  };
+
+  useEffect(() => {
+    if (!rx95Ready || matchPaused || matchBusy.current || matchCount.current >= MAX_AUTO_MATCHES) return;
+    const next = visible.find(b => isReproRow(b) && !matchesFor(b) && !matchAttempted.current.has(`${b.id}|${bugTextSig(b)}`));
+    if (next) runMatch(next, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, rx95Ready, matchTick, matchPaused]);
+
+  const retryMatches = () => {
+    matchAttempted.current.clear();
+    matchCount.current = 0;
+    setMatchPaused(undefined);
+    setMatchTick(t => t + 1);
+  };
+
+  const patchBug = (bugId: string, patch: Partial<BugLog>) => onPatchBugLog?.(bugId, patch);
+
+  const commentFor = (bug: BugLog) => buildFollowUpComment(bug, { planName: planName(bug.planId), refined: refinedFor(bug) });
+
+  const copyText = (text: string): Promise<boolean> => {
+    try {
+      return navigator.clipboard ? navigator.clipboard.writeText(text).then(() => true, () => false) : Promise.resolve(false);
+    } catch { return Promise.resolve(false); }
+  };
+
+  /** Opens b/ID with the comment pre-filled, copies it too, then stamps the QA bug FILED (follow-up). */
+  const followUp = (bug: BugLog, cand: ReproCandidate) => {
+    const comment = commentFor(bug);
+    // Start the clipboard write while this page still has focus, then open the tab in the same click.
+    const copied = copyText(comment);
+    const { url, truncated } = followUpUrl(cand.id, comment);
+    const win = window.open(url, '_blank');
+    if (win) { try { win.opener = null; } catch { /* cross-origin - fine */ } }
+    copied.then(ok => {
+      if (!win) {
+        flash(`Your browser blocked the pop-up. ${ok ? 'The comment is copied - ' : ''}allow pop-ups for this site and try again. Nothing was stamped.`);
+        return;
+      }
+      patchBug(bug.id, { filed: newFiled('follow-up', cand.id) });
+      flash(`Opened b/${cand.id} with the comment pre-filled${truncated ? ' (shortened)' : ''}${ok ? ' and copied it' : ''}. Review it and click Post. This bug is now stamped FILED.`);
+    });
+  };
+
+  // Repro'd bugs (match panel) are never opened as new issues in bulk.
+  const selectedVisible = visible.filter(b => selected.has(b.id) && !isReproRow(b));
   const flash = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 4000); };
 
   const toggle = (id: string) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -259,6 +383,77 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements }: Pro
     try { await navigator.clipboard.writeText(text); flash('Links copied.'); } catch { flash('Copy blocked by the browser.'); }
   };
 
+  const renderReproPanel = (bug: BugLog) => {
+    const m = matchesFor(bug);
+    const st = matchState[bug.id] || {};
+    const pickedId = picked[bug.id];
+    const cand = m?.candidates.find(c => c.id === pickedId);
+    const comment = cand ? commentFor(bug) : '';
+    const showComment = commentOpen.has(bug.id);
+    return (
+      <div className="space-y-2" data-testid="repro-panel">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className={labelCls + ' mb-0'}>Possible existing bugs (pick one to follow up)</p>
+          <span className="text-[11px] text-slate-400" data-testid="repro-checked">
+            {st.running ? 'Checking…' : m ? `checked ${minutesAgo(m.at)}` : st.error ? 'Check failed' : rx95Ready ? 'Not checked yet' : ''}
+            {rx95Ready && !st.running && (
+              <> · <button data-testid="repro-recheck" className="text-blue-300 hover:underline" onClick={() => runMatch(bug, false)}>{m ? 're-check' : 'check now'}</button></>
+            )}
+          </span>
+        </div>
+        {!rx95Ready && <p className="text-xs text-slate-400">RX95 isn't available here (needs the cloud connection), so possible existing bugs can't be looked up.</p>}
+        {st.error && <p className="text-xs text-amber-300" data-testid="repro-error">{st.error}</p>}
+        {m && m.candidates.length === 0 && (
+          <p className="text-xs text-slate-400" data-testid="repro-none">RX95 found no likely existing bug ({m.searched} searched in hotlist {m.hotlistId}).</p>
+        )}
+        {m && m.candidates.map(c => {
+          const sel = c.id === pickedId;
+          return (
+            <label key={c.id} data-testid="repro-candidate"
+              className={`flex gap-2.5 items-start rounded-2xl border px-3 py-2.5 cursor-pointer ${sel ? 'border-violet-500 ring-1 ring-violet-500/50 bg-violet-500/[0.07]' : 'border-slate-700 bg-[#0b1220]'} ${c.verdict === 'unlikely' && !sel ? 'opacity-75' : ''}`}>
+              <input type="radio" name={`repro-${bug.id}`} className="mt-1 accent-violet-400" checked={sel} onChange={() => setPicked(prev => ({ ...prev, [bug.id]: c.id }))} />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <a href={issueUrl(c.id)} target="_blank" rel="noreferrer" className="font-extrabold text-blue-300 hover:underline text-xs" onClick={e => e.stopPropagation()}>b/{c.id}</a>
+                  <span data-testid="repro-verdict" className={`text-[11px] font-extrabold rounded-full px-2 py-0.5 border ${VERDICT_STYLE[c.verdict]}`}>{VERDICT_LABEL[c.verdict]} · {Math.round(c.confidence)}%</span>
+                  {(c.status || c.priority) && <span className="text-[11px] rounded-full px-2 py-0.5 border border-slate-700 bg-slate-800 text-slate-300">{[c.status, c.priority].filter(Boolean).join(' · ')}</span>}
+                </div>
+                <p className="text-[12.5px] text-slate-100 mt-0.5 leading-snug">{c.title}</p>
+                {c.reason && <p className="text-[11px] text-slate-400 mt-1">Why: {c.reason}</p>}
+              </div>
+            </label>
+          );
+        })}
+        {cand && showComment && (
+          <pre data-testid="followup-comment" className="whitespace-pre-wrap bg-[#0b1220] border border-slate-700 rounded-xl p-3 text-[11px] leading-relaxed text-slate-200 font-mono max-h-64 overflow-auto">{comment}</pre>
+        )}
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <button data-testid="repro-follow-up" disabled={!cand} onClick={() => cand && followUp(bug, cand)}
+            className="px-3 h-8 rounded-xl text-xs font-bold flex items-center gap-1.5 bg-violet-500/20 border border-violet-500/50 text-violet-100 hover:bg-violet-500/30 disabled:opacity-40 disabled:cursor-not-allowed">
+            <ExternalLink className="w-3.5 h-3.5" /> {cand ? `Follow up on b/${cand.id}` : 'Follow up'}
+          </button>
+          {cand && (
+            <>
+              <button data-testid="repro-comment-toggle" className="px-2.5 h-8 rounded-xl text-xs text-slate-300 hover:bg-slate-800"
+                onClick={() => setCommentOpen(prev => { const n = new Set(prev); n.has(bug.id) ? n.delete(bug.id) : n.add(bug.id); return n; })}>
+                <Eye className="w-3.5 h-3.5 inline mr-1" />{showComment ? 'Hide comment' : 'Preview comment'}
+              </button>
+              <button data-testid="repro-copy-comment" className="px-2.5 h-8 rounded-xl text-xs text-slate-300 hover:bg-slate-800"
+                onClick={() => copyText(comment).then(ok => flash(ok ? 'Comment copied.' : 'Copy blocked by the browser.'))}>
+                <Copy className="w-3.5 h-3.5 inline mr-1" />Copy comment
+              </button>
+            </>
+          )}
+          <button data-testid="repro-file-new" className="px-3 h-8 rounded-xl text-xs font-semibold border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700"
+            onClick={() => updateDraft(bug, { fileAsNew: true })}>
+            None of these: file as new bug
+          </button>
+          <span className="text-[11px] text-slate-500 ml-auto">Nothing is posted automatically.</span>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-5" data-testid="buganizer-triage">
       {/* Safety banner */}
@@ -294,6 +489,48 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements }: Pro
           </label>
         )}
       </div>
+
+      {/* RX95 repro check + filed bugs */}
+      {(reproRows.length > 0 || filedCount > 0) && (() => {
+        const checked = reproRows.filter(b => matchesFor(b));
+        const running = reproRows.filter(b => matchState[b.id]?.running).length;
+        const hotlists = Array.from(new Set(checked.map(b => matchesFor(b)!.hotlistId)));
+        const hotlistLabel = hotlists.map(id => {
+          const h = KNOWN_HOTLISTS.find(k => k.hotlistId === id);
+          return h ? `${h.name} · ${id}` : id;
+        }).join(', ');
+        const searched = checked.reduce((n, b) => Math.max(n, matchesFor(b)!.searched || 0), 0);
+        return (
+          <div data-testid="repro-bar" className="rounded-[20px] border border-violet-500/35 bg-violet-500/10 px-4 py-2.5 flex flex-wrap items-center gap-3 text-xs text-violet-100">
+            <Repeat className="w-4 h-4 text-violet-300 flex-shrink-0" />
+            <div className="flex-1 min-w-[240px] leading-relaxed">
+              {reproRows.length === 0 ? (
+                <span className="text-slate-300">No repro'd bugs to check.</span>
+              ) : (
+                <>
+                  <b>RX95 repro check.</b>{' '}
+                  {!rx95Ready
+                    ? `${reproRows.length} repro'd bug${reproRows.length === 1 ? '' : 's'}. Not available here (needs the cloud connection).`
+                    : running > 0
+                    ? `Checking ${running} repro'd bug${running === 1 ? '' : 's'} against the plan's hotlist…`
+                    : matchPaused
+                    ? `Paused: ${matchPaused}`
+                    : <>{checked.length} of {reproRows.length} repro'd bug{reproRows.length === 1 ? '' : 's'} checked{hotlistLabel ? <> against <b>{hotlistLabel}</b></> : ''}{searched ? ` (${searched} bugs searched)` : ''}.</>}
+                </>
+              )}
+            </div>
+            {rx95Ready && matchPaused && (
+              <button className="px-2.5 h-7 rounded-xl font-semibold bg-violet-500/20 border border-violet-500/40" onClick={retryMatches}>Retry</button>
+            )}
+            {(filedCount > 0) && (
+              <span className="text-slate-300 ml-auto" data-testid="filed-hidden">
+                {showFiled ? `Showing ${filedCount} filed bug${filedCount === 1 ? '' : 's'}` : `${filedCount} filed bug${filedCount === 1 ? '' : 's'} hidden`} ·{' '}
+                <button data-testid="filed-hidden-toggle" className="text-blue-300 hover:underline" onClick={() => setShowFiled(v => !v)}>{showFiled ? 'hide' : 'show'}</button>
+              </span>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Pop-up blocked help */}
       {openQueue.length > 0 && (
@@ -394,15 +631,30 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements }: Pro
           const url = buildBuganizerUrl(d);
           const comp = componentById(d.componentId);
           const isOpen = expanded === bug.id;
+          const filed = effectiveFiled(bug);
+          const repro = isReproRow(bug);
+          const reprod = !filed && effectiveStatus(bug.status) === REPROD;
           return (
             <div key={bug.id} data-testid="triage-row" className={`rounded-[20px] border bg-[#111827] p-4 ${selected.has(bug.id) ? 'border-blue-500/60 ring-1 ring-blue-500/30' : 'border-slate-800'}`}>
               <div className="flex items-start gap-3">
-                <input type="checkbox" aria-label={`Select ${bug.id}`} className="mt-1 accent-blue-500" checked={selected.has(bug.id)} onChange={() => toggle(bug.id)} />
+                {repro ? (
+                  <span className="w-[13px] mt-1 flex-shrink-0" />
+                ) : (
+                  <input type="checkbox" aria-label={`Select ${bug.id}`} className="mt-1 accent-blue-500" checked={selected.has(bug.id)} onChange={() => toggle(bug.id)} />
+                )}
                 <div className="flex-1 min-w-0 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)] gap-4">
                   {/* Original tester note */}
                   <div className="space-y-1.5">
                     <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                      <span className={`px-2 py-0.5 rounded-full border ${STATE_STYLE[d.state]}`}>{STATE_LABEL[d.state]}{d.state === 'filed' && d.issueId ? ` · b/${d.issueId}` : ''}</span>
+                      {filed && (
+                        <span data-testid="row-filed-pill" className="px-2 py-0.5 rounded-full border bg-green-500/15 text-green-300 border-green-500/40 font-bold">FILED{filedStampLine(filed) ? ` · ${filedStampLine(filed)}` : ''}</span>
+                      )}
+                      {reprod && (
+                        <span data-testid="row-reprod-pill" className="px-2 py-0.5 rounded-full border border-violet-500/50 bg-violet-500/15 text-violet-200 flex items-center gap-1"><Repeat className="w-3 h-3" /> Repro'd Issue</span>
+                      )}
+                      {!repro && (
+                        <span className={`px-2 py-0.5 rounded-full border ${STATE_STYLE[d.state]}`}>{STATE_LABEL[d.state]}{d.state === 'filed' && d.issueId ? ` · b/${d.issueId}` : ''}</span>
+                      )}
                       <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">{bug.feature || 'General'}</span>
                       {refinedFor(bug) && (
                         d.refinedAt === refinedFor(bug)!.at && !d.textEdited ? (
@@ -426,10 +678,21 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements }: Pro
                       {bug.testerName || 'Unknown'} · {bug.deviceName || 'Unknown device'} · {bug.formattedTime || localDay(bug.timestamp)}
                     </p>
                     <p className="text-[11px] text-slate-500 truncate">{planName(bug.planId)} › {bug.stepTitle}</p>
+                    {repro && bug.environment && (
+                      <p className="text-[11px] text-slate-500 truncate" data-testid="row-build">
+                        Build: {[bug.environment.glassesFirmware, [bug.environment.phoneManufacturer, bug.environment.phoneModel].filter(Boolean).join(' '), bug.environment.androidVersion ? `Android ${bug.environment.androidVersion}` : ''].filter(Boolean).join(' · ') || 'not captured'}
+                      </p>
+                    )}
                   </div>
 
-                  {/* Buganizer fields */}
+                  {repro ? renderReproPanel(bug) : (
+                  /* Buganizer fields */
                   <div className="space-y-2">
+                    {reprod && d.fileAsNew && (
+                      <button data-testid="repro-back-to-matches" className="px-2 py-0.5 rounded-full border border-violet-500/40 text-[11px] text-violet-200 hover:bg-violet-500/10" onClick={() => updateDraft(bug, { fileAsNew: false })}>
+                        ← Back to RX95's possible existing bugs
+                      </button>
+                    )}
                     <div>
                       <label className={labelCls}>Title</label>
                       <input aria-label="Title" className={inputCls} value={d.title} onChange={e => updateDraft(bug, { title: e.target.value })} />
@@ -515,13 +778,24 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements }: Pro
                       <div className="flex items-center gap-1 ml-auto">
                         <span className="text-[11px] text-slate-400">Filed as b/</span>
                         <input aria-label="Filed issue id" className="w-28 bg-[#0f172a] border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-100" value={d.issueId || ''} placeholder="573…"
-                          onChange={e => { const id = e.target.value.replace(/[^\d]/g, ''); updateDraft(bug, { issueId: id || undefined, state: id ? 'filed' : (d.state === 'filed' ? 'opened' : d.state) }); }} />
+                          onChange={e => { const id = e.target.value.replace(/[^\d]/g, ''); updateDraft(bug, { issueId: id || undefined, state: id ? 'filed' : (d.state === 'filed' ? 'opened' : d.state) }); }}
+                          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                          onBlur={() => {
+                            // Stamp the bug FILED once the number is entered (not on every keystroke - it would vanish mid-typing)
+                            if (d.issueId && bug.filed?.issueId !== d.issueId) {
+                              patchBug(bug.id, { filed: newFiled('new', d.issueId) });
+                              if (!showFiled) flash(`Stamped FILED as b/${d.issueId} and hidden. Use "show" in the filed bar to see it again.`);
+                            } else if (!d.issueId && bug.filed?.via === 'new') {
+                              patchBug(bug.id, { filed: undefined });
+                            }
+                          }} />
                       </div>
                     </div>
                     {url.length > MAX_SAFE_URL_LENGTH && (
                       <p className="text-[11px] text-amber-300">This link is very long ({url.length} chars). Shorten the description so the form opens reliably.</p>
                     )}
                   </div>
+                  )}
                 </div>
               </div>
             </div>

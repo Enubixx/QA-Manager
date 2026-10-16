@@ -121,6 +121,9 @@ export const fetchAllSupabaseData = async () => {
         title: typeof item.title === 'string' && item.title.trim() ? item.title : undefined,
         refined: item.refined && typeof item.refined === 'object' ? item.refined : undefined,
         originalTimestamp: typeof item.original_timestamp === 'string' && item.original_timestamp ? item.original_timestamp : undefined,
+        status: typeof item.status === 'string' && item.status ? item.status : undefined,
+        filed: item.filed && typeof item.filed === 'object' ? item.filed : undefined,
+        reproMatches: item.repro_matches && typeof item.repro_matches === 'object' ? item.repro_matches : undefined,
       });
     });
 
@@ -141,8 +144,12 @@ export const fetchAllSupabaseData = async () => {
               title: existing.title || b.title,
               refined: existing.refined || b.refined,
               originalTimestamp: existing.originalTimestamp || b.originalTimestamp,
+              status: existing.status || b.status,
+              filed: existing.filed || b.filed,
+              reproMatches: existing.reproMatches || b.reproMatches,
             };
-            if (merged.environment !== existing.environment || merged.title !== existing.title || merged.refined !== existing.refined || merged.originalTimestamp !== existing.originalTimestamp) bugMap.set(b.id, merged);
+            const keys = ['environment', 'title', 'refined', 'originalTimestamp', 'status', 'filed', 'reproMatches'] as const;
+            if (keys.some(k => merged[k] !== existing[k])) bugMap.set(b.id, merged);
           }
         }
       });
@@ -313,7 +320,7 @@ export const deleteArchivedRunFromSupabase = async (runId: string) => {
 };
 
 /** Optional bug_logs columns; each flips to false if that column hasn't been added yet. */
-const optionalBugColumns = { environment: true, title: true, refined: true, original_timestamp: true };
+const optionalBugColumns = { environment: true, title: true, refined: true, original_timestamp: true, status: true, filed: true, repro_matches: true };
 
 export const syncBugLogToSupabase = async (bug: BugLog) => {
   if (!supabase || !isSupabaseConfigured) return;
@@ -345,13 +352,18 @@ export const syncBugLogToSupabase = async (bug: BugLog) => {
     if (optionalBugColumns.title) row.title = (bug.title || '').trim() || null;
     if (bug.refined && optionalBugColumns.refined) row.refined = bug.refined;
     if (optionalBugColumns.original_timestamp) row.original_timestamp = bug.originalTimestamp || null;
+    // status/filed are sent as null when unset so clearing them (e.g. turning the Filed switch off) syncs too
+    if (optionalBugColumns.status) row.status = bug.status || null;
+    if (optionalBugColumns.filed) row.filed = bug.filed || null;
+    if (bug.reproMatches && optionalBugColumns.repro_matches) row.repro_matches = bug.reproMatches;
     let { error } = await supabase.from('bug_logs').upsert(row);
-    // Optional columns (`environment` jsonb, `title` text, `refined` jsonb) may not exist yet - drop the one the error
+    // Optional columns (environment, title, refined, original_timestamp, status, filed, repro_matches) may not exist yet - drop the one the error
     // names and retry. The values still travel inside the run's bug_logs JSON.
-    for (let attempt = 0; error && attempt < 4; attempt++) {
+    for (let attempt = 0; error && attempt < Object.keys(optionalBugColumns).length; attempt++) {
       const msg = String((error as any).message || '');
       const missing = (Object.keys(optionalBugColumns) as Array<keyof typeof optionalBugColumns>)
-        .find(col => col in row && new RegExp(`\\b${col}\\b`, 'i').test(msg));
+        // Only a missing-column error counts (so e.g. a message mentioning "status" can't drop that column)
+        .find(col => col in row && /column/i.test(msg) && new RegExp(`\\b${col}\\b`, 'i').test(msg));
       if (!missing) break;
       optionalBugColumns[missing] = false;
       delete row[missing];
