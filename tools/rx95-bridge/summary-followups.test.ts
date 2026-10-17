@@ -73,6 +73,19 @@ check('quote: punctuation/case/apostrophes ignored', wk.commentQuotesNote("Gemin
 check('quote: different note not matched', !wk.commentQuotesNote('Glasses got disconnected after adding event to Keep', comment));
 check('quote: short note never counts as proof', !wk.commentQuotesNote('Sww error', 'Sww error'));
 check('quote: no partial-word match', !wk.commentQuotesNote('lasses got disconnected after adding event to the calendar', comment));
+const upd = wk.parseIssueUpdates([
+  'Version 11 by a@google.com at 2026-10-17T00:34:32.466Z:',
+  '  Comment #5: I got a couple more instances of this issue today:',
+  '',
+  'Glasses got disconnected after adding event to the calendar.',
+  'Version 0 by a@google.com at 2026-10-16T17:55:04.906Z:',
+  '  Comment #1: **What happened**',
+  '2. I asked Gemini to find similar items to the one that I was holding in my hand and save them to google keep, but the session terminated',
+].join('\n'));
+const T0 = Date.parse('2026-10-17T00:30:00Z');
+check('follow-up: later comment in window links', wk.followUpCommentQuotesNote(upd, 'Glasses got disconnected after adding event to the calendar', T0 - 6 * 3600e3, T0 + 3600e3));
+check('follow-up: comment outside window ignored', !wk.followUpCommentQuotesNote(upd, 'Glasses got disconnected after adding event to the calendar', T0 + 3600e3, T0 + 7200e3));
+check('follow-up: note in the description = filed from it, never a follow-up', !wk.followUpCommentQuotesNote(upd, 'I asked Gemini to find similar items to the one that I was holding in my hand', 0, Date.now()));
 
 // App side: Repro'd + hand-entered b/ = follow-up; own follow-up beats a same-day "new" catalog entry
 const { buildRx95Payload } = await import('../../src/services/rx95Service');

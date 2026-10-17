@@ -197,6 +197,19 @@ export function commentQuotesNote(note: string, comment: string): boolean {
   return ` ${quoteNorm(comment)} `.includes(` ${n} `);
 }
 
+/**
+ * A later comment (#2+) made within [from, to] quotes the note. If the issue's own description
+ * (#1 / version 0) quotes it, the QA bug is what the issue was filed from - never a follow-up.
+ */
+export function followUpCommentQuotesNote(updates: Array<{ at: string; text: string }>, note: string, from: number, to: number): boolean {
+  const comments = updates.map(u => {
+    const m = u.text.match(/Comment #(\d+):([\s\S]*)/);
+    return { t: Date.parse(u.at), n: m ? Number(m[1]) : 0, body: m ? m[2] : '' };
+  });
+  if (comments.some(c => c.n === 1 && commentQuotesNote(note, c.body))) return false;
+  return comments.some(c => c.n >= 2 && c.t >= from && c.t <= to && commentQuotesNote(note, c.body));
+}
+
 // ---------- the worker ----------
 export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => void; state: () => unknown } {
   const { ports } = cfg;
@@ -659,7 +672,7 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
               if (calls >= CONFIRM_MAX_CLI_PER_TICK) break;
               calls++;
               const updates = parseIssueUpdates(await ports.issuesCli(['list-updates', id, '--limit', '50']));
-              if (updates.some(u => { const t = Date.parse(u.at); return t >= filedAt - LINK_BEFORE_MS && t <= filedAt + LINK_AFTER_MS && commentQuotesNote(b.note, u.text); })) { issueId = id; break; }
+              if (followUpCommentQuotesNote(updates, b.note, filedAt - LINK_BEFORE_MS, filedAt + LINK_AFTER_MS)) { issueId = id; break; }
             }
           } catch (e: any) {
             log(`link: ${b.id} check failed:`, e.message);
