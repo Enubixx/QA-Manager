@@ -363,12 +363,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
   }, [mergedRuns, devices, testPlans, stepFirstSeen]);
 
   const fleetProgress = useMemo(() => {
+    const validPlanIds = new Set(testPlans.map(p => p.id));
     let totalTarget = 0;
     let totalCompleted = 0;
     devices.forEach(dev => {
       const seenPlans = new Set<string>();
       (dev.quotas || []).forEach(q => {
-        if (!q || !q.planId || seenPlans.has(q.planId)) return;
+        if (!q || !q.planId || !validPlanIds.has(q.planId) || seenPlans.has(q.planId)) return;
         const target = Math.max(0, Number(q.targetRunsPerDay) || 0);
         if (target <= 0) return;
         seenPlans.add(q.planId);
@@ -379,7 +380,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     });
     const pct = totalTarget > 0 ? Math.round((totalCompleted / totalTarget) * 100) : 0;
     return { totalCompleted, totalTarget, pct };
-  }, [devices, todayRunsMap]);
+  }, [devices, todayRunsMap, testPlans]);
 
   const toggleTesterExpand = (testerName: string) => {
     setExpandedTesters(prev => ({
@@ -1800,12 +1801,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const totalBugs = bugLogs.length;
 
   const assignedDevices = useMemo(
-    () => devices.filter(d => d.quotas && d.quotas.some(q => q.planId && (q.targetRunsPerDay || 0) > 0)),
-    [devices]
+    () =>
+      devices.filter(
+        d =>
+          d.quotas &&
+          d.quotas.some(
+            q => q.planId && (q.targetRunsPerDay || 0) > 0 && testPlans.some(p => p.id === q.planId)
+          )
+      ),
+    [devices, testPlans]
   );
   const unassignedDevices = useMemo(
-    () => devices.filter(d => !d.quotas || !d.quotas.some(q => q.planId && (q.targetRunsPerDay || 0) > 0)),
-    [devices]
+    () =>
+      devices.filter(
+        d =>
+          !d.quotas ||
+          !d.quotas.some(
+            q => q.planId && (q.targetRunsPerDay || 0) > 0 && testPlans.some(p => p.id === q.planId)
+          )
+      ),
+    [devices, testPlans]
   );
   const activeOrTestedTodayCount = useMemo(() => {
     return unifiedTesters.filter(t => {
@@ -2114,30 +2129,23 @@ export const Dashboard: React.FC<DashboardProps> = ({
           : '—';
         const shiftTotalBugs = sortedTesters.reduce((acc, t) => acc + t.bugCount, 0);
 
-        // Filter testers by mode + search query
+        // Filter testers by mode
         let displayedTesters = activeOrTestedTesters;
         if (testerViewMode === 'active') {
           displayedTesters = sortedTesters.filter(t => t.isActive);
         }
-        const searchQ = searchTesterQuery.trim().toLowerCase();
-        if (searchQ) {
-          const sourcePool = testerViewMode === 'active' ? sortedTesters.filter(t => t.isActive) : sortedTesters;
-          displayedTesters = sourcePool.filter(t =>
-            t.name.toLowerCase().includes(searchQ) ||
-            (t.role || '').toLowerCase().includes(searchQ) ||
-            t.dayDevices.some(d => d.toLowerCase().includes(searchQ)) ||
-            (t.activeInfo?.deviceName || '').toLowerCase().includes(searchQ)
-          );
-        }
 
         // 2. Enrich devices with quota, today's completions, and live in-use tester
         const enrichedDevices = devices.map(device => {
-          const assignedQuota =
-            (device.quotas && device.quotas.find(q => q.planId && (q.targetRunsPerDay || 0) > 0)) ||
-            (device.quotas && device.quotas[0]) ||
+          const validQuota =
+            (device.quotas &&
+              device.quotas.find(
+                q => q.planId && (q.targetRunsPerDay || 0) > 0 && testPlans.some(p => p.id === q.planId)
+              )) ||
             null;
-          const hasAssignedPlan = Boolean(assignedQuota && assignedQuota.planId && (assignedQuota.targetRunsPerDay || 0) > 0);
-          const assignedPlan = assignedQuota ? testPlans.find(p => p.id === assignedQuota.planId) : null;
+          const assignedPlan = validQuota ? testPlans.find(p => p.id === validQuota.planId) || null : null;
+          const assignedQuota = validQuota;
+          const hasAssignedPlan = Boolean(validQuota && assignedPlan);
           const targetRuns = assignedQuota ? Math.max(1, assignedQuota.targetRunsPerDay || 1) : 2;
           const doneToday = (assignedQuota && todayRunsMap[device.id] && todayRunsMap[device.id][assignedQuota.planId]) || 0;
           const remaining = assignedQuota ? Math.max(0, targetRuns - doneToday) : 0;
@@ -2170,14 +2178,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
         const inUseDevicesCount = enrichedDevices.filter(d => d.isInUse).length;
 
-        const displayedDevices = searchQ
-          ? enrichedDevices.filter(d =>
-              d.name.toLowerCase().includes(searchQ) ||
-              d.id.toLowerCase().includes(searchQ) ||
-              (d.assignedPlan?.name || '').toLowerCase().includes(searchQ) ||
-              (d.isInUse && d.inUseTesterName.toLowerCase().includes(searchQ))
-            )
-          : enrichedDevices.filter(d => d.hasAssignedPlan || d.isInUse);
+        const displayedDevices = enrichedDevices.filter(d => d.hasAssignedPlan || d.isInUse);
 
         // Quick-Activate defaults
         const effectiveQuickDeviceId =
@@ -2231,11 +2232,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 assignedDevices.length === 0
                   ? 'border-blue-500/50 ring-1 ring-blue-500/20'
                   : 'border-slate-800'
-              } rounded-2xl px-3 py-2 flex flex-col xl:flex-row xl:items-center justify-between gap-2 shadow-lg`}
+              } rounded-2xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 shadow-lg`}
             >
               {/* Left: + Activate Device */}
-              <div className="flex flex-wrap xl:flex-nowrap items-center gap-1.5">
-                <span className="text-[10.5px] font-extrabold uppercase tracking-wider text-blue-300 shrink-0">
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-blue-300 shrink-0">
                   + Activate Device
                 </span>
 
@@ -2243,24 +2244,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   value={effectiveQuickDeviceId}
                   onChange={e => setQuickActivateDeviceId(e.target.value)}
                   style={{ backgroundColor: '#090d16', color: '#f8fafc' }}
-                  className="bg-[#090d16] border border-slate-700 text-slate-100 rounded-lg px-2 py-1 text-[11px] font-mono font-bold focus:outline-none focus:border-blue-500 cursor-pointer max-w-[155px] truncate"
+                  className="bg-[#090d16] border border-slate-700 text-slate-100 rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold focus:outline-none focus:border-blue-500 cursor-pointer"
                   title="Select device to activate or update quota"
                 >
                   {devices.length === 0 && <option value="">No devices in pool</option>}
                   {unassignedDevices.length > 0 && (
-                    <optgroup label={`Unassigned Devices (${unassignedDevices.length})`}>
+                    <optgroup label={`Unassigned (${unassignedDevices.length})`}>
                       {unassignedDevices.map(d => (
                         <option key={d.id} value={d.id}>
-                          📱 {d.name} (Unassigned)
+                          {d.name}
                         </option>
                       ))}
                     </optgroup>
                   )}
                   {assignedDevices.length > 0 && (
-                    <optgroup label={`Active Devices (${assignedDevices.length})`}>
+                    <optgroup label={`Active (${assignedDevices.length})`}>
                       {assignedDevices.map(d => (
                         <option key={d.id} value={d.id}>
-                          📱 {d.name} (Active)
+                          {d.name} (Active)
                         </option>
                       ))}
                     </optgroup>
@@ -2271,7 +2272,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   value={effectiveQuickPlanId}
                   onChange={e => setQuickActivatePlanId(e.target.value)}
                   style={{ backgroundColor: '#090d16', color: '#f8fafc' }}
-                  className="bg-[#090d16] border border-slate-700 text-slate-100 rounded-lg px-2 py-1 text-[11px] font-semibold focus:outline-none focus:border-blue-500 cursor-pointer max-w-[175px] truncate"
+                  className="bg-[#090d16] border border-slate-700 text-slate-100 rounded-lg px-2.5 py-1.5 text-xs font-semibold focus:outline-none focus:border-blue-500 cursor-pointer max-w-[240px]"
                   title="Select test plan for device"
                 >
                   {testPlans.length === 0 ? (
@@ -2285,8 +2286,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   )}
                 </select>
 
-                <div className="flex items-center gap-1 shrink-0">
-                  <span className="text-[10.5px] text-slate-400 font-semibold">Quota:</span>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-[11px] text-slate-400 font-semibold">Quota:</span>
                   <input
                     type="number"
                     min={1}
@@ -2295,7 +2296,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     onChange={e =>
                       setQuickActivateQuota(Math.min(50, Math.max(1, parseInt(e.target.value, 10) || 1)))
                     }
-                    className="w-11 bg-[#090d16] border border-slate-700 text-blue-300 font-mono font-extrabold text-[11px] rounded-lg px-1 py-1 text-center focus:outline-none focus:border-blue-500"
+                    className="w-12 bg-[#090d16] border border-slate-700 text-blue-300 font-mono font-extrabold text-xs rounded-lg px-1.5 py-1.5 text-center focus:outline-none focus:border-blue-500"
                     title="Target runs per day"
                   />
                 </div>
@@ -2318,17 +2319,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     const nextUnassigned = unassignedDevices.find(d => d.id !== targetDev.id);
                     setQuickActivateDeviceId(nextUnassigned?.id || '');
                   }}
-                  className="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white border border-blue-500 rounded-lg text-[11px] font-bold flex items-center gap-1 transition-all shadow-sm active:scale-95 cursor-pointer shrink-0"
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white border border-blue-500 rounded-lg text-xs font-bold flex items-center gap-1 transition-all shadow-sm active:scale-95 cursor-pointer shrink-0"
                 >
-                  <Plus className="w-3 h-3" />
+                  <Plus className="w-3.5 h-3.5" />
                   <span>Activate</span>
                 </button>
               </div>
 
-              {/* Right: Date Selector + Search + Pool & Roster Drawer + Reset Actions */}
-              <div className="flex flex-wrap xl:flex-nowrap items-center gap-1.5">
-                <div className="flex items-center gap-1 bg-[#090d16] border border-slate-800 rounded-lg px-2 py-1 shrink-0">
-                  <Calendar className="w-3 h-3 text-slate-400 flex-shrink-0" />
+              {/* Right: Date Selector + Pool & Roster Drawer + Reset Actions */}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1.5 bg-[#090d16] border border-slate-800 rounded-lg px-2.5 py-1.5 shrink-0">
+                  <Calendar className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
                   <select
                     value={selectedQaDate}
                     onChange={e => setSelectedQaDate(e.target.value)}
@@ -2347,31 +2348,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </select>
                 </div>
 
-                <div className="relative w-36 sm:w-40 shrink-0">
-                  <Search className="w-3 h-3 text-slate-400 absolute left-2 top-1.5 pointer-events-none" />
-                  <input
-                    type="text"
-                    placeholder="Search device or tester..."
-                    value={searchTesterQuery}
-                    onChange={e => setSearchTesterQuery(e.target.value)}
-                    className="w-full bg-[#090d16] border border-slate-800 rounded-lg pl-6 pr-5 py-1 text-[11px] text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
-                  />
-                  {searchTesterQuery && (
-                    <button
-                      type="button"
-                      onClick={() => setSearchTesterQuery('')}
-                      className="absolute right-1.5 top-1.5 text-slate-500 hover:text-white"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
-
                 {/* Pool & Roster Collapsible Tray Toggle */}
                 <button
                   type="button"
                   onClick={() => setShowOffShiftTesters(prev => !prev)}
-                  className={`px-2 py-1 rounded-lg text-[11px] font-semibold border flex items-center gap-1 transition cursor-pointer shrink-0 ${
+                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
                     showOffShiftTesters
                       ? 'bg-[#13203a] border-blue-500/60 text-blue-200'
                       : 'bg-[#090d16] border-slate-800 text-slate-300 hover:text-white hover:border-slate-700'
@@ -2398,7 +2379,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       if (onResetActiveDay) onResetActiveDay(getLocalDateStr(new Date()));
                     }
                   }}
-                  className="px-2 py-1 bg-[#090d16] hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition cursor-pointer shrink-0"
+                  className="px-2.5 py-1.5 bg-[#090d16] hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition cursor-pointer shrink-0"
                   title="Reset today's completed run counters"
                 >
                   <RefreshCw className="w-3 h-3 text-blue-400" />
@@ -2418,7 +2399,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         setInspectorTarget(null);
                       }
                     }}
-                    className="px-2 py-1 bg-[#090d16] hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition cursor-pointer shrink-0"
+                    className="px-2.5 py-1.5 bg-[#090d16] hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition cursor-pointer shrink-0"
                     title="Clear all device assignments to No Plan Assigned"
                   >
                     <Layers className="w-3 h-3 text-slate-400" />
@@ -2932,13 +2913,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       <div className="text-xs text-slate-400">
                         {testerViewMode === 'active'
                           ? 'No live testers right now.'
-                          : searchQ
-                            ? 'No testers matching search.'
-                            : `No tester activity recorded on ${
-                                selectedQaDate === todayStr ? 'today' : dateScopeLabel
-                              }.`}
+                          : `No tester activity recorded on ${
+                              selectedQaDate === todayStr ? 'today' : dateScopeLabel
+                            }.`}
                       </div>
-                      {!searchQ && testerViewMode === 'tested' && (
+                      {testerViewMode === 'tested' && (
                         <div className="flex flex-wrap items-center justify-center gap-2">
                           {mostRecentHistoricalDate && selectedQaDate === todayStr && (
                             <button
