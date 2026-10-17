@@ -82,6 +82,23 @@ interface Props {
   rx95Suggestions?: Rx95SuggestionsData;
 }
 
+type Layout = 'a' | 'b' | 'c';
+const LAYOUTS: Layout[] = ['a', 'b', 'c'];
+const LAYOUT_KEY = 'qa_buganizer_layout';
+type ItemKind = 'new' | 'repro' | 'bundle' | 'waiting' | 'filed';
+type ListFilter = 'all' | 'tofile' | 'reprod' | 'bundles' | 'waiting';
+type TabKey = 'tofile' | 'reprod' | 'bundles' | 'waiting' | 'filed';
+const KIND_TAG: Record<ItemKind, string> = {
+  new: 'bg-slate-800 text-slate-300',
+  repro: 'bg-violet-500/20 text-violet-200',
+  bundle: 'bg-blue-500/20 text-blue-200',
+  waiting: 'bg-amber-500/15 text-amber-200',
+  filed: 'bg-green-500/15 text-green-300',
+};
+const chipCls = 'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11.5px] border whitespace-nowrap';
+const chipOff = 'border-slate-700 bg-[#141c2f] text-slate-300 hover:border-slate-500';
+const chipOn = 'border-blue-500/70 bg-blue-500/15 text-white';
+
 /** The RX95 worker counts as running while its heartbeat is younger than this. */
 const WORKER_FRESH_SEC = 90;
 const fmtTime = (iso?: string) => {
@@ -178,6 +195,26 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
   const [ticks, setTicks] = useState<Record<string, string[]>>({});
   const [editingBundle, setEditingBundle] = useState<{ id: string; keep: Set<string> } | null>(null);
   const [waitingIssue, setWaitingIssue] = useState<Record<string, string>>({});
+
+  // Layout A (one list) / B (tabs) / C (list + side panel); ?layout=a|b|c wins, else the saved choice.
+  const [layout, setLayoutState] = useState<Layout>(() => {
+    try {
+      const q = new URLSearchParams(window.location.search).get('layout');
+      if (q && LAYOUTS.includes(q as Layout)) return q as Layout;
+      const saved = localStorage.getItem(LAYOUT_KEY);
+      if (saved && LAYOUTS.includes(saved as Layout)) return saved as Layout;
+    } catch { /* ignore */ }
+    return 'a';
+  });
+  const setLayout = (l: Layout) => { setLayoutState(l); try { localStorage.setItem(LAYOUT_KEY, l); } catch { /* ignore */ } };
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
+  const [listFilter, setListFilter] = useState<ListFilter>('all');
+  const [tab, setTab] = useState<TabKey>('tofile');
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [allMatches, setAllMatches] = useState<Set<string>>(new Set());
 
   // RX95 background worker heartbeat: fresh => the in-tab auto engines stay off (fallback only).
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -704,6 +741,8 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
     comment: () => string;
     onFollowUp: (cand: ReproCandidate) => void;
     onFileNew: () => void;
+    /** Side-panel layout: show the best match, the rest behind "+N other possible matches". */
+    compact?: boolean;
   }
 
   const renderReproPanel = (t: ReproTarget) => {
@@ -729,7 +768,8 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
         {m && m.candidates.length === 0 && (
           <p className="text-xs text-slate-400" data-testid="repro-none">RX95 found no likely existing bug ({m.searched} searched in hotlist {m.hotlistId}).</p>
         )}
-        {m && m.candidates.map(c => {
+        {m && t.compact && m.candidates.length > 0 && <p className={labelCls + ' mb-0'}>Best match</p>}
+        {m && (t.compact && !allMatches.has(t.key) ? m.candidates.slice(0, 1) : m.candidates).map(c => {
           const sel = c.id === pickedId;
           return (
             <label key={c.id} data-testid="repro-candidate"
@@ -747,6 +787,12 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
             </label>
           );
         })}
+        {m && t.compact && m.candidates.length > 1 && (
+          <button data-testid="repro-more-matches" className="text-[11px] text-slate-400 hover:text-slate-200"
+            onClick={() => setAllMatches(prev => { const n = new Set(prev); n.has(t.key) ? n.delete(t.key) : n.add(t.key); return n; })}>
+            {allMatches.has(t.key) ? 'Show only the best match ▴' : `+${m.candidates.length - 1} other possible match${m.candidates.length - 1 === 1 ? '' : 'es'} ▾`}
+          </button>
+        )}
         {cand && showComment && (
           <pre data-testid="followup-comment" className="whitespace-pre-wrap bg-[#0b1220] border border-slate-700 rounded-xl p-3 text-[11px] leading-relaxed text-slate-200 font-mono max-h-64 overflow-auto">{comment}</pre>
         )}
@@ -921,7 +967,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
   };
 
   /** The bundle's "mega bug" row (replaces its members in the list). */
-  const renderBundleRow = (g: BundleGroup) => {
+  const renderBundleRow = (g: BundleGroup, stack = false) => {
     const d = megaDraftFor(g);
     const n = g.members.length;
     const filedAll = groupIsFiled(g);
@@ -933,7 +979,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
       <div key={g.bundle.id} data-testid="bundle-row" className={`rounded-[20px] border bg-[#111827] p-4 ring-1 ${selected.has(g.bundle.id) ? 'border-blue-500/60 ring-blue-500/30' : 'border-violet-500/50 ring-violet-500/25'}`}>
         <div className="flex items-start gap-3">
           <input type="checkbox" aria-label={`Select bundle ${g.bundle.id}`} className="mt-1 accent-blue-500" checked={selected.has(g.bundle.id)} onChange={() => toggle(g.bundle.id)} />
-          <div className="flex-1 min-w-0 grid grid-cols-1 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.5fr)] gap-4">
+          <div className={`flex-1 min-w-0 grid grid-cols-1 gap-4 ${stack ? '' : 'lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.5fr)]'}`}>
             <div className="space-y-1.5">
               <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
                 <span data-testid="bundle-pill" className="px-2 py-0.5 rounded-full border border-violet-500/50 bg-violet-500/15 text-violet-200">🧩 Bundle · {n} reports</span>
@@ -1030,134 +1076,375 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
     );
   };
 
-  /** List rows: single bugs and bundles, newest first. */
-  const rows = [
-    ...visible.map(b => ({ kind: 'bug' as const, ts: String(b.timestamp), bug: b })),
-    ...shownGroups.map(g => ({ kind: 'bundle' as const, ts: String(g.members[g.members.length - 1]?.timestamp || ''), group: g })),
-  ].sort((a, b) => b.ts.localeCompare(a.ts));
-
-  return (
-    <div className="space-y-5" data-testid="buganizer-triage">
-      {/* Safety banner */}
-      <div className="rounded-[20px] border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 flex items-start gap-3">
-        <ShieldCheck className="w-5 h-5 text-emerald-300 flex-shrink-0 mt-0.5" />
-        <div className="text-xs text-emerald-100 leading-relaxed">
-          <b>Buganizer triage.</b> Drafts are saved only in this browser. Nothing is sent to Buganizer automatically.
-          "Open in Buganizer" only opens <i>prefilled forms</i>, and a bug is created only if someone reviews the form and clicks <b>Create</b>.
-        </div>
-      </div>
-
-      {/* RX95 background worker (heartbeat fresh) */}
-      {workerFresh && (
-        <div data-testid="rx95-worker-bar" className="rounded-[20px] border border-green-500/35 bg-green-500/[0.08] px-4 py-2.5 flex flex-wrap items-center gap-2 text-xs text-green-100">
-          <span>🟢</span>
-          <div className="flex-1 min-w-[240px] leading-relaxed">
-            <b>RX95 is working in the background.</b> New reports are cleaned up and checked as they come in.
-            {' '}Last sync {Math.round(hbAgeSec)}s ago · {(heartbeat?.queues?.refine || 0) + (heartbeat?.queues?.match || 0) + (heartbeat?.queues?.bundle || 0)} in progress · {waitingCount} waiting for Buganizer.
-          </div>
-        </div>
-      )}
-
-      {/* RX95 wording refinement status (in-tab fallback when the background worker is offline) */}
-      {!workerFresh && <div data-testid="rx95-refine-bar" className="rounded-[20px] border border-violet-500/30 bg-violet-500/10 px-4 py-2.5 flex flex-wrap items-center gap-3 text-xs text-violet-100">
-        <Sparkles className="w-4 h-4 text-violet-300 flex-shrink-0" />
-        <div className="flex-1 min-w-[240px] leading-relaxed">
-          <b>RX95 wording cleanup.</b>{' '}
-          {!rx95Ready
-            ? 'Not available here (needs the cloud connection). Drafts use the reporter\'s wording.'
-            : !autoRefine
-            ? 'Off - drafts use the reporter\'s wording.'
-            : refineState.running > 0
-            ? `Refining ${refineState.running} bug${refineState.running === 1 ? '' : 's'} in the background…`
-            : refineState.error
-            ? `Paused: ${refineState.error}`
-            : `${refinedVisible} of ${visible.length} bugs refined. RX95 rewrites the reporter's title and description; the original stays on the left.`}
-        </div>
-        {rx95Ready && refineState.error && autoRefine && (
-          <button className="px-2.5 h-7 rounded-xl font-semibold bg-violet-500/20 border border-violet-500/40" onClick={retryRefine}>Retry</button>
-        )}
-        {rx95Ready && (
-          <label className="flex items-center gap-1.5 cursor-pointer select-none">
-            <input type="checkbox" data-testid="rx95-auto-refine" className="accent-violet-400" checked={autoRefine} onChange={toggleAutoRefine} /> Auto-refine
-          </label>
-        )}
-      </div>}
-
-      {/* RX95 repro check + filed bugs */}
-      {(reproRows.length > 0 || filedCount > 0) && (() => {
-        const checked = reproRows.filter(b => matchesFor(b));
-        const running = reproRows.filter(b => matchState[b.id]?.running).length;
-        const hotlists = Array.from(new Set(checked.map(b => matchesFor(b)!.hotlistId)));
-        const hotlistLabel = hotlists.map(id => {
-          const h = KNOWN_HOTLISTS.find(k => k.hotlistId === id);
-          return h ? `${h.name} · ${id}` : id;
-        }).join(', ');
-        const searched = checked.reduce((n, b) => Math.max(n, matchesFor(b)!.searched || 0), 0);
-        return (
-          <div data-testid="repro-bar" className="rounded-[20px] border border-violet-500/35 bg-violet-500/10 px-4 py-2.5 flex flex-wrap items-center gap-3 text-xs text-violet-100">
-            <Repeat className="w-4 h-4 text-violet-300 flex-shrink-0" />
-            <div className="flex-1 min-w-[240px] leading-relaxed">
-              {reproRows.length === 0 ? (
-                <span className="text-slate-300">No repro'd bugs to check.</span>
-              ) : (
-                <>
-                  <b>RX95 repro check.</b>{' '}
-                  {!rx95Ready
-                    ? `${reproRows.length} repro'd bug${reproRows.length === 1 ? '' : 's'}. Not available here (needs the cloud connection).`
-                    : running > 0
-                    ? `Checking ${running} repro'd bug${running === 1 ? '' : 's'} against the plan's hotlist…`
-                    : matchPaused
-                    ? `Paused: ${matchPaused}`
-                    : <>{checked.length} of {reproRows.length} repro'd bug{reproRows.length === 1 ? '' : 's'} checked{hotlistLabel ? <> against <b>{hotlistLabel}</b></> : ''}{searched ? ` (${searched} bugs searched)` : ''}.</>}
-                </>
+  /** Full card for one bug: reporter's original + new-issue editor or RX95 repro panel. */
+  const renderBugCard = (bug: BugLog, stack = false) => {
+    const d = draftFor(bug);
+    const filed = effectiveFiled(bug);
+    const repro = isReproRow(bug);
+    const reprod = !filed && effectiveStatus(bug.status) === REPROD;
+    return (
+      <div key={bug.id} data-testid="triage-row" className={`rounded-[20px] border bg-[#111827] p-4 ${selected.has(bug.id) ? 'border-blue-500/60 ring-1 ring-blue-500/30' : 'border-slate-800'}`}>
+        <div className="flex items-start gap-3">
+          {/* Repro'd rows can be selected for "Bundle selected"; they're never opened as new issues */}
+          <input type="checkbox" aria-label={`Select ${bug.id}`} className="mt-1 accent-blue-500" checked={selected.has(bug.id)} onChange={() => toggle(bug.id)} />
+          <div className={`flex-1 min-w-0 grid grid-cols-1 gap-4 ${stack ? '' : 'lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)]'}`}>
+            {/* Original tester note */}
+            <div className="space-y-1.5">
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                {filed && (
+                  <span data-testid="row-filed-pill" className="px-2 py-0.5 rounded-full border bg-green-500/15 text-green-300 border-green-500/40 font-bold">FILED{filedStampLine(filed) ? ` · ${filedStampLine(filed)}` : ''}</span>
+                )}
+                {reprod && (
+                  <span data-testid="row-reprod-pill" className="px-2 py-0.5 rounded-full border border-violet-500/50 bg-violet-500/15 text-violet-200 flex items-center gap-1"><Repeat className="w-3 h-3" /> Repro'd Issue</span>
+                )}
+                {!repro && (
+                  <span className={`px-2 py-0.5 rounded-full border ${STATE_STYLE[d.state]}`}>{STATE_LABEL[d.state]}{d.state === 'filed' && d.issueId ? ` · b/${d.issueId}` : ''}</span>
+                )}
+                <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">{bug.feature || 'General'}</span>
+                {refinedFor(bug) && (
+                  d.refinedAt === refinedFor(bug)!.at && !d.textEdited ? (
+                    <span data-testid="rx95-refined-chip" className="px-2 py-0.5 rounded-full border border-violet-500/40 bg-violet-500/15 text-violet-200 flex items-center gap-1">
+                      <Sparkles className="w-3 h-3" /> RX95 wording
+                      <button className="ml-1 underline decoration-dotted text-violet-300 hover:text-white" onClick={() => useOriginalWording(bug)}>use original</button>
+                    </span>
+                  ) : (
+                    <button data-testid="rx95-use-wording" className="px-2 py-0.5 rounded-full border border-violet-500/30 text-violet-300 hover:bg-violet-500/10 flex items-center gap-1" onClick={() => useRx95Wording(bug)}>
+                      <Sparkles className="w-3 h-3" /> Use RX95 wording
+                    </button>
+                  )
+                )}
+              </div>
+              <p className="text-[10px] uppercase tracking-wide text-slate-500 pt-0.5">Reporter's original</p>
+              {bug.title && <p className="text-sm font-semibold text-white leading-snug">{bug.title}</p>}
+              {(!bug.title || bug.note !== bug.title) && (
+                <p className={`${bug.title ? 'text-xs text-slate-300 line-clamp-3 whitespace-pre-line' : 'text-sm text-slate-100'} leading-snug`}>{bug.note}</p>
+              )}
+              <p className="text-[11px] text-slate-400">
+                {bug.testerName || 'Unknown'} · {bug.deviceName || 'Unknown device'} · {bug.formattedTime || localDay(bug.timestamp)}
+              </p>
+              <p className="text-[11px] text-slate-500 truncate">{planName(bug.planId)} › {bug.stepTitle}</p>
+              {repro && bug.environment && (
+                <p className="text-[11px] text-slate-500 truncate" data-testid="row-build">
+                  Build: {[bug.environment.glassesFirmware, [bug.environment.phoneManufacturer, bug.environment.phoneModel].filter(Boolean).join(' '), bug.environment.androidVersion ? `Android ${bug.environment.androidVersion}` : ''].filter(Boolean).join(' · ') || 'not captured'}
+                </p>
               )}
             </div>
-            {rx95Ready && matchPaused && (
-              <button className="px-2.5 h-7 rounded-xl font-semibold bg-violet-500/20 border border-violet-500/40" onClick={retryMatches}>Retry</button>
-            )}
-            {(filedCount > 0) && (
-              <span className="text-slate-300 ml-auto" data-testid="filed-hidden">
-                {showFiled ? `Showing ${filedCount} filed bug${filedCount === 1 ? '' : 's'}` : `${filedCount} filed bug${filedCount === 1 ? '' : 's'} hidden`} ·{' '}
-                <button data-testid="filed-hidden-toggle" className="text-blue-300 hover:underline" onClick={() => setShowFiled(v => !v)}>{showFiled ? 'hide' : 'show'}</button>
-              </span>
-            )}
+
+            {repro ? renderReproPanel({
+              key: bug.id,
+              query: bug,
+              matches: matchesFor(bug),
+              comment: () => commentFor(bug),
+              onFollowUp: cand => followUp(bug, cand),
+              onFileNew: () => updateDraft(bug, { fileAsNew: true }),
+            }) : renderDraftFields({
+              key: bug.id,
+              d,
+              update: patch => updateDraft(bug, patch),
+              planId: bug.planId,
+              top: reprod && d.fileAsNew ? (
+                <button data-testid="repro-back-to-matches" className="px-2 py-0.5 rounded-full border border-violet-500/40 text-[11px] text-violet-200 hover:bg-violet-500/10" onClick={() => updateDraft(bug, { fileAsNew: false })}>
+                  ← Back to RX95's possible existing bugs
+                </button>
+              ) : undefined,
+              onFiledAs: id => {
+                if (id && bug.filed?.issueId !== id) {
+                  patchBug(bug.id, { filed: newFiled('new', id), filePending: undefined });
+                  if (!showFiled) flash(`Stamped FILED as b/${id} and hidden. Use "show" in the filed bar to see it again.`);
+                } else if (!id && bug.filed?.via === 'new') {
+                  patchBug(bug.id, { filed: undefined });
+                }
+              },
+            })}
           </div>
-        );
-      })()}
+        </div>
+      </div>
+    );
+  };
 
-      {/* Same-day bundle suggestions now live on the Bugs Feed (BundleSuggestionsPanel). */}
 
-      {/* Waiting for Buganizer (opened, not yet confirmed) */}
-      {waitingEntries.length > 0 && (
-        <div data-testid="waiting-group" className="rounded-[20px] border border-amber-500/30 bg-amber-500/[0.04] p-3 space-y-2">
-          <p className="text-xs text-amber-100">
-            <b>⏳ Waiting for Buganizer ({waitingEntries.length})</b>{' '}
-            <span className="text-slate-400">
-              {workerFresh
-                ? 'RX95 checks Buganizer every minute and stamps FILED when it finds proof.'
-                : "RX95's background helper looks offline, so confirmation waits until it's back. Use \"Mark filed anyway\" if you already filed it."}
-            </span>
+  // ---------- one-line items (all layouts) ----------
+  interface Item {
+    key: string;
+    kind: ItemKind;
+    ts: string;
+    title: string;
+    cuj: string;
+    priority?: string;
+    tag: string;
+    shortTag: string;
+    action: string;
+    selectable: boolean;
+    bug?: BugLog;
+    group?: BundleGroup;
+    entry?: (typeof waitingEntries)[number];
+  }
+  const bugTitle = (b: BugLog) => {
+    const t = (refinedFor(b)?.title || b.title || titleFromNote(b.note)).replace(/\s+/g, ' ').trim();
+    // A note starting "1. ..." gives a useless first sentence; fall back to the note itself
+    if (/^[\d\W]{0,4}$/.test(t)) { const n = (b.note || '').replace(/\s+/g, ' ').trim(); return n.length > 110 ? `${n.slice(0, 109)}…` : (n || t); }
+    return t;
+  };
+  const bugItem = (b: BugLog): Item => {
+    const filed = isFiled(b);
+    const repro = !filed && isReproRow(b);
+    const m = repro ? matchesFor(b) : undefined;
+    const best = m?.candidates[0];
+    const kind: ItemKind = filed ? 'filed' : repro ? 'repro' : 'new';
+    return {
+      key: b.id, kind, ts: String(b.timestamp), bug: b,
+      title: `${bugTitle(b)}${best ? ` → b/${best.id}` : ''}`,
+      cuj: b.feature || 'General',
+      priority: draftFor(b).priority,
+      tag: kind === 'filed' ? 'Filed' : kind === 'repro' ? (best ? `Repro'd · ${Math.round(best.confidence)}%` : "Repro'd") : 'New',
+      shortTag: kind === 'filed' ? '✓' : kind === 'repro' ? (best ? `${Math.round(best.confidence)}%` : '🔁') : 'New',
+      action: kind === 'filed' ? 'View' : kind === 'repro' ? 'Follow up' : 'Edit',
+      selectable: kind !== 'filed',
+    };
+  };
+  const groupItem = (g: BundleGroup): Item => {
+    const filed = groupIsFiled(g);
+    const repro = !filed && isReproGroup(g);
+    const best = repro ? groupMatches(g)?.candidates[0] : undefined;
+    return {
+      key: g.bundle.id, kind: filed ? 'filed' : 'bundle', ts: String(g.members[g.members.length - 1]?.timestamp || ''), group: g,
+      title: `${g.bundle.title}${best ? ` → b/${best.id}` : ''}`,
+      cuj: bundleCuj(g.members),
+      priority: megaDraftFor(g).priority,
+      tag: filed ? `Filed · ×${g.members.length}` : `Bundle ×${g.members.length}${best ? ` · ${Math.round(best.confidence)}%` : ''}`,
+      shortTag: filed ? '✓' : `×${g.members.length}`,
+      action: filed ? 'View' : repro ? 'Follow up' : 'Review',
+      selectable: !filed,
+    };
+  };
+  const waitingItem = (e: (typeof waitingEntries)[number]): Item => {
+    const first = e.members[0];
+    const n = e.group ? e.group.members.length : 1;
+    return {
+      key: `wait:${e.key}`, kind: 'waiting', ts: String(e.pending.openedAt || first.timestamp), entry: e,
+      title: e.group ? `${e.group.bundle.title} (reported ${n}×)` : bugTitle(first),
+      cuj: e.group ? bundleCuj(e.group.members) : (first.feature || 'General'),
+      priority: draftFor(first).priority,
+      tag: e.pending.expired ? 'Not found' : 'Waiting',
+      shortTag: e.pending.expired ? '⚠' : '⏳',
+      action: 'Reopen',
+      selectable: false,
+    };
+  };
+  const byNewest = (a: Item, b: Item) => b.ts.localeCompare(a.ts);
+  const bugItems = visible.map(bugItem);
+  const groupItems = shownGroups.map(groupItem);
+  const waitItems = waitingEntries.map(waitingItem);
+  const toFileItems = bugItems.filter(x => x.kind === 'new');
+  const reproItems = [...bugItems.filter(x => x.kind === 'repro'), ...groupItems.filter(x => x.kind === 'bundle' && x.group && isReproGroup(x.group))];
+  const bundleItems = groupItems.filter(x => x.kind === 'bundle');
+  const filedItems = [...filtered.filter(isFiled).map(bugItem), ...filedGroups.map(groupItem)].sort(byNewest);
+  const allItems = [...waitItems, ...bugItems, ...groupItems].sort(byNewest);
+  const itemsFor = (f: ListFilter | TabKey): Item[] => {
+    switch (f) {
+      case 'tofile': return toFileItems.sort(byNewest);
+      case 'reprod': return reproItems.sort(byNewest);
+      case 'bundles': return bundleItems.sort(byNewest);
+      case 'waiting': return waitItems;
+      case 'filed': return filedItems;
+      default: return allItems;
+    }
+  };
+  const listItems = layout === 'b' ? itemsFor(tab) : itemsFor(listFilter);
+
+  const renderItemDetail = (it: Item, stack = false) => {
+    if (it.entry) return renderWaiting(it.entry);
+    if (it.group) return renderBundleRow(it.group, stack);
+    if (it.bug) return renderBugCard(it.bug, stack);
+    return null;
+  };
+  const toggleExpanded = (key: string) => setExpandedKeys(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+
+  /** One-line row (A/B: click expands in place; C: click selects for the side panel). */
+  const renderCompactRow = (it: Item, mode: 'expand' | 'select') => {
+    const open = mode === 'expand' ? expandedKeys.has(it.key) : selectedKey === it.key;
+    const onRow = () => (mode === 'expand' ? toggleExpanded(it.key) : setSelectedKey(it.key));
+    return (
+      <div key={it.key} data-item-key={it.key}>
+        <div data-testid="row-compact" data-kind={it.kind} role="button" tabIndex={0} onClick={onRow}
+          onKeyDown={e => { if (e.key === 'Enter') onRow(); }}
+          className={`flex items-center gap-2.5 px-3 py-2 border-b border-slate-800/80 text-[12.5px] cursor-pointer hover:bg-[#111a2c] ${open ? (mode === 'select' ? 'bg-[#13203a] shadow-[inset_3px_0_0_#3b82f6]' : 'bg-[#111a2c]') : ''}`}>
+          {mode === 'expand' && (it.selectable ? (
+            <input type="checkbox" aria-label={`Select ${it.key}`} className="accent-blue-500" checked={selected.has(it.key)}
+              onClick={e => e.stopPropagation()} onChange={() => toggle(it.key)} />
+          ) : <span className="w-[13px]" />)}
+          <span className={`text-[10.5px] rounded-md px-1.5 py-0.5 font-semibold whitespace-nowrap ${KIND_TAG[it.kind]}`}>{mode === 'select' ? it.shortTag : it.tag}</span>
+          <span className="flex-1 min-w-0 truncate text-slate-100">{it.title}</span>
+          {mode === 'expand' && <span className="hidden md:inline text-[11.5px] text-slate-400 truncate max-w-[180px]">{it.cuj}</span>}
+          {mode === 'expand' && it.priority && <span className="text-[10.5px] rounded-md px-1.5 py-0.5 font-semibold bg-slate-800 text-slate-300">{it.priority}</span>}
+          <span className="text-[10.5px] text-slate-400 w-[58px] text-right whitespace-nowrap">{fmtTime(it.ts)}</span>
+          {mode === 'expand' && (
+            <button type="button" className="text-[11.5px] font-bold rounded-lg px-2.5 py-1 border border-slate-700 bg-[#141c2f] text-slate-200 hover:border-slate-500 whitespace-nowrap"
+              onClick={e => { e.stopPropagation(); setExpandedKeys(prev => new Set(prev).add(it.key)); }}>
+              {it.action}
+            </button>
+          )}
+        </div>
+        {mode === 'expand' && open && <div className="p-3 bg-[#0b1220] border-b border-slate-800" data-testid="row-expanded">{renderItemDetail(it)}</div>}
+      </div>
+    );
+  };
+
+  // Layout C: keep a valid selection and move it with the arrow keys.
+  useEffect(() => {
+    if (layout !== 'c') return;
+    if (listItems.length && (!selectedKey || !listItems.some(x => x.key === selectedKey))) setSelectedKey(listItems[0].key);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout, listItems.map(x => x.key).join('|')]);
+  useEffect(() => {
+    if (layout !== 'c') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.closest('input, textarea, select, [contenteditable="true"]'))) return;
+      if (!listItems.length) return;
+      e.preventDefault();
+      const idx = Math.max(0, listItems.findIndex(x => x.key === selectedKey));
+      const next = listItems[Math.min(listItems.length - 1, Math.max(0, idx + (e.key === 'ArrowDown' ? 1 : -1)))];
+      setSelectedKey(next.key);
+      document.querySelector(`[data-item-key="${CSS.escape(next.key)}"]`)?.scrollIntoView({ block: 'nearest' });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [layout, listItems, selectedKey]);
+
+  // ---------- status chips (replace the old bars) ----------
+  const reproTotal = reproItems.length;
+  const reproChecked = reproItems.filter(x => (x.bug ? matchesFor(x.bug) : x.group ? groupMatches(x.group) : undefined)).length;
+  const reproRunning = reproItems.filter(x => matchState[x.bug ? x.bug.id : x.key]?.running).length;
+  const jobsInProgress = (heartbeat?.queues?.refine || 0) + (heartbeat?.queues?.match || 0) + (heartbeat?.queues?.bundle || 0);
+  const refineText = !rx95Ready ? 'not available here'
+    : !autoRefine ? 'auto-refine off'
+    : refineState.running > 0 ? `refining ${refineState.running}…`
+    : refineState.error ? 'paused'
+    : `${refinedVisible}/${visible.length} refined`;
+  const filterChip = (f: ListFilter, tabKey: TabKey) => ({
+    on: layout === 'b' ? tab === tabKey : listFilter === f,
+    click: () => {
+      if (layout === 'b') setTab(tabKey);
+      else setListFilter(prev => (prev === f ? 'all' : f));
+    },
+  });
+
+  const renderStatusChips = () => {
+    const rep = filterChip('reprod', 'reprod');
+    const bun = filterChip('bundles', 'bundles');
+    const wait = filterChip('waiting', 'waiting');
+    const tof = filterChip('tofile', 'tofile');
+    return (
+      <div className="flex flex-wrap items-center gap-2" data-testid="status-chips">
+        {workerFresh ? (
+          <button type="button" data-testid="rx95-worker-bar" className={`${chipCls} ${chipOff}`} onClick={() => setDetailsOpen(v => !v)}
+            title={`RX95 is working in the background. ${jobsInProgress} job(s) in progress · ${waitingCount} waiting for Buganizer.`}>
+            <span className="w-[7px] h-[7px] rounded-full bg-green-500 shadow-[0_0_6px_#22c55e]" /><b className="text-white">RX95 live</b> · synced {Math.round(hbAgeSec)}s ago{jobsInProgress ? ` · ${jobsInProgress} in progress` : ''}
+          </button>
+        ) : (
+          <button type="button" data-testid="rx95-refine-bar" className={`${chipCls} ${refineState.error ? 'border-amber-500/60 text-amber-200 bg-amber-500/10' : chipOff}`} onClick={() => setDetailsOpen(v => !v)}
+            title="RX95's background helper is offline; this tab cleans up wording itself">
+            <span className="w-[7px] h-[7px] rounded-full bg-slate-500" /><b className="text-white">RX95</b> · {refineText}
+          </button>
+        )}
+        {layout === 'c' && (
+          <button type="button" data-testid="chip-tofile" className={`${chipCls} ${tof.on ? chipOn : chipOff}`} onClick={tof.click}>To file <b className="text-white">{toFileItems.length}</b></button>
+        )}
+        {(reproTotal > 0 || layout !== 'a') && (
+          <button type="button" data-testid="repro-bar" className={`${chipCls} ${rep.on ? chipOn : matchPaused ? 'border-amber-500/60 text-amber-200 bg-amber-500/10' : chipOff}`} onClick={rep.click}>
+            🔁 <b className="text-white">{reproChecked}/{reproTotal}</b> repro'd checked{reproRunning ? ` · checking ${reproRunning}` : ''}{matchPaused ? ' · paused' : ''}
+            {matchPaused && rx95Ready && (
+              <span role="button" tabIndex={0} className="ml-1 underline" onClick={e => { e.stopPropagation(); retryMatches(); }}>retry</span>
+            )}
+          </button>
+        )}
+        {(shown.length > 0 || bundleItems.length > 0 || layout !== 'a') && (
+          <button type="button" data-testid="chip-bundles" className={`${chipCls} ${bun.on ? chipOn : chipOff}`} onClick={bun.click}>
+            🧩 <b className="text-white">{shown.length}</b> suggested{bundleItems.length ? ` · ${bundleItems.length} bundled` : ''}
+          </button>
+        )}
+        {(waitItems.length > 0 || layout !== 'a') && (
+          <button type="button" data-testid="chip-waiting" className={`${chipCls} ${wait.on ? chipOn : chipOff}`} onClick={wait.click}>⏳ <b className="text-white">{waitItems.length}</b> waiting</button>
+        )}
+        {layout !== 'b' && filedCount > 0 && (
+          <span data-testid="filed-hidden" className={`${chipCls} ${showFiled ? chipOn : chipOff}`}>
+            ✓ <b className="text-white">{filedCount}</b> filed {showFiled ? 'shown' : 'hidden'} ·{' '}
+            <button type="button" data-testid="filed-hidden-toggle" className="text-blue-300 hover:underline" onClick={() => setShowFiled(v => !v)}>{showFiled ? 'hide' : 'show'}</button>
+          </span>
+        )}
+      </div>
+    );
+  };
+
+  /** Details behind the RX95 chip: the old status bars, so errors / Retry / Auto-refine stay reachable. */
+  const renderStatusDetails = () => detailsOpen && (
+    <div className="rounded-2xl border border-slate-800 bg-[#0f172a] px-4 py-3 text-xs text-slate-200 space-y-2" data-testid="status-details">
+      {workerFresh ? (
+        <p><b>RX95 is working in the background.</b> New reports are cleaned up and checked as they come in. Last sync {Math.round(hbAgeSec)}s ago · {jobsInProgress} job{jobsInProgress === 1 ? '' : 's'} in progress · {waitingCount} waiting for Buganizer.</p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="flex-1 min-w-[240px]">
+            <b>RX95 wording cleanup.</b>{' '}
+            {!rx95Ready ? "Not available here (needs the cloud connection). Drafts use the reporter's wording."
+              : !autoRefine ? "Off - drafts use the reporter's wording."
+              : refineState.running > 0 ? `Refining ${refineState.running} bug${refineState.running === 1 ? '' : 's'} in the background…`
+              : refineState.error ? `Paused: ${refineState.error}`
+              : `${refinedVisible} of ${visible.length} bugs refined. RX95 rewrites the reporter's title and description; the original stays in the row.`}
           </p>
-          {waitingEntries.map(renderWaiting)}
+          {rx95Ready && refineState.error && autoRefine && (
+            <button className="px-2.5 h-7 rounded-xl font-semibold bg-violet-500/20 border border-violet-500/40" onClick={retryRefine}>Retry</button>
+          )}
+          {rx95Ready && (
+            <label className="flex items-center gap-1.5 cursor-pointer select-none">
+              <input type="checkbox" data-testid="rx95-auto-refine" className="accent-violet-400" checked={autoRefine} onChange={toggleAutoRefine} /> Auto-refine
+            </label>
+          )}
         </div>
       )}
-
-      {/* Pop-up blocked help */}
-      {openQueue.length > 0 && (
-        <div data-testid="popup-blocked" className="rounded-[20px] border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-100 flex flex-wrap items-center gap-3">
-          <div className="flex-1 min-w-[260px] leading-relaxed">
-            <b>Your browser blocked {openQueue.length} tab{openQueue.length === 1 ? '' : 's'}.</b> Browsers allow only one pop-up per click.
-            Click the blocked pop-up icon at the right end of the address bar, choose <b>"Always allow pop-ups and redirects from {window.location.host}"</b>, then click <b>Open remaining</b>.
-          </div>
-          <button className="px-3 h-8 rounded-xl font-semibold bg-amber-500/25 border border-amber-500/50" onClick={openRemaining}>Open remaining ({openQueue.length})</button>
-          <button className="px-2.5 h-8 rounded-xl text-amber-200/80 hover:bg-amber-500/10" onClick={() => setOpenQueue([])}>Dismiss</button>
+      {reproTotal > 0 && (
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="flex-1 min-w-[240px]"><b>RX95 repro check.</b> {!rx95Ready ? 'Not available here (needs the cloud connection).' : matchPaused ? `Paused: ${matchPaused}` : `${reproChecked} of ${reproTotal} repro'd checked${reproRunning ? `, ${reproRunning} checking now` : ''}.`}</p>
+          {rx95Ready && matchPaused && <button className="px-2.5 h-7 rounded-xl font-semibold bg-violet-500/20 border border-violet-500/40" onClick={retryMatches}>Retry</button>}
         </div>
       )}
+    </div>
+  );
 
-      {/* Filters */}
-      <div className="rounded-[20px] border border-slate-800 bg-[#111827] p-4 space-y-3">
-        <div className="flex items-center gap-2 text-sm font-bold text-slate-100"><Filter className="w-4 h-4 text-blue-400" /> Filter</div>
-        <div className="grid grid-cols-2 md:grid-cols-6 gap-2.5">
+  const renderLayoutSwitch = () => (
+    <div data-testid="layout-switch" className="inline-flex items-center rounded-full border border-slate-700 bg-[#141c2f] p-0.5 text-[11.5px]">
+      <span className="px-2 text-slate-400">Layout</span>
+      {LAYOUTS.map(l => (
+        <button key={l} type="button" data-testid={`layout-${l}`} aria-pressed={layout === l}
+          className={`px-2.5 py-0.5 rounded-full font-bold ${layout === l ? 'bg-blue-600 text-white' : 'text-slate-300 hover:text-white'}`}
+          onClick={() => setLayout(l)}>{l.toUpperCase()}</button>
+      ))}
+    </div>
+  );
+
+  const searchBox = (
+    <div className="relative">
+      <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2" />
+      <input aria-label="Search" className={`${inputCls} pl-7 !w-44`} value={query} onChange={e => setQuery(e.target.value)} placeholder="Search…" />
+    </div>
+  );
+  const planSelect = (
+    <select aria-label="Plan filter" className={`${inputCls} !w-auto`} value={planId} onChange={e => setPlanId(e.target.value)}>
+      <option value="all">All plans</option>
+      {planIds.map(p => <option key={p} value={p}>{planName(p)}</option>)}
+    </select>
+  );
+  const dayInput = <input aria-label="Day filter" type="date" className={`${inputCls} !w-auto`} value={day} onChange={e => setDay(e.target.value)} />;
+
+  /** Filters ▾ popover (A and C): the full filter set. */
+  const renderFiltersPopover = () => (
+    <div className="relative">
+      <button type="button" data-testid="filters-toggle" className={`${chipCls} ${filtersOpen || tester !== 'all' || planId !== 'all' || day || cuj !== 'all' || stateFilter !== 'all' ? chipOn : chipOff}`} onClick={() => setFiltersOpen(v => !v)}>
+        <Filter className="w-3.5 h-3.5" /> Filters ▾
+      </button>
+      {filtersOpen && (
+        <div data-testid="filters-popover" className="absolute right-0 z-20 mt-2 w-[min(92vw,560px)] rounded-2xl border border-slate-700 bg-[#0f172a] p-3 shadow-2xl grid grid-cols-2 md:grid-cols-3 gap-2.5">
           <div>
             <label className={labelCls}>Tester</label>
             <select aria-label="Tester filter" className={inputCls} value={tester} onChange={e => setTester(e.target.value)}>
@@ -1165,17 +1452,8 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
               {testers.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
-          <div>
-            <label className={labelCls}>Test plan</label>
-            <select aria-label="Plan filter" className={inputCls} value={planId} onChange={e => setPlanId(e.target.value)}>
-              <option value="all">All plans</option>
-              {planIds.map(p => <option key={p} value={p}>{planName(p)}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className={labelCls}>Day</label>
-            <input aria-label="Day filter" type="date" className={inputCls} value={day} onChange={e => setDay(e.target.value)} />
-          </div>
+          <div><label className={labelCls}>Test plan</label>{planSelect}</div>
+          <div><label className={labelCls}>Day</label>{dayInput}</div>
           <div>
             <label className={labelCls}>CUJ</label>
             <select aria-label="CUJ filter" className={inputCls} value={cuj} onChange={e => setCuj(e.target.value)}>
@@ -1184,150 +1462,140 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
             </select>
           </div>
           <div>
-            <label className={labelCls}>Status</label>
+            <label className={labelCls}>Draft status</label>
             <select aria-label="Status filter" className={inputCls} value={stateFilter} onChange={e => setStateFilter(e.target.value as any)}>
               <option value="all">All</option>
-              {(Object.keys(STATE_LABEL) as DraftState[]).map(s => <option key={s} value={s}>{STATE_LABEL[s]}</option>)}
+              {(Object.keys(STATE_LABEL) as DraftState[]).map(st => <option key={st} value={st}>{STATE_LABEL[st]}</option>)}
             </select>
           </div>
-          <div>
-            <label className={labelCls}>Search</label>
-            <div className="relative">
-              <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2" />
-              <input aria-label="Search" className={`${inputCls} pl-7`} value={query} onChange={e => setQuery(e.target.value)} placeholder="Note, step, title…" />
-            </div>
+          <div className="flex items-end">
+            <button type="button" className="px-2.5 h-8 rounded-xl text-xs text-slate-300 hover:bg-slate-800"
+              onClick={() => { setTester('all'); setPlanId('all'); setDay(''); setCuj('all'); setStateFilter('all'); }}>Reset filters</button>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2 text-[11px]">
-          <span className="text-slate-400">{visible.length} bugs:</span>
-          {(Object.keys(STATE_LABEL) as DraftState[]).map(s => (
-            <span key={s} className={`px-2 py-0.5 rounded-full border ${STATE_STYLE[s]}`}>{STATE_LABEL[s]} {counts[s]}</span>
+      )}
+    </div>
+  );
+
+  const renderBulkBar = () => selected.size > 0 && (
+    <div data-testid="bulk-bar" className="sticky top-2 z-10 rounded-[20px] border border-slate-800 bg-[#0b1220]/95 backdrop-blur px-4 py-2.5 flex flex-wrap items-center gap-2">
+      <span className="text-xs text-slate-300 font-semibold mr-1">{`${selectedCount} to open · ${selected.size} selected`}</span>
+      <button className="px-2.5 h-7 rounded-xl text-xs text-slate-200 hover:bg-slate-800" onClick={() => setSelected(new Set(listItems.filter(x => x.selectable).map(x => x.key)))}>Select all</button>
+      <button className="px-2.5 h-7 rounded-xl text-xs text-slate-200 hover:bg-slate-800" onClick={selectAllReady}>Select ready</button>
+      <button className="px-2.5 h-7 rounded-xl text-xs text-slate-200 hover:bg-slate-800" onClick={() => setSelected(new Set())}>Clear</button>
+      <span className="w-px h-5 bg-slate-700 mx-1" />
+      <button className="px-2.5 h-7 rounded-xl text-xs text-blue-200 hover:bg-blue-600/20" onClick={() => markSelected('ready')}>Mark ready</button>
+      <button className="px-2.5 h-7 rounded-xl text-xs text-slate-300 hover:bg-slate-800" onClick={() => markSelected('draft')}>Back to draft</button>
+      <button data-testid="bundle-selected" disabled={selectedBundleable.length < 2}
+        className="px-2.5 h-7 rounded-xl text-xs font-semibold text-violet-200 hover:bg-violet-500/15 disabled:opacity-40 disabled:cursor-not-allowed"
+        onClick={() => createBundle(selectedBundleable, manualBundleTitle(selectedBundleable, refinedFor), undefined, 'manual')}>
+        🧩 Bundle selected{selectedBundleable.length >= 2 ? ` (${selectedBundleable.length})` : ''}
+      </button>
+      <div className="flex-1" />
+      {openQueue.length > 0 && (
+        <button data-testid="open-remaining" className="px-3 h-8 rounded-xl text-xs font-semibold bg-amber-500/20 text-amber-100 border border-amber-500/40" onClick={openRemaining}>
+          Open remaining ({openQueue.length})
+        </button>
+      )}
+      <button data-testid="open-in-buganizer" disabled={selectedCount === 0} onClick={startOpen}
+        className="px-3 h-8 rounded-xl text-xs font-semibold flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40 disabled:cursor-not-allowed">
+        <ExternalLink className="w-3.5 h-3.5" /> Open {selectedCount || ''} in Buganizer
+      </button>
+    </div>
+  );
+
+  const emptyList = (text = 'Nothing here for these filters.') => (
+    <div className="p-8 text-center text-sm text-slate-400">{text}</div>
+  );
+
+  const renderSelectedPanel = () => {
+    const it = listItems.find(x => x.key === selectedKey);
+    if (!it) return <div className="rounded-[20px] border border-slate-800 bg-[#0f172a] p-6 text-sm text-slate-400">Select a bug on the left.</div>;
+    if (it.bug && it.kind === 'repro') {
+      // Side panel: the repro panel shows the best match first
+      const bug = it.bug;
+      return (
+        <div className="rounded-[20px] border border-slate-800 bg-[#0f172a] p-4 space-y-2" data-testid="side-panel">
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+            <span className={`rounded-md px-1.5 py-0.5 font-semibold ${KIND_TAG.repro}`}>Repro'd</span>
+            {bug.feature || 'General'} · {bug.testerName || 'Unknown'} · {bug.deviceName || '?'} · {fmtTime(bug.timestamp)}
+          </div>
+          <p className="text-sm font-extrabold text-white">{bugTitle(bug)}</p>
+          {bug.title && (bug.note || '').trim() !== bug.title.trim() && <p className="text-xs text-slate-400 line-clamp-3 whitespace-pre-line">{bug.note}</p>}
+          {renderReproPanel({
+            key: bug.id, query: bug, matches: matchesFor(bug), compact: true,
+            comment: () => commentFor(bug),
+            onFollowUp: cand => followUp(bug, cand),
+            onFileNew: () => updateDraft(bug, { fileAsNew: true }),
+          })}
+        </div>
+      );
+    }
+    return <div className="rounded-[20px] border border-slate-800 bg-[#0f172a] p-1" data-testid="side-panel">{renderItemDetail(it, true)}</div>;
+  };
+
+  const popupHelp = openQueue.length > 0 && (
+    <div data-testid="popup-blocked" className="rounded-[20px] border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-100 flex flex-wrap items-center gap-3">
+      <div className="flex-1 min-w-[260px] leading-relaxed">
+        <b>Your browser blocked {openQueue.length} tab{openQueue.length === 1 ? '' : 's'}.</b> Browsers allow only one pop-up per click.
+        Click the blocked pop-up icon at the right end of the address bar, choose <b>"Always allow pop-ups and redirects from {window.location.host}"</b>, then click <b>Open remaining</b>.
+      </div>
+      <button className="px-3 h-8 rounded-xl font-semibold bg-amber-500/25 border border-amber-500/50" onClick={openRemaining}>Open remaining ({openQueue.length})</button>
+      <button className="px-2.5 h-8 rounded-xl text-amber-200/80 hover:bg-amber-500/10" onClick={() => setOpenQueue([])}>Dismiss</button>
+    </div>
+  );
+
+  const tabDefs: Array<{ key: TabKey; label: string; count: number }> = [
+    { key: 'tofile', label: 'To file', count: toFileItems.length },
+    { key: 'reprod', label: "Repro'd", count: reproItems.length },
+    { key: 'bundles', label: 'Bundles', count: shown.length + bundleItems.length },
+    { key: 'waiting', label: 'Waiting', count: waitItems.length },
+    { key: 'filed', label: 'Filed', count: filedItems.length },
+  ];
+  const suggestionsVisible = layout === 'b' ? tab === 'bundles' : (showSuggestions || listFilter === 'bundles');
+
+  return (
+    <div className="space-y-4" data-testid="buganizer-triage" data-layout={layout}>
+      {/* Header: status chips + layout switch + filters */}
+      <div className="flex flex-wrap items-center gap-2">
+        {renderStatusChips()}
+        <div className="flex-1" />
+        {layout === 'b' ? <>{planSelect}{dayInput}</> : renderFiltersPopover()}
+        {searchBox}
+        {renderLayoutSwitch()}
+      </div>
+      {renderStatusDetails()}
+      {popupHelp}
+
+      {layout === 'b' && (
+        <div className="flex flex-wrap gap-1 border-b border-slate-800" role="tablist">
+          {tabDefs.map(t => (
+            <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} data-testid={`layout-tab-${t.key}`}
+              className={`px-3 py-2 text-[12.5px] border-b-2 -mb-px ${tab === t.key ? 'text-white border-blue-500 font-bold' : 'text-slate-400 border-transparent hover:text-slate-200'}`}
+              onClick={() => setTab(t.key)}>
+              {t.label}<span className="ml-1.5 text-[11px] bg-slate-800 rounded-full px-1.5 text-slate-300">{t.count}</span>
+            </button>
           ))}
         </div>
-      </div>
+      )}
 
-      {/* Bulk actions */}
-      <div className="sticky top-2 z-10 rounded-[20px] border border-slate-800 bg-[#0b1220]/95 backdrop-blur px-4 py-2.5 flex flex-wrap items-center gap-2">
-        <span className="text-xs text-slate-300 font-semibold mr-1">{selected.size ? `${selectedCount} to open · ${selected.size} selected` : '0 selected'}</span>
-        <button className="px-2.5 h-7 rounded-xl text-xs text-slate-200 hover:bg-slate-800" onClick={() => setSelected(new Set([...visible.map(b => b.id), ...shownGroups.map(g => g.bundle.id)]))}>Select all</button>
-        <button className="px-2.5 h-7 rounded-xl text-xs text-slate-200 hover:bg-slate-800" onClick={selectAllReady}>Select ready</button>
-        <button className="px-2.5 h-7 rounded-xl text-xs text-slate-200 hover:bg-slate-800" onClick={() => setSelected(new Set())}>Clear</button>
-        <span className="w-px h-5 bg-slate-700 mx-1" />
-        <button className="px-2.5 h-7 rounded-xl text-xs text-blue-200 hover:bg-blue-600/20" onClick={() => markSelected('ready')}>Mark ready</button>
-        <button className="px-2.5 h-7 rounded-xl text-xs text-slate-300 hover:bg-slate-800" onClick={() => markSelected('draft')}>Back to draft</button>
-        <button data-testid="bundle-selected" disabled={selectedBundleable.length < 2}
-          className="px-2.5 h-7 rounded-xl text-xs font-semibold text-violet-200 hover:bg-violet-500/15 disabled:opacity-40 disabled:cursor-not-allowed"
-          onClick={() => createBundle(selectedBundleable, manualBundleTitle(selectedBundleable, refinedFor), undefined, 'manual')}>
-          🧩 Bundle selected{selectedBundleable.length >= 2 ? ` (${selectedBundleable.length})` : ''}
-        </button>
-        <div className="flex-1" />
-        {openQueue.length > 0 && (
-          <button data-testid="open-remaining" className="px-3 h-8 rounded-xl text-xs font-semibold bg-amber-500/20 text-amber-100 border border-amber-500/40" onClick={openRemaining}>
-            Open remaining ({openQueue.length})
-          </button>
-        )}
-        <button
-          data-testid="open-in-buganizer"
-          disabled={selectedCount === 0}
-          onClick={startOpen}
-          className="px-3 h-8 rounded-xl text-xs font-semibold flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <ExternalLink className="w-3.5 h-3.5" /> Open {selectedCount || ''} in Buganizer
-        </button>
-      </div>
+      {suggestionsVisible && renderSuggestions()}
+      {renderBulkBar()}
 
-      {/* Bug list */}
-      <div className="space-y-3">
-        {rows.length === 0 && (
-          <div className="rounded-[20px] border border-slate-800 bg-[#111827] p-8 text-center text-sm text-slate-400">No bugs match these filters.</div>
-        )}
-        {rows.map(row => {
-          if (row.kind === 'bundle') return renderBundleRow(row.group);
-          const bug = row.bug;
-          const d = draftFor(bug);
-          const filed = effectiveFiled(bug);
-          const repro = isReproRow(bug);
-          const reprod = !filed && effectiveStatus(bug.status) === REPROD;
-          return (
-            <div key={bug.id} data-testid="triage-row" className={`rounded-[20px] border bg-[#111827] p-4 ${selected.has(bug.id) ? 'border-blue-500/60 ring-1 ring-blue-500/30' : 'border-slate-800'}`}>
-              <div className="flex items-start gap-3">
-                {/* Repro'd rows can be selected for "Bundle selected"; they're never opened as new issues */}
-                <input type="checkbox" aria-label={`Select ${bug.id}`} className="mt-1 accent-blue-500" checked={selected.has(bug.id)} onChange={() => toggle(bug.id)} />
-                <div className="flex-1 min-w-0 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)] gap-4">
-                  {/* Original tester note */}
-                  <div className="space-y-1.5">
-                    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                      {filed && (
-                        <span data-testid="row-filed-pill" className="px-2 py-0.5 rounded-full border bg-green-500/15 text-green-300 border-green-500/40 font-bold">FILED{filedStampLine(filed) ? ` · ${filedStampLine(filed)}` : ''}</span>
-                      )}
-                      {reprod && (
-                        <span data-testid="row-reprod-pill" className="px-2 py-0.5 rounded-full border border-violet-500/50 bg-violet-500/15 text-violet-200 flex items-center gap-1"><Repeat className="w-3 h-3" /> Repro'd Issue</span>
-                      )}
-                      {!repro && (
-                        <span className={`px-2 py-0.5 rounded-full border ${STATE_STYLE[d.state]}`}>{STATE_LABEL[d.state]}{d.state === 'filed' && d.issueId ? ` · b/${d.issueId}` : ''}</span>
-                      )}
-                      <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">{bug.feature || 'General'}</span>
-                      {refinedFor(bug) && (
-                        d.refinedAt === refinedFor(bug)!.at && !d.textEdited ? (
-                          <span data-testid="rx95-refined-chip" className="px-2 py-0.5 rounded-full border border-violet-500/40 bg-violet-500/15 text-violet-200 flex items-center gap-1">
-                            <Sparkles className="w-3 h-3" /> RX95 wording
-                            <button className="ml-1 underline decoration-dotted text-violet-300 hover:text-white" onClick={() => useOriginalWording(bug)}>use original</button>
-                          </span>
-                        ) : (
-                          <button data-testid="rx95-use-wording" className="px-2 py-0.5 rounded-full border border-violet-500/30 text-violet-300 hover:bg-violet-500/10 flex items-center gap-1" onClick={() => useRx95Wording(bug)}>
-                            <Sparkles className="w-3 h-3" /> Use RX95 wording
-                          </button>
-                        )
-                      )}
-                    </div>
-                    <p className="text-[10px] uppercase tracking-wide text-slate-500 pt-0.5">Reporter's original</p>
-                    {bug.title && <p className="text-sm font-semibold text-white leading-snug">{bug.title}</p>}
-                    {(!bug.title || bug.note !== bug.title) && (
-                      <p className={`${bug.title ? 'text-xs text-slate-300 line-clamp-3 whitespace-pre-line' : 'text-sm text-slate-100'} leading-snug`}>{bug.note}</p>
-                    )}
-                    <p className="text-[11px] text-slate-400">
-                      {bug.testerName || 'Unknown'} · {bug.deviceName || 'Unknown device'} · {bug.formattedTime || localDay(bug.timestamp)}
-                    </p>
-                    <p className="text-[11px] text-slate-500 truncate">{planName(bug.planId)} › {bug.stepTitle}</p>
-                    {repro && bug.environment && (
-                      <p className="text-[11px] text-slate-500 truncate" data-testid="row-build">
-                        Build: {[bug.environment.glassesFirmware, [bug.environment.phoneManufacturer, bug.environment.phoneModel].filter(Boolean).join(' '), bug.environment.androidVersion ? `Android ${bug.environment.androidVersion}` : ''].filter(Boolean).join(' · ') || 'not captured'}
-                      </p>
-                    )}
-                  </div>
-
-                  {repro ? renderReproPanel({
-                    key: bug.id,
-                    query: bug,
-                    matches: matchesFor(bug),
-                    comment: () => commentFor(bug),
-                    onFollowUp: cand => followUp(bug, cand),
-                    onFileNew: () => updateDraft(bug, { fileAsNew: true }),
-                  }) : renderDraftFields({
-                    key: bug.id,
-                    d,
-                    update: patch => updateDraft(bug, patch),
-                    planId: bug.planId,
-                    top: reprod && d.fileAsNew ? (
-                      <button data-testid="repro-back-to-matches" className="px-2 py-0.5 rounded-full border border-violet-500/40 text-[11px] text-violet-200 hover:bg-violet-500/10" onClick={() => updateDraft(bug, { fileAsNew: false })}>
-                        ← Back to RX95's possible existing bugs
-                      </button>
-                    ) : undefined,
-                    onFiledAs: id => {
-                      if (id && bug.filed?.issueId !== id) {
-                        patchBug(bug.id, { filed: newFiled('new', id), filePending: undefined });
-                        if (!showFiled) flash(`Stamped FILED as b/${id} and hidden. Use "show" in the filed bar to see it again.`);
-                      } else if (!id && bug.filed?.via === 'new') {
-                        patchBug(bug.id, { filed: undefined });
-                      }
-                    },
-                  })}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      {layout === 'c' ? (
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] gap-4 items-start">
+          <div className="rounded-[20px] border border-slate-800 bg-[#0f172a] overflow-hidden" data-testid="item-list">
+            {listItems.length === 0 ? emptyList() : listItems.map(it => renderCompactRow(it, 'select'))}
+          </div>
+          <div className="lg:sticky lg:top-2 max-h-[calc(100vh-1rem)] overflow-y-auto">{renderSelectedPanel()}</div>
+        </div>
+      ) : (
+        <div className="rounded-[20px] border border-slate-800 bg-[#0f172a] overflow-hidden" data-testid="item-list">
+          {listItems.length === 0
+            ? emptyList(layout === 'b' && tab === 'bundles' && shown.length ? 'No confirmed bundles yet - see the suggestions above.' : undefined)
+            : listItems.map(it => renderCompactRow(it, 'expand'))}
+        </div>
+      )}
 
       {/* Preview / dry-run modal: compact cards, expand one to review details */}
       {preview && (
