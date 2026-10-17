@@ -1,7 +1,7 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota, RefinedBugText, ReproMatches } from '../types';
-import { REPROD, TRIAGE_STATUS_OPTIONS, effectiveFiled, effectiveStatus, filedPatch, filedStampLine, newFiled, normalizeIssueId } from '../utils/reproFollowUp';
+import { REPROD, TRIAGE_STATUS_OPTIONS, currentReproMatches, effectiveFiled, effectiveStatus, filedPatch, filedStampLine, newFiled, normalizeIssueId } from '../utils/reproFollowUp';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers, FileSpreadsheet, ExternalLink, MessageSquareText, ClipboardPaste, Bot } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard, copySingleBugToClipboard } from '../utils/exportUtils';
 import { isRunFullyCompleted, buildStepFirstSeenIndex } from '../utils/runUtils';
@@ -4629,6 +4629,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                     else if (onUpdateBugLog) onUpdateBugLog({ ...rawBug, ...patch });
                                   };
                                   const draftId = filedIssueDrafts[bug.id] ?? '';
+                                  const isReprod = effectiveStatus(bugCategorizations[bug.id]?.status || rawBug.status) === REPROD;
+                                  // RX95's likely existing bugs, offered as one-click picks for the b/ field
+                                  const followUpPicks = isReprod
+                                    ? (currentReproMatches(rawBug as BugLog)?.candidates || []).filter(c => c.verdict !== 'unlikely').slice(0, 3)
+                                    : [];
                                   return (
                                     <div data-testid="feed-filed" className="mt-3">
                                       {filed && (
@@ -4648,7 +4653,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                           onClick={() => {
                                             if (filed) setFiled(undefined);
                                             else {
-                                              setFiled(newFiled('manual', draftId));
+                                              // A b/ on a Repro'd bug is the existing bug it was followed up on (summary: "(KI, updated)")
+                                              setFiled(newFiled(isReprod && draftId ? 'follow-up' : 'manual', draftId));
                                               setFiledIssueDrafts(prev => { const n = { ...prev }; delete n[bug.id]; return n; });
                                             }
                                           }}
@@ -4665,9 +4671,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                           value={draftId}
                                           inputMode="numeric"
                                           onChange={e => setFiledIssueDrafts(prev => ({ ...prev, [bug.id]: normalizeIssueId(e.target.value) }))}
-                                          placeholder="b/ issue number (optional)"
+                                          placeholder={isReprod ? 'b/ of the bug you followed up on' : 'b/ issue number (optional)'}
                                           className="mt-2 w-full bg-[#0f172a] border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-green-500"
                                         />
+                                      )}
+                                      {!filed && canEdit && isReprod && followUpPicks.length > 0 && (
+                                        <div data-testid="feed-filed-picks" className="mt-1.5 flex flex-wrap gap-1.5 items-center">
+                                          <span className="text-[10px] text-slate-400">Followed up on:</span>
+                                          {followUpPicks.map(c => (
+                                            <button
+                                              key={c.id}
+                                              type="button"
+                                              data-testid="feed-filed-pick"
+                                              title={c.title}
+                                              onClick={() => setFiledIssueDrafts(prev => ({ ...prev, [bug.id]: normalizeIssueId(String(c.id)) }))}
+                                              className={`max-w-full truncate text-[10px] px-2 py-0.5 rounded-full border font-mono ${draftId === String(c.id) ? 'border-green-500 bg-green-500/15 text-green-200' : 'border-slate-600 bg-slate-800 text-slate-200 hover:border-green-500/60'}`}
+                                            >
+                                              b/{c.id} · {(c.title || '').replace(/^(\[[^\]]*\]\s*)+/, '').slice(0, 48)}
+                                            </button>
+                                          ))}
+                                        </div>
                                       )}
                                     </div>
                                   );

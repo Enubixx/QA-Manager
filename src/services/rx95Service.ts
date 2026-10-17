@@ -39,8 +39,14 @@ const slimBug = (b: BugLog) => ({
   deviceName: b.deviceName,
   timestamp: b.timestamp,
   // Filed in Buganizer (confirmed or marked by hand, never pending): the report links that issue to this bug's line.
+  // A b/ typed in by hand on a Repro'd bug is the existing bug it was followed up on ("(KI, updated)").
   ...(b.filed?.issueId && /^\d{4,12}$/.test(String(b.filed.issueId))
-    ? { filedIssueId: String(b.filed.issueId), filedVia: b.filed.via === 'legacy' ? 'manual' : b.filed.via }
+    ? {
+        filedIssueId: String(b.filed.issueId),
+        filedVia: (b.filed.via === 'manual' || b.filed.via === 'legacy') && b.status === "Repro'd Issue"
+          ? 'follow-up'
+          : b.filed.via === 'legacy' ? 'manual' : b.filed.via,
+      }
     : {}),
 });
 

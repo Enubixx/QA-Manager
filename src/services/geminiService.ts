@@ -1278,7 +1278,9 @@ function filedInfoOf(b: any): { id: string; via: string } | null {
   const fromBug = b?.filed && typeof b.filed === 'object' ? String(b.filed.issueId ?? '') : '';
   const id = (fromBug || String(b?.filedIssueId ?? '')).replace(/[^\d]/g, '');
   if (!/^\d{4,12}$/.test(id)) return null;
-  const via = String((fromBug ? b.filed.via : b?.filedVia) || 'manual');
+  let via = String((fromBug ? b.filed.via : b?.filedVia) || 'manual');
+  // A b/ typed in by hand on a Repro'd bug is the existing bug it was followed up on.
+  if ((via === 'manual' || via === 'legacy') && b?.status === "Repro'd Issue") via = 'follow-up';
   return { id, via: ['follow-up', 'new', 'bundle', 'manual', 'legacy'].includes(via) ? via : 'manual' };
 }
 
@@ -1550,7 +1552,9 @@ function assembleBatchResult(
     for (const b of feature.bugs) {
       if (!b.filed) continue;
       const fromCatalog = catalog.get(b.filed.id);
-      filedByBug.set(b.n, fromCatalog ? { ...b.filed.local, ...fromCatalog, kind: fromCatalog.kind || b.filed.local.kind } : b.filed.local);
+      // This QA bug's own follow-up wins: an issue filed new today that we then followed up on is "(KI, updated)" here.
+      const kind: FiledBug['kind'] = b.filed.local.kind === 'follow-up' ? 'follow-up' : (fromCatalog?.kind || b.filed.local.kind);
+      filedByBug.set(b.n, fromCatalog ? { ...b.filed.local, ...fromCatalog, kind } : b.filed.local);
       usedInFeature.add(b.filed.id);
     }
     const attached = new Set<string>();

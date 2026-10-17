@@ -65,5 +65,41 @@ check('fetchIssueMeta: cached (no second CLI call needed)', cached.get('57375191
 const withCat = JSON.parse(w.attachFiledBugsCatalog('{"reportId":"R-1","features":[]}', [{ id: '573751910', title: 't', kind: 'follow-up' }]));
 check('catalog: kind attached', withCat.filedBugsCatalog[0].kind === 'follow-up');
 
+// Hand-made follow-ups: comment quoting the tester's note (worker backfill)
+const wk = await import('./worker');
+const comment = 'Comment #5: I got a couple more instances of this issue today:\n\nGlasses got disconnected after adding event to the calendar.\n2:04: http://sherlog/_x';
+check('quote: note found in hand-written comment', wk.commentQuotesNote('Glasses got disconnected after adding event to the calendar', comment));
+check('quote: punctuation/case/apostrophes ignored', wk.commentQuotesNote("Gemini said that it'll add those products to Google Keep note, but never did", 'gemini said that itll add those products to google keep note but never did.'));
+check('quote: different note not matched', !wk.commentQuotesNote('Glasses got disconnected after adding event to Keep', comment));
+check('quote: short note never counts as proof', !wk.commentQuotesNote('Sww error', 'Sww error'));
+check('quote: no partial-word match', !wk.commentQuotesNote('lasses got disconnected after adding event to the calendar', comment));
+
+// App side: Repro'd + hand-entered b/ = follow-up; own follow-up beats a same-day "new" catalog entry
+const { buildRx95Payload } = await import('../../src/services/rx95Service');
+const { applyChatSummaryReply } = await import('../../src/services/geminiService');
+const mk = (id: string, note: string, extra: any) => ({ id, note, feature: 'Calendar', stepTitle: 'Invite', timestamp: '2026-10-16T21:04:01Z', ...extra });
+const fp = [{ featureName: 'Calendar', status: 'fail', healthScorePct: 50, greenCount: 1, totalStepsExecuted: 2, bugCount: 3, bugs: [
+  mk('bug-1792184641801-nld2', 'Glasses disconnected after adding event', { status: "Repro'd Issue", filed: { issueId: '574522972', via: 'manual', at: 'x' } }),
+  mk('bug-1792184641801-aaaa', 'Event saved at the wrong time', { status: 'New', filed: { issueId: '574153191', via: 'manual', at: 'x' } }),
+  mk('bug-1792184641801-bbbb', 'Calendar crashed', { status: "Repro'd Issue", filed: { via: 'manual', at: 'x' } }),
+] }] as any;
+const slim = (buildRx95Payload(fp, { scopeKey: 'k', scopeLabel: 'L' }) as any).featuresPayload[0].bugs;
+check("payload: Repro'd + manual b/ sent as follow-up", slim[0].filedVia === 'follow-up' && slim[0].filedIssueId === '574522972');
+check('payload: New + manual b/ stays manual', slim[1].filedVia === 'manual');
+check('payload: no b/ -> nothing linked', !('filedIssueId' in slim[2]));
+const reply = JSON.stringify({ features: [{ featureId: 'F1', issues: [
+  { bugIds: [1], summary: 'glasses disconnect after adding an event' },
+  { bugIds: [2], summary: 'event saved at the wrong time' },
+  { bugIds: [3], summary: 'Calendar crash' },
+] }], overallSummary: 'x ✅', filedBugsCatalog: [
+  { id: '574522972', title: 'Gemini Live session abruptly terminated', priority: 'P1', kind: 'new' },
+  { id: '574153191', title: 'Wrong event time', priority: 'P2', kind: 'new' },
+] });
+const res = applyChatSummaryReply(fp, fp[0].bugs, reply);
+const items = res.featureIssues!['Calendar'];
+check('summary: followed-up bug tagged follow-up even if filed new today', items[0].filedBugs[0]?.id === '574522972' && items[0].filedBugs[0]?.kind === 'follow-up');
+check('summary: manual b/ on a New bug stays new', items[1].filedBugs[0]?.id === '574153191' && items[1].filedBugs[0]?.kind === 'new');
+check('summary: unlinked bug has no filed bugs', items[2].filedBugs.length === 0);
+
 console.log(`\n${pass}/${pass + fail} passed`);
 process.exit(fail ? 1 : 0);

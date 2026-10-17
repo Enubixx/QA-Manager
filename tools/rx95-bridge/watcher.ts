@@ -378,6 +378,9 @@ export async function summarizeWithRx95(payload: SummaryPayload): Promise<{ repl
       for (const id of followUpIds) filedBugs.push({ id, title: `b/${id}`, kind: 'follow-up' });
     }
   }
+  // A bug filed new on the report day that QA bugs were then followed up on is a known issue for them too.
+  const followedUp = new Set(allBugs.filter(b => (b as any).filedVia === 'follow-up').map(b => String((b as any).filedIssueId || '')));
+  filedBugs = filedBugs.map(b => (b.kind !== 'follow-up' && followedUp.has(b.id) ? { ...b, kind: 'follow-up' as const } : b));
   const cujsWithoutNotes = payload.featuresPayload.filter(f => !f.bugs.some(b => (b.note || '').trim())).map(f => f.featureName).filter(Boolean);
 
   const title = `RX95 · QA Summary · ${payload.scopeContext.scopeLabel}`.slice(0, 120);

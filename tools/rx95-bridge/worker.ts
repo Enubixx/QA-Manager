@@ -38,6 +38,11 @@ const HEARTBEAT_MS = Number(process.env.RX95_WORKER_HEARTBEAT_MS || 30_000);
 const CONFIRM_EVERY_MS = Number(process.env.RX95_WORKER_CONFIRM_MS || 60_000);
 const CONFIRM_WINDOW_MS = DAY_MS;
 const CONFIRM_MAX_CLI_PER_TICK = 15;
+/** Linking hand-made follow-ups (Filed without a b/): how long after marking, how often, and the comment window. */
+const LINK_WINDOW_MS = DAY_MS;
+const LINK_EVERY_MS = 10 * 60_000;
+const LINK_BEFORE_MS = 6 * 60 * 60_000;
+const LINK_AFTER_MS = 60 * 60_000;
 const BUNDLE_WAIT_FOR_REFINE_MS = 3 * 60_000;
 const REPROD = "Repro'd Issue";
 const BUG_ID = /^bug-\d{6,16}-[a-z0-9]{2,12}$/i;
@@ -182,6 +187,14 @@ export function parseSearchWithCreated(out: string): Array<{ id: string; created
     id: (block.match(/^Issue ID:\s*(\d+)/m)?.[1] || ''),
     created: (block.match(/^Created Time:\s*(\S+)/m)?.[1] || ''),
   })).filter(x => x.id);
+}
+
+const quoteNorm = (s: string) => (s || '').toLowerCase().replace(/['’`]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+/** True when a Buganizer comment quotes the tester's note word for word (hand-written follow-ups paste it). */
+export function commentQuotesNote(note: string, comment: string): boolean {
+  const n = quoteNorm(note);
+  if (n.length < 20 || n.split(' ').length < 5) return false; // too short to be proof
+  return ` ${quoteNorm(comment)} `.includes(` ${n} `);
 }
 
 // ---------- the worker ----------
@@ -624,6 +637,39 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
           if (!f || !f.filePending || f.filePending.openedAt !== p.openedAt || isFiled(f)) continue;
           const filed: BugFiled = { issueId, via: p.kind === 'follow-up' ? 'follow-up' : p.kind === 'bundle' ? 'bundle' : 'new', confirmed: true, at: new Date().toISOString(), by: 'rx95' };
           if (await writeOwned(f, { filed, file_pending: null })) log(`confirm: ${f.id} filed as b/${issueId} (${filed.via})`);
+        }
+      }
+
+      // Hand-made follow-ups: marked Filed without a b/ (the comment was written in Buganizer directly).
+      // Link the RX95 candidate whose comment, made around the time it was marked, quotes the tester's note.
+      if (cols.has('repro_matches')) {
+        const unlinked = [...merged.values()].filter(b => b.filed && !b.filed.issueId && b.filed.via !== 'legacy' && BUG_ID.test(b.id)
+          && (b.reproMatches?.candidates?.length || 0) > 0 && Date.now() - Date.parse(b.filed.at || '') <= LINK_WINDOW_MS);
+        for (const b of unlinked.sort((x, y) => (lastChecked.get(`link:${x.id}`) || 0) - (lastChecked.get(`link:${y.id}`) || 0))) {
+          if (calls >= CONFIRM_MAX_CLI_PER_TICK) break;
+          const key = `link:${b.id}`;
+          if (Date.now() - (lastChecked.get(key) || 0) < LINK_EVERY_MS) continue;
+          const filedAt = Date.parse(b.filed!.at);
+          if (!Number.isFinite(filedAt)) continue;
+          lastChecked.set(key, Date.now());
+          const candIds = [...new Set(b.reproMatches!.candidates.map(c => String(c.id)).filter(id => /^\d{4,12}$/.test(id)))].slice(0, 3);
+          let issueId: string | null = null;
+          try {
+            for (const id of candIds) {
+              if (calls >= CONFIRM_MAX_CLI_PER_TICK) break;
+              calls++;
+              const updates = parseIssueUpdates(await ports.issuesCli(['list-updates', id, '--limit', '50']));
+              if (updates.some(u => { const t = Date.parse(u.at); return t >= filedAt - LINK_BEFORE_MS && t <= filedAt + LINK_AFTER_MS && commentQuotesNote(b.note, u.text); })) { issueId = id; break; }
+            }
+          } catch (e: any) {
+            log(`link: ${b.id} check failed:`, e.message);
+            continue;
+          }
+          if (!issueId) continue;
+          const f = (await fresh([b.id])).get(b.id);
+          if (!f?.filed || f.filed.issueId || f.filed.at !== b.filed!.at) continue; // changed meanwhile
+          const filed: BugFiled = { ...f.filed, issueId, via: 'follow-up', confirmed: true, by: 'rx95' };
+          if (await writeOwned(f, { filed })) log(`link: ${f.id} followed up on b/${issueId} (comment quotes the note)`);
         }
       }
     } catch (e: any) {
