@@ -125,6 +125,8 @@ export const fetchAllSupabaseData = async () => {
         refined: item.refined && typeof item.refined === 'object' ? item.refined : undefined,
         originalTimestamp: typeof item.original_timestamp === 'string' && item.original_timestamp ? item.original_timestamp : undefined,
         status: typeof item.status === 'string' && item.status ? item.status : undefined,
+        bugType: typeof item.bug_type === 'string' && item.bug_type ? (item.bug_type as BugLog['bugType']) : undefined,
+        priority: typeof item.priority === 'string' && item.priority ? (item.priority as BugLog['priority']) : undefined,
         filed: item.filed && typeof item.filed === 'object' ? item.filed : undefined,
         reproMatches: item.repro_matches && typeof item.repro_matches === 'object' ? item.repro_matches : undefined,
         filePending: item.file_pending && typeof item.file_pending === 'object' ? item.file_pending : undefined,
@@ -332,7 +334,7 @@ export const deleteArchivedRunFromSupabase = async (runId: string) => {
 };
 
 /** Optional bug_logs columns; each flips to false if that column hasn't been added yet. */
-const optionalBugColumns = { environment: true, title: true, refined: true, original_timestamp: true, status: true, filed: true, repro_matches: true, file_pending: true, bundle: true };
+const optionalBugColumns = { environment: true, title: true, refined: true, original_timestamp: true, status: true, bug_type: true, priority: true, filed: true, repro_matches: true, file_pending: true, bundle: true };
 
 export const syncBugLogToSupabase = async (bug: BugLog) => {
   if (!supabase || !isSupabaseConfigured) return;
@@ -365,6 +367,10 @@ export const syncBugLogToSupabase = async (bug: BugLog) => {
     if (optionalBugColumns.original_timestamp) row.original_timestamp = bug.originalTimestamp || null;
     // status is app-owned (null when unset so it can be cleared)
     if (optionalBugColumns.status) row.status = bug.status || null;
+    // Bug Type / Priority (triage): columns added by tools/sql/add-bug-type-priority.sql. Until that runs they are
+    // dropped by the retry below and still travel in the run's bug_logs JSON.
+    if (optionalBugColumns.bug_type) row.bug_type = bug.bugType || null;
+    if (optionalBugColumns.priority) row.priority = bug.priority || null;
     // Worker-owned columns (refined, repro_matches, filed, file_pending, bundle) are NEVER part of this general
     // upsert: a save from a browser with slightly stale state would overwrite e.g. the worker's fresh filing
     // confirmation. They are written only by patchBugWorkerColumns, from the actions that change them.
