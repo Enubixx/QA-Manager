@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Bug, CheckCircle2, Copy, ExternalLink, Eye, Filter, Repeat, Search, ShieldCheck, Sparkles, X } from 'lucide-react';
 import type { BugFilePending, BugLog, RefinedBugText, ReproCandidate, ReproMatches, TestPlan } from '../types';
 import type { Rx95SuggestionsData } from '../services/supabaseService';
+import { TabBar, TAG_STYLE, UnreviewedDot, chipCls, chipOff, chipOn, expandedCls, listBoxCls, rowActionCls, rowCls, rowOpenCls, tagCls } from './triageUi';
+import { isReviewed } from '../utils/bugReview';
 import {
   type BundleGroup,
   buildBundleFollowUpComment,
@@ -80,8 +82,10 @@ interface Props {
   onPatchBugLogs?: (patches: Record<string, Partial<BugLog>>) => void;
   /** RX95 worker output (read-only): same-day bundle suggestions + background heartbeat. */
   rx95Suggestions?: Rx95SuggestionsData;
-  /** Switches to the Bugs Feed (where RX95's bundle suggestions are reviewed). */
-  onOpenBugsFeed?: () => void;
+  /** Switches to the Bugs Feed (where RX95's bundle suggestions are reviewed); with a bug id, opens that report there. */
+  onOpenBugsFeed?: (bugId?: string) => void;
+  /** Bring this bug's row into view (tab, expanded, scrolled) - e.g. from the Bugs Feed's "Open in Buganizer tab". */
+  focusBug?: { id: string; n: number } | null;
 }
 
 type Layout = 'a' | 'b' | 'c';
@@ -90,15 +94,8 @@ type ItemKind = 'new' | 'repro' | 'bundle' | 'waiting' | 'filed';
 type ListFilter = 'all' | 'tofile' | 'reprod' | 'bundles' | 'waiting';
 type TabKey = 'tofile' | 'reprod' | 'bundles' | 'waiting' | 'filed';
 const KIND_TAG: Record<ItemKind, string> = {
-  new: 'bg-slate-800 text-slate-300',
-  repro: 'bg-violet-500/20 text-violet-200',
-  bundle: 'bg-blue-500/20 text-blue-200',
-  waiting: 'bg-amber-500/15 text-amber-200',
-  filed: 'bg-green-500/15 text-green-300',
+  new: TAG_STYLE.new, repro: TAG_STYLE.repro, bundle: TAG_STYLE.bundle, waiting: TAG_STYLE.waiting, filed: TAG_STYLE.filed,
 };
-const chipCls = 'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11.5px] border whitespace-nowrap';
-const chipOff = 'border-slate-700 bg-[#141c2f] text-slate-300 hover:border-slate-500';
-const chipOn = 'border-blue-500/70 bg-blue-500/15 text-white';
 
 /** The RX95 worker counts as running while its heartbeat is younger than this. */
 const WORKER_FRESH_SEC = 90;
@@ -141,7 +138,7 @@ const topComponents = BUGANIZER_COMPONENTS.slice(0, TOP_COMPONENT_COUNT);
 const otherComponents = BUGANIZER_COMPONENTS.slice(TOP_COMPONENT_COUNT).sort((a, b) => a.name.localeCompare(b.name));
 const pathTail = (path: string) => path.split(' > ').slice(-2, -1)[0] || '';
 
-export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPatchBugLog, onApplyReproMatches, onPatchBugLogs, rx95Suggestions, onOpenBugsFeed }: Props) {
+export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPatchBugLog, onApplyReproMatches, onPatchBugLogs, rx95Suggestions, onOpenBugsFeed, focusBug }: Props) {
   const planName = (id?: string) => plans.find(p => p.id === id)?.name || id || 'Unknown plan';
   const [drafts, setDrafts] = useState<Record<string, BuganizerDraft>>(() => loadDrafts());
   const [tester, setTester] = useState('all');
@@ -1130,6 +1127,11 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
                 {bug.testerName || 'Unknown'} · {bug.deviceName || 'Unknown device'} · {bug.formattedTime || localDay(bug.timestamp)}
               </p>
               <p className="text-[11px] text-slate-500 truncate">{planName(bug.planId)} › {bug.stepTitle}</p>
+              {onOpenBugsFeed && (
+                <button type="button" data-testid="open-in-feed" className="text-[11px] text-blue-300 hover:underline" onClick={() => onOpenBugsFeed(bug.id)}>
+                  Open in Bugs Feed ↗{!isReviewed(bug) ? ' · not reviewed yet' : ''}
+                </button>
+              )}
               {repro && bug.environment && (
                 <p className="text-[11px] text-slate-500 truncate" data-testid="row-build">
                   Build: {[bug.environment.glassesFirmware, [bug.environment.phoneManufacturer, bug.environment.phoneModel].filter(Boolean).join(' '), bug.environment.androidVersion ? `Android ${bug.environment.androidVersion}` : ''].filter(Boolean).join(' · ') || 'not captured'}
@@ -1275,27 +1277,51 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
       <div key={it.key} data-item-key={it.key}>
         <div data-testid="row-compact" data-kind={it.kind} role="button" tabIndex={0} onClick={onRow}
           onKeyDown={e => { if (e.key === 'Enter') onRow(); }}
-          className={`flex items-center gap-2.5 px-3 py-2 border-b border-slate-800/80 text-[12.5px] cursor-pointer hover:bg-[#111a2c] ${open ? (mode === 'select' ? 'bg-[#13203a] shadow-[inset_3px_0_0_#3b82f6]' : 'bg-[#111a2c]') : ''}`}>
+          className={`${rowCls} ${open ? (mode === 'select' ? 'bg-[#13203a] shadow-[inset_3px_0_0_#3b82f6]' : rowOpenCls) : ''}`}>
           {mode === 'expand' && (it.selectable ? (
             <input type="checkbox" aria-label={`Select ${it.key}`} className="accent-blue-500" checked={selected.has(it.key)}
               onClick={e => e.stopPropagation()} onChange={() => toggle(it.key)} />
           ) : <span className="w-[13px]" />)}
-          <span className={`text-[10.5px] rounded-md px-1.5 py-0.5 font-semibold whitespace-nowrap ${KIND_TAG[it.kind]}`}>{mode === 'select' ? it.shortTag : it.tag}</span>
+          <span className={`${tagCls} ${KIND_TAG[it.kind]}`}>{mode === 'select' ? it.shortTag : it.tag}</span>
+          {it.bug && !isReviewed(it.bug) && <UnreviewedDot />}
           <span className="flex-1 min-w-0 truncate text-slate-100">{it.title}</span>
           {mode === 'expand' && <span className="hidden md:inline text-[11.5px] text-slate-400 truncate max-w-[180px]">{it.cuj}</span>}
           {mode === 'expand' && it.priority && <span className="text-[10.5px] rounded-md px-1.5 py-0.5 font-semibold bg-slate-800 text-slate-300">{it.priority}</span>}
           <span className="text-[10.5px] text-slate-400 w-[58px] text-right whitespace-nowrap">{fmtTime(it.ts)}</span>
           {mode === 'expand' && (
-            <button type="button" className="text-[11.5px] font-bold rounded-lg px-2.5 py-1 border border-slate-700 bg-[#141c2f] text-slate-200 hover:border-slate-500 whitespace-nowrap"
+            <button type="button" className={rowActionCls}
               onClick={e => { e.stopPropagation(); setExpandedKeys(prev => new Set(prev).add(it.key)); }}>
               {it.action}
             </button>
           )}
         </div>
-        {mode === 'expand' && open && <div className="p-3 bg-[#0b1220] border-b border-slate-800" data-testid="row-expanded">{renderItemDetail(it)}</div>}
+        {mode === 'expand' && open && <div className={expandedCls} data-testid="row-expanded">{renderItemDetail(it)}</div>}
       </div>
     );
   };
+
+  // Focus requested from the Bugs Feed ("Open in Buganizer tab ↗")
+  useEffect(() => {
+    if (!focusBug?.id) return;
+    const holds = (it: Item) => it.key === focusBug.id || it.key === `wait:${focusBug.id}`
+      || !!it.group?.members.some(m => m.id === focusBug.id) || !!it.entry?.members.some(m => m.id === focusBug.id);
+    const order: TabKey[] = ['tofile', 'reprod', 'bundles', 'waiting', 'filed'];
+    const tabKey = order.find(k => itemsFor(k).some(holds));
+    if (!tabKey) { flash('That report is hidden by the plan / day / search filters here.'); return; }
+    const it = itemsFor(tabKey).find(holds)!;
+    setTab(tabKey);
+    setListFilter('all');
+    setExpandedKeys(prev => new Set(prev).add(it.key));
+    setSelectedKey(it.key);
+    setTimeout(() => {
+      const el = document.querySelector(`[data-item-key="${CSS.escape(it.key)}"]`) as HTMLElement | null;
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      el.classList.add('ring-2', 'ring-blue-400');
+      setTimeout(() => el.classList.remove('ring-2', 'ring-blue-400'), 1600);
+    }, 80);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusBug?.n]);
 
   // Layout C: keep a valid selection and move it with the arrow keys.
   useEffect(() => {
@@ -1376,7 +1402,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
               🧩 <b className="text-white">{bundleItems.length}</b> bundled
             </button>
             {shown.length > 0 && onOpenBugsFeed && (
-              <button type="button" data-testid="chip-suggestions-feed" className={`${chipCls} ${chipOff}`} onClick={onOpenBugsFeed}
+              <button type="button" data-testid="chip-suggestions-feed" className={`${chipCls} ${chipOff}`} onClick={() => onOpenBugsFeed()}
                 title="RX95's same-day bundle suggestions are reviewed on the Bugs Feed">
                 ✨ <b className="text-white">{shown.length}</b> suggested · Bugs Feed ↗
               </button>
@@ -1572,15 +1598,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
       {popupHelp}
 
       {layout === 'b' && (
-        <div className="flex flex-wrap gap-1 border-b border-slate-800" role="tablist">
-          {tabDefs.map(t => (
-            <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} data-testid={`layout-tab-${t.key}`}
-              className={`px-3 py-2 text-[12.5px] border-b-2 -mb-px ${tab === t.key ? 'text-white border-blue-500 font-bold' : 'text-slate-400 border-transparent hover:text-slate-200'}`}
-              onClick={() => setTab(t.key)}>
-              {t.label}<span className="ml-1.5 text-[11px] bg-slate-800 rounded-full px-1.5 text-slate-300">{t.count}</span>
-            </button>
-          ))}
-        </div>
+        <TabBar tabs={tabDefs.map(t => ({ ...t, testid: `layout-tab-${t.key}` }))} active={tab} onChange={setTab} testid="buganizer-tabs" />
       )}
 
       {/* Same-day bundle SUGGESTIONS live on the Bugs Feed (BundleSuggestionsPanel); this tab shows confirmed bundles only. */}
@@ -1594,7 +1612,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
           <div className="lg:sticky lg:top-2 max-h-[calc(100vh-1rem)] overflow-y-auto">{renderSelectedPanel()}</div>
         </div>
       ) : (
-        <div className="rounded-[20px] border border-slate-800 bg-[#0f172a] overflow-hidden" data-testid="item-list">
+        <div className={listBoxCls} data-testid="item-list">
           {listItems.length === 0
             ? emptyList((layout === 'b' ? tab : listFilter) === 'bundles' ? "No confirmed bundles yet. RX95's bundle suggestions are on the Bugs Feed." : undefined)
             : listItems.map(it => renderCompactRow(it, 'expand'))}
