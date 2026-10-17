@@ -2559,7 +2559,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   )}
                 </div>
 
-                {/* Compact Saved Roster Drawer Toggle (tucks away inactive / 0-run testers cleanly) */}
+                {/* Compact Saved Roster Drawer Toggle */}
                 {unifiedTesters.length > 0 && (
                   <button
                     type="button"
@@ -2569,10 +2569,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         ? 'bg-[#13203a] border-blue-500/60 text-blue-200'
                         : 'bg-[#0f172a] border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
                     }`}
-                    title="View or manage saved tester profiles without cluttering the table"
                   >
                     <User className="w-3 h-3 text-slate-400" />
-                    <span>Saved Roster ({unifiedTesters.length})</span>
+                    <span>Roster ({unifiedTesters.length})</span>
                     <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showOffShiftTesters ? 'rotate-180 text-blue-400' : ''}`} />
                   </button>
                 )}
@@ -2588,18 +2587,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </div>
             </div>
 
-            {/* Collapsible Tucked-Away Saved Roster Pill Tray */}
+            {/* Collapsible Roster Pill Tray */}
             {showOffShiftTesters && (
-              <div className="bg-[#0d1424] border border-slate-800 rounded-2xl p-3.5 space-y-2.5 animate-in fade-in duration-150">
+              <div className="bg-[#0d1424] border border-slate-800 rounded-2xl p-3 space-y-2 animate-in fade-in duration-150">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="text-[11px] font-bold text-slate-300 flex items-center gap-2">
-                    <span>Saved Tester Profiles ({unifiedTesters.length})</span>
-                    {noDataTesters.length > 0 && (
-                      <span className="text-[10.5px] font-normal text-slate-500">
-                        · {noDataTesters.length} with no runs on {selectedQaDate === todayStr ? 'today' : dateScopeLabel} are kept out of the table below
-                      </span>
-                    )}
-                  </div>
+                  <span className="text-[11px] font-bold text-slate-300">Roster ({unifiedTesters.length})</span>
                   <button
                     type="button"
                     onClick={() => setShowOffShiftTesters(false)}
@@ -2767,42 +2759,32 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
             {/* 2-Pane Scorecard + Selected Tester Run History */}
             {displayed.length === 0 ? (
-              <div className="bg-[#0e1526] rounded-2xl p-8 text-center space-y-3 border border-slate-800">
-                <UserCheck className="w-6 h-6 text-slate-500 mx-auto" />
-                <div className="space-y-1">
-                  <h4 className="text-sm font-bold text-white">
-                    {testerViewMode === 'active'
-                      ? 'No Testers Currently Active'
-                      : searchTesterQuery.trim()
-                        ? 'No Matching Testers Found'
-                        : `No Test Runs Recorded Yet for ${selectedQaDate === todayStr ? `Today (${todayStr})` : dateScopeLabel}`}
-                  </h4>
-                  <p className="text-xs text-slate-400 max-w-md mx-auto">
-                    {testerViewMode === 'active'
-                      ? 'No tester is actively running a walkthrough on a device right now.'
-                      : searchTesterQuery.trim()
-                        ? 'Try clearing your search filter above.'
-                        : `Testers appear here automatically as soon as they start or finish a run.${noDataTesters.length > 0 ? ` (${noDataTesters.length} saved tester profiles with 0 runs are tucked into Saved Roster above.)` : ''}`}
-                  </p>
-                </div>
+              <div className="bg-[#0e1526] rounded-2xl p-6 text-center space-y-2.5 border border-slate-800">
+                <h4 className="text-xs font-bold text-slate-300">
+                  {testerViewMode === 'active'
+                    ? 'No active testers'
+                    : searchTesterQuery.trim()
+                      ? 'No matches'
+                      : `No runs on ${selectedQaDate === todayStr ? 'today' : dateScopeLabel}`}
+                </h4>
 
                 {!searchTesterQuery.trim() && testerViewMode === 'tested' && (
-                  <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                  <div className="flex flex-wrap items-center justify-center gap-2">
                     {mostRecentHistoricalDate && selectedQaDate === todayStr && (
                       <button
                         type="button"
                         onClick={() => setSelectedQaDate(mostRecentHistoricalDate)}
-                        className="px-3 py-1.5 rounded-lg bg-[#13203a] hover:bg-blue-600/30 border border-blue-500/40 text-blue-200 text-xs font-semibold transition cursor-pointer"
+                        className="px-3 py-1 rounded-lg bg-[#13203a] hover:bg-blue-600/30 border border-blue-500/40 text-blue-200 text-[11px] font-semibold transition cursor-pointer"
                       >
-                        View latest active day ({mostRecentHistoricalDate}) →
+                        {mostRecentHistoricalDate} →
                       </button>
                     )}
                     <button
                       type="button"
                       onClick={() => setSelectedQaDate('all')}
-                      className="px-3 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+                      className="px-3 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-slate-300 text-[11px] font-semibold transition cursor-pointer"
                     >
-                      View All-Time Combined
+                      All-Time
                     </button>
                   </div>
                 )}
@@ -2933,22 +2915,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       );
                     })}
                   </div>
-
-                  {/* Subtle Footer Note when inactive profiles are tucked away */}
-                  {noDataTesters.length > 0 && !searchTesterQuery.trim() && (
-                    <div className="px-3.5 py-2 bg-[#0a101d] border-t border-[#162033] text-[11px] text-slate-500 flex items-center justify-between gap-2">
-                      <span>
-                        {noDataTesters.length} saved tester{noDataTesters.length === 1 ? '' : 's'} with 0 runs on {selectedQaDate === todayStr ? 'today' : dateScopeLabel} tucked into Saved Roster
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setShowOffShiftTesters(prev => !prev)}
-                        className="text-[#93c5fd] hover:text-white font-semibold cursor-pointer"
-                      >
-                        {showOffShiftTesters ? 'Hide Saved Roster ▴' : `View Saved Roster (${unifiedTesters.length}) ▾`}
-                      </button>
-                    </div>
-                  )}
                 </div>
 
                 {/* Right: Selected Tester Details & Completed Runs */}
