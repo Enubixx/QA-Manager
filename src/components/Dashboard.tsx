@@ -2294,24 +2294,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         value={selectedQaDate}
                         onChange={e => setSelectedQaDate(e.target.value)}
                         style={{ backgroundColor: 'transparent', WebkitAppearance: 'none' }}
-                        className="bg-transparent text-slate-400 hover:text-slate-200 text-xs font-medium pr-3.5 py-0.5 rounded focus:outline-none cursor-pointer"
+                        className="w-auto appearance-none bg-transparent text-slate-400 hover:text-slate-200 text-xs font-medium pr-3 py-0.5 rounded focus:outline-none cursor-pointer"
                         title="Switch floor date scope"
                       >
                         <option value={todayStr} className="bg-[#0b1120] text-slate-100">
-                          {formatShortDate(todayStr)} (Today)
+                          {formatShortDate(todayStr)}
                         </option>
                         {allQaDatesList
                           .filter(d => d !== todayStr)
                           .map(dateStr => (
                             <option key={dateStr} value={dateStr} className="bg-[#0b1120] text-slate-100">
-                              {formatShortDate(dateStr)} ({dateStr})
+                              {formatShortDate(dateStr)}
                             </option>
                           ))}
                         <option value="all" className="bg-[#0b1120] text-slate-100">
                           All-time
                         </option>
                       </select>
-                      <span className="pointer-events-none absolute right-0.5 text-[10px] text-slate-500">
+                      <span className="pointer-events-none absolute right-0 text-[10px] text-slate-500">
                         ▾
                       </span>
                     </div>
@@ -2754,7 +2754,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2.5">
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 auto-rows-fr gap-2.5">
                       {displayedDevices.map(dev => {
                         const isSelected =
                           resolvedInspector?.type === 'device' &&
@@ -2779,7 +2779,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           <div
                             key={dev.id}
                             onClick={() => setInspectorTarget({ type: 'device', id: dev.id })}
-                            className={`bg-[#0b1120] border rounded-xl p-3 flex flex-col gap-1.5 min-h-[115px] transition cursor-pointer ${
+                            className={`bg-[#0b1120] border rounded-xl p-3 flex flex-col gap-1.5 min-h-[116px] transition cursor-pointer ${
                               isSelected
                                 ? 'border-blue-500 ring-1 ring-blue-500/30'
                                 : 'border-[#1b2740] hover:border-slate-700'
@@ -2876,7 +2876,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                       {/* Last tile: dashed "+ Activate device" or inline mini-form */}
                       {isActivateTileOpen ? (
-                        <div className="bg-[#0b1120] border border-blue-500/60 rounded-xl p-2.5 flex flex-col justify-between gap-1.5">
+                        <div className="bg-[#0b1120] border border-blue-500/60 rounded-xl p-2.5 flex flex-col justify-between gap-1.5 min-h-[116px]">
                           <div className="flex items-center gap-1.5">
                             <select
                               value={effectiveQuickDeviceId}
@@ -2947,7 +2947,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         <button
                           type="button"
                           onClick={() => setIsActivateTileOpen(true)}
-                          className="bg-transparent border border-dashed border-[#1e2d4a] hover:border-slate-600 rounded-xl p-3 flex flex-col items-center justify-center gap-0.5 text-slate-500 hover:text-slate-300 transition cursor-pointer min-h-[115px]"
+                          className="bg-transparent border border-dashed border-[#1e2d4a] hover:border-slate-600 rounded-xl p-3 flex flex-col items-center justify-center gap-0.5 text-slate-500 hover:text-slate-300 transition cursor-pointer min-h-[116px]"
                         >
                           <span className="text-xs font-semibold">＋ Activate device</span>
                           <span className="text-[11px] text-slate-600 font-mono">
