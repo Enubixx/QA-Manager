@@ -1927,9 +1927,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               {(activeTab === 'devices' || activeTab === 'testers') && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
             </div>
             <div className="text-xl font-bold text-slate-50 mt-1 font-mono tracking-tight">
-              {assignedDevices.length === 0 && activeOrTestedTodayCount === 0
-                ? '0 Active'
-                : `${assignedDevices.length} Dev · ${activeOrTestedTodayCount} QA`}
+              {`${activeOrTestedTodayCount} Tester${activeOrTestedTodayCount === 1 ? '' : 's'}`}
             </div>
           </div>
           <div className={`p-2.5 rounded-2xl border transition-all ${
