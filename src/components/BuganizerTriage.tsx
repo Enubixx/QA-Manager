@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Bug, CheckCircle2, Copy, ExternalLink, Eye, Filter, Repeat, Search, ShieldCheck, Sparkles, X } from 'lucide-react';
 import type { BugFilePending, BugLog, RefinedBugText, ReproCandidate, ReproMatches, TestPlan } from '../types';
 import type { Rx95SuggestionsData } from '../services/supabaseService';
-import { TabBar, TAG_STYLE, UnreviewedDot, chipCls, chipOff, chipOn, expandedCls, listBoxCls, rowActionCls, rowCls, rowOpenCls, tagCls } from './triageUi';
+import { Rx95LiveChip, TabBar, TAG_STYLE, UnreviewedDot, chipCls, chipOff, chipOn, expandedCls, listBoxCls, rowActionCls, rowCls, rowOpenCls, tagCls } from './triageUi';
 import { isReviewed, reviewedNow } from '../utils/bugReview';
 import {
   type BundleGroup,
@@ -90,6 +90,8 @@ interface Props {
   onFocused?: () => void;
   /** Per-browser categorizations from Bugs Feed so unreviewed dots match the feed's Reviewed state. */
   bugCategorizations?: Record<string, { bugType?: string; priority?: string; status?: string }>;
+  /** Shared clock tick (`Date.now()`) from Dashboard so the RX95 live pill stays in lockstep across tabs. */
+  nowMs?: number;
   /** Shared dismissed bundle suggestion IDs (kept in sync with Bugs Feed). */
   dismissed?: Set<string>;
   onDismissedChange?: (next: Set<string>) => void;
@@ -145,7 +147,7 @@ const topComponents = BUGANIZER_COMPONENTS.slice(0, TOP_COMPONENT_COUNT);
 const otherComponents = BUGANIZER_COMPONENTS.slice(TOP_COMPONENT_COUNT).sort((a, b) => a.name.localeCompare(b.name));
 const pathTail = (path: string) => path.split(' > ').slice(-2, -1)[0] || '';
 
-export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: dismissedProp, onDismissedChange, plans, onApplyRefinements, onPatchBugLog, onApplyReproMatches, onPatchBugLogs, rx95Suggestions, onOpenBugsFeed, focusBug, onFocused }: Props) {
+export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: dismissedProp, onDismissedChange, nowMs: nowMsProp, plans, onApplyRefinements, onPatchBugLog, onApplyReproMatches, onPatchBugLogs, rx95Suggestions, onOpenBugsFeed, focusBug, onFocused }: Props) {
   const planName = (id?: string) => plans.find(p => p.id === id)?.name || id || 'Unknown plan';
   const bugReviewed = (b: BugLog) => isReviewed(b, bugCategorizations?.[b.id]);
   const [drafts, setDrafts] = useState<Record<string, BuganizerDraft>>(() => loadDrafts());
@@ -230,8 +232,9 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
   const [allMatches, setAllMatches] = useState<Set<string>>(new Set());
 
   // RX95 background worker heartbeat: fresh => the in-tab auto engines stay off (fallback only).
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => { const t = setInterval(() => setNowMs(Date.now()), 10000); return () => clearInterval(t); }, []);
+  const [localNowMs, setLocalNowMs] = useState(() => Date.now());
+  useEffect(() => { if (nowMsProp !== undefined) return; const t = setInterval(() => setLocalNowMs(Date.now()), 10000); return () => clearInterval(t); }, [nowMsProp]);
+  const nowMs = nowMsProp ?? localNowMs;
   const heartbeat = rx95Suggestions?.heartbeat;
   const hbAgeSec = heartbeat ? Math.max(0, (nowMs - new Date(heartbeat.at).getTime()) / 1000) : Infinity;
   const workerFresh = Number.isFinite(hbAgeSec) && hbAgeSec < WORKER_FRESH_SEC;
@@ -1389,17 +1392,18 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
     return (
       <div className="flex flex-wrap items-center gap-2" data-testid="status-chips">
         <div className="relative" ref={rx95ChipRef}>
-        {workerFresh ? (
-          <button type="button" data-testid="rx95-worker-bar" className={`${chipCls} ${chipOff}`} onClick={() => setDetailsOpen(v => !v)}
-            title={`RX95 is working in the background. ${jobsInProgress} job(s) in progress · ${waitingCount} waiting for Buganizer.`}>
-            <span className="w-[7px] h-[7px] rounded-full bg-green-500 shadow-[0_0_6px_#22c55e]" /><b className="text-white">RX95 live</b> · synced {Math.round(hbAgeSec)}s ago{jobsInProgress ? ` · ${jobsInProgress} in progress` : ''}
-          </button>
-        ) : (
-          <button type="button" data-testid="rx95-refine-bar" className={`${chipCls} ${refineState.error ? 'border-amber-500/60 text-amber-200 bg-amber-500/10' : chipOff}`} onClick={() => setDetailsOpen(v => !v)}
-            title="RX95's background helper is offline; this tab cleans up wording itself">
-            <span className="w-[7px] h-[7px] rounded-full bg-slate-500" /><b className="text-white">RX95</b> · {refineText}
-          </button>
-        )}
+          <Rx95LiveChip
+            heartbeatAt={heartbeat?.at}
+            nowMs={nowMs}
+            jobsInProgress={jobsInProgress}
+            offlineText={refineText}
+            error={!!refineState.error}
+            testid={workerFresh ? 'rx95-worker-bar' : 'rx95-refine-bar'}
+            onClick={() => setDetailsOpen(v => !v)}
+            title={workerFresh
+              ? `RX95 is working in the background. ${jobsInProgress} job(s) in progress · ${waitingCount} waiting for Buganizer.`
+              : "RX95's background helper is offline; this tab cleans up wording itself"}
+          />
           {renderStatusDetails()}
         </div>
         {layout === 'c' && (

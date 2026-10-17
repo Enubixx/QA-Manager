@@ -4004,7 +4004,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       )}
       {activeTab === 'bugs' && BUGANIZER_ENABLED && (
         <div className={bugsView === 'buganizer' ? '' : 'hidden'}>
-          <BuganizerTriage bugs={buganizerBugs} bugCategorizations={bugCategorizations} dismissed={dismissedSuggestions} onDismissedChange={setDismissedSuggestions} plans={testPlans} onApplyRefinements={onApplyBugRefinements} onPatchBugLog={onPatchBugLog} onPatchBugLogs={onPatchBugLogs} onApplyReproMatches={onApplyReproMatches} rx95Suggestions={rx95Suggestions} onOpenBugsFeed={openInFeed} focusBug={buganizerFocus} onFocused={() => setBuganizerFocus(null)} />
+          <BuganizerTriage bugs={buganizerBugs} bugCategorizations={bugCategorizations} dismissed={dismissedSuggestions} onDismissedChange={setDismissedSuggestions} nowMs={feedNow} plans={testPlans} onApplyRefinements={onApplyBugRefinements} onPatchBugLog={onPatchBugLog} onPatchBugLogs={onPatchBugLogs} onApplyReproMatches={onApplyReproMatches} rx95Suggestions={rx95Suggestions} onOpenBugsFeed={openInFeed} focusBug={buganizerFocus} onFocused={() => setBuganizerFocus(null)} />
         </div>
       )}
 
@@ -4306,7 +4306,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
             {/* Header: status chips + plan / day / search (same look as the Buganizer tab) */}
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex flex-wrap items-center gap-2" data-testid="feed-status-chips">
-                <Rx95LiveChip heartbeatAt={rx95Suggestions?.heartbeat?.at} nowMs={feedNow} testid="feed-rx95-chip" />
+                <Rx95LiveChip
+                  heartbeatAt={rx95Suggestions?.heartbeat?.at}
+                  nowMs={feedNow}
+                  jobsInProgress={(rx95Suggestions?.heartbeat?.queues?.refine || 0) + (rx95Suggestions?.heartbeat?.queues?.match || 0) + (rx95Suggestions?.heartbeat?.queues?.bundle || 0)}
+                  testid="feed-rx95-chip"
+                />
                 <button type="button" data-testid="feed-chip-new" className={`${chipCls} ${feedTab === 'new' ? chipOn : chipOff}`} onClick={() => setFeedTab('new')}>🆕 <b className="text-white">{newFeedBugs.length}</b> new</button>
                 <button type="button" data-testid="feed-chip-suggestions" className={`${chipCls} ${feedTab === 'suggestions' ? chipOn : chipOff}`} onClick={() => setFeedTab('suggestions')}>🧩 <b className="text-white">{feedSuggestions.length}</b> suggestion{feedSuggestions.length === 1 ? '' : 's'}</button>
                 <button type="button" data-testid="feed-chip-reviewed" className={`${chipCls} ${feedTab === 'reviewed' ? chipOn : chipOff}`} onClick={() => setFeedTab('reviewed')}>✓ <b className="text-white">{reviewedFeedBugs.length}</b> reviewed</button>
