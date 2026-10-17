@@ -3,7 +3,10 @@ import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota, RefinedBugText, ReproMatches } from '../types';
 import { REPROD, TRIAGE_STATUS_OPTIONS, currentReproMatches, effectiveFiled, effectiveStatus, filedPatch, filedStampLine, newFiled, normalizeIssueId } from '../utils/reproFollowUp';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers, FileSpreadsheet, ExternalLink, MessageSquareText, ClipboardPaste, Bot } from 'lucide-react';
-import { exportAllQADataToCSV, exportAllQADataToJSON, exportBugsToCSV, copyBugsToClipboard, copySingleBugToClipboard } from '../utils/exportUtils';
+import { exportAllQADataToCSV, exportAllQADataToJSON } from '../utils/exportUtils';
+import { TabBar, Rx95LiveChip, TAG_STYLE, chipCls, chipOff, chipOn, expandedCls, inputCls, listBoxCls, priTagCls, rowActionCls, rowCls, rowOpenCls, smallBtnCls, tagCls } from './triageUi';
+import { isReviewed, isStronglyReviewed, reviewedNow } from '../utils/bugReview';
+import { currentRefinement } from '../utils/bugRefine';
 import { isRunFullyCompleted, buildStepFirstSeenIndex } from '../utils/runUtils';
 import { toLocalHHMM, withBugTime } from '../utils/bugTime';
 import { ALL_PLANS, ALL_DATES, mergeRunsById, getKnownCujNames, computeCujReport, listReportDates, buildTimelinePoints, getPlanPickerOptions, buildCujReportText, buildReportScopeKey, formatReportDateLabel } from '../utils/cujReportUtils';
@@ -374,6 +377,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   const [expandedBugIds, setExpandedBugIds] = useState<Record<string, boolean>>({});
+  // Bugs Feed tabs (New / Bundle Suggestions / Reviewed) and links to and from the Buganizer tab
+  const [feedTab, setFeedTab] = useState<'new' | 'suggestions' | 'reviewed'>('new');
+  const [buganizerFocus, setBuganizerFocus] = useState<{ id: string; n: number } | null>(null);
+  const [feedNow, setFeedNow] = useState(() => Date.now());
+  useEffect(() => { const t = setInterval(() => setFeedNow(Date.now()), 10000); return () => clearInterval(t); }, []);
   // Bugs Feed inline edit (title + description) so bugs can be tidied before the Buganizer tab
   const [feedEdit, setFeedEdit] = useState<{ bugId: string; title: string; note: string; time: string } | null>(null);
   const startFeedEdit = (bug: BugLog) => {
@@ -386,8 +394,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const note = feedEdit.note.trim() || title;
     if (!title && !note) return;
     onUpdateBugLog(withBugTime({ ...bug, title: title || undefined, note }, feedEdit.time));
+    markReviewed(bug.id);
     setFeedEdit(null);
   };
+
+  // Bugs Feed review state (New / Reviewed). Written with the targeted patch (bug_logs.reviewed), never by RX95.
+  const markReviewed = (bugId: string) => onPatchBugLog?.(bugId, { reviewed: reviewedNow('reviewed') });
+  const moveToNew = (bugId: string) => onPatchBugLog?.(bugId, { reviewed: reviewedNow('new') });
 
   const toggleBugExpand = (bugId: string) => {
     setExpandedBugIds(prev => ({
@@ -414,7 +427,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [isBugFilterMenuOpen, setIsBugFilterMenuOpen] = useState<boolean>(false);
   const [copiedReport, setCopiedReport] = useState<boolean>(false);
   const [copiedImage, setCopiedImage] = useState<boolean>(false);
-  const [copiedBugs, setCopiedBugs] = useState<boolean>(false);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState<boolean>(false);
   /** Seconds RX95 has been working on a summary, or null when idle. */
   const [rx95Elapsed, setRx95Elapsed] = useState<number | null>(null);
@@ -478,6 +490,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
       const keepLegacyFiled = field === 'status' && targetBug.status === 'Filed' && !targetBug.filed
         ? { filed: { via: 'legacy' as const, at: targetBug.timestamp } }
         : {};
+      // Setting type / priority / status is a review
+      markReviewed(bugId);
       // filed is worker-owned: it can only change through the targeted patch handler
       if (keepLegacyFiled.filed && onPatchBugLog) onPatchBugLog(bugId, keepLegacyFiled);
       onUpdateBugLog({
@@ -572,8 +586,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
               return {
                 ...b,
                 syncedToSheet: true,
-                bugType: cat?.bugType || b.bugType || 'Bug',
-                priority: cat?.priority || b.priority || (b.severity === 'critical' ? 'P0' : b.severity === 'high' ? 'P1' : 'P2'),
+                // No defaults stamped onto the bug (they'd look like a person's triage); the sheet gets defaults above
+                bugType: cat?.bugType || b.bugType,
+                priority: cat?.priority || b.priority,
                 status: cat?.status || b.status
               };
             });
@@ -634,43 +649,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
     return () => clearInterval(intervalId);
   }, [autoSyncSheet, googleSheetUrl]);
-
-  const handleCopyBugsToClipboard = async () => {
-    const filterLabelDate = selectedDateFilter === 'all' 
-      ? 'All Dates' 
-      : selectedDateFilter === 'today' 
-      ? 'Today' 
-      : selectedDateFilter === 'yesterday' 
-      ? 'Yesterday' 
-      : selectedDateFilter === '7days' 
-      ? 'Last 7 Days' 
-      : selectedDateFilter === '30days' 
-      ? 'Last 30 Days' 
-      : customDateInput || 'Custom Date';
-
-    const success = await copyBugsToClipboard(processedBugs, {
-      dateFilter: filterLabelDate,
-      featureFilter: selectedFeatureFilter,
-      deviceFilter: selectedDeviceFilter,
-      planFilter: selectedPlanFilterName || undefined,
-      searchQuery: searchBugQuery.trim() || undefined
-    });
-
-    if (success) {
-      setCopiedBugs(true);
-      setTimeout(() => setCopiedBugs(false), 2500);
-    }
-  };
-
-  const [copiedSingleBugId, setCopiedSingleBugId] = useState<string | null>(null);
-
-  const handleCopySingleBug = async (bug: BugLog) => {
-    const success = await copySingleBugToClipboard(bug);
-    if (success) {
-      setCopiedSingleBugId(bug.id);
-      setTimeout(() => setCopiedSingleBugId(null), 2500);
-    }
-  };
 
   // Global Escape key listener closes any active modal or popover
   useEffect(() => {
@@ -1668,7 +1646,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
       el.classList.add('ring-2', 'ring-violet-400');
       setTimeout(() => el.classList.remove('ring-2', 'ring-violet-400'), 1400);
     };
-    if (suggestionsCollapsed) { setSuggestionsCollapsed(false); setTimeout(go, 50); } else go();
+    setFeedTab('suggestions');
+    if (suggestionsCollapsed) setSuggestionsCollapsed(false);
+    setTimeout(go, 80);
   };
 
   /** Option A: one category for every ticked report, then bundle them into one bug. */
@@ -1702,11 +1682,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   type FeedBug = (typeof processedBugs)[number];
   type FeedRow = { kind: 'bug'; bug: FeedBug } | { kind: 'bundle'; id: string; members: FeedBug[] };
+  const reviewedOf = (b: BugLog) => isReviewed(bugById.get(b.id) || b, bugCategorizations[b.id]);
   /** Bundled reports collapse into one row (placed where the first visible member would be). */
-  const feedRows = useMemo<FeedRow[]>(() => {
+  const buildFeedRows = (list: FeedBug[]): FeedRow[] => {
     const rows: FeedRow[] = [];
     const bundleRows = new Map<string, { kind: 'bundle'; id: string; members: FeedBug[] }>();
-    processedBugs.forEach(b => {
+    list.forEach(b => {
       const bid = b.bundle?.id;
       if (!bid) { rows.push({ kind: 'bug', bug: b }); return; }
       let row = bundleRows.get(bid);
@@ -1715,7 +1696,39 @@ export const Dashboard: React.FC<DashboardProps> = ({
     });
     // A bundle with only one visible member (others filtered out) shows as a normal row
     return rows.map(r => (r.kind === 'bundle' && r.members.length === 1 ? { kind: 'bug', bug: r.members[0] } as FeedRow : r));
-  }, [processedBugs]);
+  };
+  const newFeedBugs = useMemo(() => processedBugs.filter(b => !reviewedOf(b)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [processedBugs, bugById, bugCategorizations]);
+  const reviewedFeedBugs = useMemo(() => processedBugs.filter(b => reviewedOf(b)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [processedBugs, bugById, bugCategorizations]);
+  const feedRows = useMemo<FeedRow[]>(() => buildFeedRows(feedTab === 'reviewed' ? reviewedFeedBugs : newFeedBugs),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [feedTab, newFeedBugs, reviewedFeedBugs]);
+
+  /** Opens a report on the Bugs Feed (from the Buganizer tab): its tab, expanded, scrolled into view. */
+  const openInFeed = (bugId?: string) => {
+    setBugsView('feed');
+    if (!bugId) { setFeedTab('suggestions'); return; }
+    const b = bugById.get(bugId);
+    if (!b) return;
+    if (!processedBugs.some(x => x.id === bugId)) flashFeed('That report is hidden by the current plan / day / search filters.');
+    setFeedTab(reviewedOf(b) ? 'reviewed' : 'new');
+    setExpandedBugIds(prev => ({ ...prev, [bugId]: true }));
+    if (b.bundle?.id) setExpandedFeedBundles(prev => new Set(prev).add(b.bundle!.id));
+    setTimeout(() => {
+      const el = document.getElementById(`feed-row-${bugId}`);
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      el.classList.add('ring-2', 'ring-blue-400');
+      setTimeout(() => el.classList.remove('ring-2', 'ring-blue-400'), 1600);
+    }, 120);
+  };
+  const openInBuganizer = (bugId: string) => {
+    setBugsView('buganizer');
+    setBuganizerFocus({ id: bugId, n: Date.now() });
+  };
 
   const renderFeedBundle = (row: { id: string; members: FeedBug[] }, renderBug: (b: FeedBug) => React.ReactNode) => {
     const open = expandedFeedBundles.has(row.id);
@@ -1733,23 +1746,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const allFiled = row.members.every(m => effectiveFiled(bugById.get(m.id) || m));
     const waiting = !allFiled && row.members.some(m => (bugById.get(m.id) || m).filePending);
     return (
-      <div key={`bundle-${row.id}`} data-testid="feed-bundle-row" className="liquid-glass-panel rounded-3xl border border-violet-500/50 ring-1 ring-violet-500/25 overflow-hidden shadow-xl">
+      <div key={`bundle-${row.id}`} data-testid="feed-bundle-row" id={`feed-bundle-${row.id}`}>
         <div onClick={() => setExpandedFeedBundles(prev => { const n = new Set(prev); n.has(row.id) ? n.delete(row.id) : n.add(row.id); return n; })}
-          className="p-4 flex flex-wrap items-center gap-3 cursor-pointer bg-[#111827] hover:bg-[#162033] transition">
-          <button type="button" className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-blue-300 transition">
-            <ChevronDown className={`w-4 h-4 transition-transform duration-300 ${open ? 'rotate-180 text-violet-300' : 'text-slate-400'}`} />
-          </button>
-          <span className="text-xs px-2.5 py-1 rounded-xl border border-violet-500/50 bg-violet-500/15 text-violet-200 font-bold">🧩 Bundle · {total} reports</span>
+          className={`${rowCls} flex-wrap ${open ? rowOpenCls : ''}`}>
+          <span className={`${tagCls} ${TAG_STYLE.bundle}`}>Bundle ×{total}</span>
+          <span className="flex-1 min-w-0 truncate text-slate-100 font-semibold">{bd.title}</span>
           <span className={`font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold uppercase ${pri === 'P0' || pri === '0' ? 'bg-rose-500/20 text-rose-300 border-rose-500/40' : pri === 'P1' || pri === '1' ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' : 'bg-slate-800 text-slate-300 border-slate-700'}`}>{pri}</span>
           <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border border-slate-700 bg-slate-800 text-slate-300">{bugTypeLabel}</span>
           {anyReprod && <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold bg-violet-500/15 text-violet-200 border-violet-500/40">REPRO'D</span>}
           {allFiled && <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-black tracking-wider bg-green-500/15 text-green-300 border-green-500/40">FILED</span>}
           {waiting && <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold bg-amber-500/15 text-amber-200 border-amber-500/40">⏳ WAITING</span>}
           <span className="text-xs text-slate-400">{testersN} tester{testersN === 1 ? '' : 's'}{row.members.length < total ? ` · ${row.members.length} shown` : ''}</span>
-          <span className="ml-auto text-sm text-white font-extrabold truncate max-w-md">{bd.title}</span>
+          <button type="button" className={rowActionCls}>{open ? 'Close' : 'Open'}</button>
         </div>
         {open && (
-          <div className="p-3 pt-0 bg-[#0b0f19] border-t border-slate-800 space-y-3">
+          <div className={`${expandedCls} space-y-3`} data-testid="feed-bundle-expanded">
             <div className="flex flex-wrap items-center gap-2 pt-3">
               {!allFiled && !waiting && (
                 <button type="button" data-testid="feed-unbundle" onClick={() => unbundleFromFeed(row.id)}
@@ -3988,730 +3999,430 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
       {activeTab === 'bugs' && BUGANIZER_ENABLED && bugsView === 'buganizer' && (
-        <BuganizerTriage bugs={buganizerBugs} plans={testPlans} onApplyRefinements={onApplyBugRefinements} onPatchBugLog={onPatchBugLog} onPatchBugLogs={onPatchBugLogs} onApplyReproMatches={onApplyReproMatches} rx95Suggestions={rx95Suggestions} onOpenBugsFeed={() => setBugsView('feed')} />
+        <BuganizerTriage bugs={buganizerBugs} plans={testPlans} onApplyRefinements={onApplyBugRefinements} onPatchBugLog={onPatchBugLog} onPatchBugLogs={onPatchBugLogs} onApplyReproMatches={onApplyReproMatches} rx95Suggestions={rx95Suggestions} onOpenBugsFeed={openInFeed} focusBug={buganizerFocus} />
       )}
 
-      {/* Tab 3: Bugs Feed */}
-      {activeTab === 'bugs' && (!BUGANIZER_ENABLED || bugsView === 'feed') && (
-        <div className="space-y-6">
-          
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <h3 className="text-lg font-bold text-slate-50 flex items-center gap-2">
-                <Bug className="w-5 h-5 text-rose-400" />
-                Bugs
-              </h3>
-              <p className="text-xs text-slate-400">
-                Live log feed received from mobile field testers organized by device model and feature.
-              </p>
-            </div>
-
-            {/* Filter & Sort Controls Bar */}
-            <div className="flex flex-wrap items-center gap-2.5">
-              
-              {/* Keyword Search Input */}
-              <div className="relative flex-1 sm:w-64">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5 pointer-events-none" />
-                <input
-                  type="text"
-                  placeholder="Search bugs..."
-                  value={searchBugQuery}
-                  onChange={e => setSearchBugQuery(e.target.value)}
-                  className="w-full liquid-glass-input rounded-2xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-400 focus:outline-none font-medium"
-                />
-                {searchBugQuery && (
-                  <button
-                    onClick={() => setSearchBugQuery('')}
-                    className="absolute right-2.5 top-2 text-slate-400 hover:text-white text-xs"
-                  >
-                    ×
+      {/* Tab 3: Bugs Feed (Layout B look: status chips + plan/day/search, tabs New / Bundle Suggestions / Reviewed, one-line rows) */}
+      {activeTab === 'bugs' && (!BUGANIZER_ENABLED || bugsView === 'feed') && (() => {
+        const fmtT = (iso?: string) => {
+          const d = new Date(iso || '');
+          return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        };
+        const renderFeedBug = (bug: FeedBug) => {
+          const isBugExpanded = !!expandedBugIds[bug.id];
+          const raw = (bugById.get(bug.id) || bug) as BugLog;
+          const filed = effectiveFiled(raw);
+          const pending = !filed && raw.filePending;
+          const reprod = !filed && effectiveStatus(bug.status) === REPROD;
+          const refined = currentRefinement(raw);
+          const rowTitle = (refined?.title || bug.title || (bug.note || '').replace(/\s+/g, ' ').trim() || 'No description').slice(0, 200);
+          const reviewed = reviewedOf(bug);
+          const strong = isStronglyReviewed(raw);
+          const sg = suggestionByBugId.get(bug.id);
+          return (
+            <div key={bug.id} id={`feed-row-${bug.id}`}>
+              <div data-testid="feed-row" data-bug-id={bug.id} role="button" tabIndex={0}
+                onClick={() => toggleBugExpand(bug.id)} onKeyDown={e => { if (e.key === 'Enter') toggleBugExpand(bug.id); }}
+                className={`${rowCls} ${isBugExpanded ? rowOpenCls : ''}`}>
+                <span className="text-[10.5px] text-slate-400 w-[58px] whitespace-nowrap">{fmtT(bug.timestamp)}</span>
+                <span className="hidden md:inline text-[11.5px] text-slate-400 truncate max-w-[150px]">{bug.testerName || 'Unknown'} · {bug.deviceName || '?'}</span>
+                <span className="flex-1 min-w-0 truncate text-slate-100" title={bug.note}>{rowTitle}</span>
+                {bug.imageUrl && <ImageIcon className="w-3.5 h-3.5 text-blue-300 flex-shrink-0" />}
+                <span className="hidden lg:inline text-[11.5px] text-slate-400 truncate max-w-[170px]">{bug.feature || 'General'}</span>
+                <span className={`${tagCls} ${TAG_STYLE.new}`}>{bug.bugType || 'Bug'}</span>
+                <span className={priTagCls(String(bug.priority || 'P2'))}>{bug.priority || 'P2'}</span>
+                {filed && <span data-testid="feed-filed-chip" className={`${tagCls} ${TAG_STYLE.filed} font-black`}>FILED</span>}
+                {pending && (
+                  <span data-testid="feed-waiting-chip" title="Opened in Buganizer - RX95 stamps it FILED once it finds it there" className={`${tagCls} ${raw.filePending!.expired ? TAG_STYLE.expired : TAG_STYLE.waiting}`}>
+                    {raw.filePending!.expired ? '⚠ NOT FOUND' : '⏳ WAITING'}
+                  </span>
+                )}
+                {reprod && <span data-testid="feed-reprod-chip" className={`${tagCls} ${TAG_STYLE.repro}`}>REPRO'D</span>}
+                {raw.bundle && <span className={`${tagCls} ${TAG_STYLE.bundle}`}>BUNDLED</span>}
+                {sg && (
+                  <button type="button" data-testid="feed-dupe-chip" onClick={e => { e.stopPropagation(); jumpToSuggestion(sg.suggestion.id); }}
+                    className={`${tagCls} border border-violet-500/50 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20`}
+                    title="RX95 thinks this is the same issue as other reports - review it in Bundle Suggestions">
+                    🧩 dupe of {sg.members.length - 1}
                   </button>
                 )}
+                <button type="button" className={rowActionCls} onClick={e => { e.stopPropagation(); toggleBugExpand(bug.id); }}>{isBugExpanded ? 'Close' : 'Open'}</button>
               </div>
-
-              {/* Test Plan Filter (scopes the list, Copy Bugs, and CSV export to one plan) */}
-              <div className="relative">
-                <ListChecks className="w-3.5 h-3.5 text-blue-400 absolute left-3 top-2.5 pointer-events-none" />
-                <select
-                  value={selectedPlanFilter}
-                  onChange={e => setSelectedPlanFilter(e.target.value)}
-                  className={`liquid-glass-input rounded-2xl pl-8 pr-3 py-1.5 text-xs font-semibold focus:outline-none cursor-pointer max-w-[14rem] ${
-                    selectedPlanFilter !== 'all' ? '!border-blue-500/50 text-blue-200' : 'text-slate-200'
-                  }`}
-                  title="Show, copy, and export only the bugs from one test plan"
-                >
-                  <option value="all" className="bg-slate-900">All Test Plans ({bugLogs.length})</option>
-                  {bugPlanOptions.map(opt => (
-                    <option key={opt.planId} value={opt.planId} className="bg-slate-900">
-                      {opt.planName} ({opt.count})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Copy Filtered Bugs Button (with screenshots for Google Docs / Email) */}
-              <button
-                type="button"
-                onClick={handleCopyBugsToClipboard}
-                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl text-xs font-semibold transition flex items-center gap-1.5 shadow-sm border border-blue-500 active:scale-95 cursor-pointer"
-                title="Copy filtered bugs list with inline screenshots formatted for Google Docs, Word, Slack, or Email"
-              >
-                {copiedBugs ? (
-                  <>
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-300" />
-                    <span className="text-emerald-200 font-bold">Bugs Copied!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5 text-white" />
-                    <span>{selectedPlanFilterName ? 'Copy Plan Bugs (Google Docs)' : 'Copy Bugs (Google Docs)'}</span>
-                  </>
-                )}
-              </button>
-
-              {/* Google Sheets Sync & Settings Button */}
-              <button
-                type="button"
-                onClick={() => setIsSheetModalOpen(true)}
-                className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-2xl text-xs font-semibold transition flex items-center gap-1.5 shadow-sm border border-slate-700 active:scale-95 cursor-pointer"
-                title="Google Sheets automatic sync and spreadsheet integration settings"
-              >
-                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Google Sheets Sync</span>
-                {autoSyncSheet && (
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse ml-0.5" title="Auto-sync is enabled"></span>
-                )}
-              </button>
-
-              {/* Wipe All Bugs Button */}
-              {bugLogs.length > 0 && onWipeAllBugs && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (window.confirm(`Are you sure you want to wipe all ${bugLogs.length} logged bug(s)? This will permanently remove all defect logs.`)) {
-                      onWipeAllBugs();
-                    }
-                  }}
-                  className="px-3.5 py-1.5 bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 rounded-2xl text-xs font-semibold transition flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
-                  title="Permanently wipe all logged bugs"
-                >
-                  <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-                  <span>Wipe All Bugs</span>
-                </button>
-              )}
-
-              {/* Single Condensed Filter & Sort Menu Button & Popover */}
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setIsBugFilterMenuOpen(!isBugFilterMenuOpen)}
-                  className={`px-3.5 py-1.5 liquid-glass-button rounded-2xl text-xs font-semibold flex items-center gap-2 transition-all duration-200 ${
-                    (selectedDateFilter !== 'all' || selectedFeatureFilter !== 'all' || selectedDeviceFilter !== 'all' || sortByDevice !== 'newest')
-                      ? '!bg-blue-600/20 !border-blue-500/50 text-blue-200 shadow-sm'
-                      : 'text-slate-300 hover:text-white'
-                  }`}
-                >
-                  <Filter className="w-3.5 h-3.5 text-blue-400" />
-                  <span>Filter & Sort</span>
-                  {((selectedDateFilter !== 'all' ? 1 : 0) + (selectedFeatureFilter !== 'all' ? 1 : 0) + (selectedDeviceFilter !== 'all' ? 1 : 0) + (sortByDevice !== 'newest' ? 1 : 0)) > 0 && (
-                    <span className="bg-blue-600 text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold font-mono">
-                      {(selectedDateFilter !== 'all' ? 1 : 0) + (selectedFeatureFilter !== 'all' ? 1 : 0) + (selectedDeviceFilter !== 'all' ? 1 : 0) + (sortByDevice !== 'newest' ? 1 : 0)}
+              {isBugExpanded && (
+                <div data-testid="feed-row-expanded" className={expandedCls}>
+                  <div className="flex flex-wrap items-center gap-2 mb-3">
+                    {!strong && (reviewed ? (
+                      <button type="button" data-testid="move-to-new" className={smallBtnCls} onClick={() => { moveToNew(bug.id); flashFeed('Moved back to New.'); }}>↩ Move back to New</button>
+                    ) : (
+                      <button type="button" data-testid="mark-reviewed" className="px-2.5 h-7 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white" onClick={() => { markReviewed(bug.id); flashFeed('Marked reviewed.'); }}>✓ Mark reviewed</button>
+                    ))}
+                    {onUpdateBugLog && (
+                      <button type="button" data-testid="feed-edit-bug" className={smallBtnCls} onClick={() => startFeedEdit(bug)}>
+                        <Edit className="w-3 h-3 inline mr-1 text-blue-300" />Edit
+                      </button>
+                    )}
+                    {BUGANIZER_ENABLED && (
+                      <button type="button" data-testid="feed-open-buganizer" className={smallBtnCls} onClick={() => openInBuganizer(bug.id)}>Open in Buganizer tab ↗</button>
+                    )}
+                    <span className="text-[11px] text-slate-500">
+                      Logged {fmtT(bug.timestamp)} on {new Date(bug.timestamp).toLocaleDateString()} · {bug.feature || 'General'}{refined ? ' · title cleaned up by RX95' : ''}
                     </span>
-                  )}
-                  <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${isBugFilterMenuOpen ? 'rotate-180' : ''}`} />
-                </button>
-
-                {/* Popover Menu Dropdown */}
-                {isBugFilterMenuOpen && (
-                  <div className="absolute right-0 mt-2 w-72 max-w-[calc(100vw-2rem)] liquid-glass-panel rounded-3xl p-4 space-y-4 shadow-2xl z-50 border-slate-700">
-                    <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
-                      <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                        <Filter className="w-3.5 h-3.5 text-blue-400" />
-                        Filter & Sort Menu
+                    <button type="button" data-testid="feed-delete-bug" onClick={() => onDeleteBug(bug.id)}
+                      className="ml-auto px-2.5 h-7 rounded-xl text-xs font-semibold text-rose-300 hover:bg-rose-950/40 border border-transparent hover:border-rose-800/50" title="Delete Bug Log">
+                      <Trash2 className="w-3.5 h-3.5 inline mr-1" />Delete
+                    </button>
+                  </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-5 text-xs">
+              <div className="md:col-span-2 space-y-3">
+                {feedEdit?.bugId === bug.id ? (
+                  <div className="space-y-2.5 rounded-2xl border border-blue-500/40 bg-blue-950/20 p-3" data-testid="feed-edit-form">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[11px] uppercase font-mono text-slate-300 font-bold">Title</label>
+                        <span className="text-[10px] font-mono text-slate-500">{feedEdit.title.length}/120</span>
+                      </div>
+                      <input
+                        data-testid="feed-edit-title"
+                        value={feedEdit.title}
+                        maxLength={120}
+                        onChange={e => setFeedEdit({ ...feedEdit, title: e.target.value })}
+                        placeholder="Short summary of the bug"
+                        className="w-full bg-[#0f172a] border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-semibold focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div className="flex flex-wrap items-end gap-3">
+                      <div>
+                        <label className="text-[11px] uppercase font-mono text-slate-300 font-bold block mb-1">Time it happened</label>
+                        <input
+                          type="time"
+                          data-testid="feed-edit-time"
+                          value={feedEdit.time}
+                          onChange={e => setFeedEdit({ ...feedEdit, time: e.target.value })}
+                          className="bg-[#0f172a] border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-blue-500 [color-scheme:dark]"
+                        />
+                      </div>
+                      <span className="text-[10px] text-slate-400 pb-2">
+                        Same day only{bug.originalTimestamp ? ` · first logged ${new Date(bug.originalTimestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}
                       </span>
-                      {(selectedDateFilter !== 'all' || selectedFeatureFilter !== 'all' || selectedDeviceFilter !== 'all' || sortByDevice !== 'newest') && (
-                        <button
-                          onClick={() => {
-                            setSelectedDateFilter('all');
-                            setSelectedFeatureFilter('all');
-                            setSelectedDeviceFilter('all');
-                            setSelectedPlanFilter('all');
-                            setSortByDevice('newest');
-                            setCustomDateInput('');
-                          }}
-                          className="text-[10px] text-blue-300 hover:text-white font-bold bg-blue-500/20 px-2 py-0.5 rounded-lg border border-blue-500/30 transition"
-                        >
-                          Reset All
+                    </div>
+                    <div>
+                      <label className="text-[11px] uppercase font-mono text-slate-300 font-bold block mb-1">Description</label>
+                      <textarea
+                        data-testid="feed-edit-description"
+                        rows={6}
+                        value={feedEdit.note}
+                        onChange={e => setFeedEdit({ ...feedEdit, note: e.target.value })}
+                        placeholder="Steps to reproduce, expected vs. actual"
+                        className="w-full bg-[#0f172a] border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 leading-relaxed focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-slate-400">Changes carry over to the Buganizer tab.</span>
+                      <div className="flex gap-2">
+                        <button type="button" onClick={() => setFeedEdit(null)} className="px-3 h-8 rounded-xl text-xs font-semibold text-slate-300 hover:bg-slate-800">Cancel</button>
+                        <button type="button" data-testid="feed-edit-save" disabled={!feedEdit.title.trim() && !feedEdit.note.trim()} onClick={() => saveFeedEdit(bug)} className="px-3 h-8 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40">Save changes</button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[11px] uppercase font-mono text-slate-300 font-bold flex items-center gap-1.5">
+                        Observation / Bug Description Log:
+                      </span>
+                      {onUpdateBugLog && (
+                        <button type="button" onClick={() => startFeedEdit(bug)} className="px-2.5 py-1 rounded-xl text-[11px] font-bold flex items-center gap-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700">
+                          <Edit className="w-3 h-3 text-blue-300" /> Edit
                         </button>
                       )}
                     </div>
+                    {bug.title && <div className="text-sm font-bold text-white mb-1.5">{bug.title}</div>}
+                    <div className="liquid-glass-input p-4 rounded-2xl text-slate-100 text-xs leading-relaxed whitespace-pre-wrap font-medium shadow-inner">
+                      {bug.note || 'No description attached.'}
+                    </div>
+                  </div>
+                )}
 
-                    {/* Date Filter */}
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1">
-                        <Calendar className="w-3 h-3 text-blue-400" /> Date Range
-                      </label>
-                      <select
-                        value={selectedDateFilter}
-                        onChange={e => setSelectedDateFilter(e.target.value)}
-                        className="w-full liquid-glass-input rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none font-medium cursor-pointer"
-                      >
-                        <option value="all" className="bg-slate-900">All Dates</option>
-                        <option value="today" className="bg-slate-900">Today</option>
-                        <option value="yesterday" className="bg-slate-900">Yesterday</option>
-                        <option value="7days" className="bg-slate-900">Last 7 Days</option>
-                        <option value="30days" className="bg-slate-900">Last 30 Days</option>
-                        <option value="custom" className="bg-slate-900">Specific Date...</option>
-                      </select>
-                      {selectedDateFilter === 'custom' && (
+                <div className="grid grid-cols-2 gap-3 text-xs font-mono">
+                  <div className="liquid-glass-panel p-3 rounded-2xl border border-slate-800">
+                    <span className="text-[10px] uppercase text-slate-400 block font-semibold">Step Target</span>
+                    <span className="text-white font-bold">{bug.stepTitle || 'N/A'}</span>
+                  </div>
+                  <div className="liquid-glass-panel p-3 rounded-2xl border border-slate-800">
+                    <span className="text-[10px] uppercase text-slate-400 block font-semibold">Reporter & Device</span>
+                    <span className="text-blue-300 font-bold">{bug.testerName} ({bug.deviceName})</span>
+                  </div>
+                </div>
+
+                {/* Bug Triage Controls */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                  <div>
+                    <label className="text-[10px] uppercase font-mono text-slate-400 block font-semibold mb-1">Bug Type</label>
+                    <select
+                      value={bugCategorizations[bug.id]?.bugType || bug.bugType || 'Bug'}
+                      onChange={e => handleUpdateBugCategorization(bug.id, 'bugType', e.target.value)}
+                      className="w-full bg-[#0f172a] border border-slate-700/80 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 font-semibold focus:outline-none focus:border-blue-500 cursor-pointer"
+                    >
+                      {(['Bug', 'Setup Issue', 'Known Issue', 'Feature Request', 'Misc Issue'] as const).map(opt => (
+                        <option key={opt} value={opt} className="bg-slate-900">{opt}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase font-mono text-slate-400 block font-semibold mb-1">Priority</label>
+                    <select
+                      value={bugCategorizations[bug.id]?.priority || bug.priority || 'P2'}
+                      onChange={e => handleUpdateBugCategorization(bug.id, 'priority', e.target.value)}
+                      className="w-full bg-[#0f172a] border border-slate-700/80 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 font-semibold focus:outline-none focus:border-blue-500 cursor-pointer"
+                    >
+                      {(['P0', 'P1', 'P2'] as const).map(opt => (
+                        <option key={opt} value={opt} className="bg-slate-900">{opt}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase font-mono text-slate-400 block font-semibold mb-1">Status</label>
+                    <select
+                      data-testid="feed-status"
+                      value={effectiveStatus(bugCategorizations[bug.id]?.status || bug.status)}
+                      onChange={e => handleUpdateBugCategorization(bug.id, 'status', e.target.value)}
+                      className={`w-full bg-[#0f172a] border rounded-xl px-2.5 py-1.5 text-xs font-semibold focus:outline-none focus:border-blue-500 cursor-pointer ${effectiveStatus(bugCategorizations[bug.id]?.status || bug.status) === REPROD ? 'border-violet-500/70 text-violet-200 bg-violet-500/10' : 'border-slate-700/80 text-slate-200'}`}
+                    >
+                      {TRIAGE_STATUS_OPTIONS.map(opt => (
+                        <option key={opt} value={opt} className="bg-slate-900">{opt}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                {effectiveStatus(bugCategorizations[bug.id]?.status || bug.status) === REPROD && (
+                  <p className="text-[11px] text-slate-400" data-testid="feed-repro-hint">
+                    💡 "Repro'd Issue" tells RX95 to look for an existing Buganizer bug in this plan's hotlist (shown on the Buganizer tab).
+                  </p>
+                )}
+              </div>
+
+              {/* Evidence Image Preview Box */}
+              <div>
+                <span className="text-[11px] uppercase font-mono text-slate-300 block font-bold mb-1.5">
+                  Evidence Photo:
+                </span>
+                {bug.imageUrl && /^(data:image\/|https?:\/\/|blob:|\/)/i.test(bug.imageUrl) ? (
+                  <div 
+                    onClick={() => setSelectedImagePreviewUrl(bug.imageUrl!)}
+                    className="relative group rounded-2xl overflow-hidden border border-slate-700 cursor-pointer bg-slate-900 max-h-56 flex items-center justify-center shadow-2xl"
+                  >
+                    <img src={bug.imageUrl} alt="Bug screenshot" className="w-full object-cover max-h-52 group-hover:scale-105 transition duration-300" />
+                    <div className="absolute inset-0 bg-slate-950/60 opacity-0 group-hover:opacity-100 transition flex items-center justify-center backdrop-blur-[3px]">
+                      <span className="px-4 py-2 bg-slate-900/95 text-slate-100 border border-blue-500/50 rounded-2xl text-xs font-bold font-mono flex items-center gap-2 shadow-2xl">
+                        <ImageIcon className="w-4 h-4 text-blue-400" /> Click for Full Image
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="h-36 rounded-2xl border border-slate-800 bg-[#0f172a] flex items-center justify-center text-xs text-slate-500 font-mono">
+                    No Photo Attached
+                  </div>
+                )}
+                {(() => {
+                  // Filed stamp: from the stored bug (a legacy stored status 'Filed' counts as filed)
+                  const rawBug = bugById.get(bug.id) || bug;
+                  const filed = effectiveFiled(rawBug);
+                  const canEdit = !!(onPatchBugLog || onUpdateBugLog);
+                  const setFiled = (next: ReturnType<typeof effectiveFiled>) => {
+                    const patch = { ...filedPatch(rawBug, next), reviewed: reviewedNow('reviewed') };
+                    if (onPatchBugLog) onPatchBugLog(bug.id, patch);
+                    else if (onUpdateBugLog) onUpdateBugLog({ ...rawBug, ...patch });
+                  };
+                  const draftId = filedIssueDrafts[bug.id] ?? '';
+                  const isReprod = effectiveStatus(bugCategorizations[bug.id]?.status || rawBug.status) === REPROD;
+                  // RX95's likely existing bugs, offered as one-click picks for the b/ field
+                  const followUpPicks = isReprod
+                    ? (currentReproMatches(rawBug as BugLog)?.candidates || []).filter(c => c.verdict !== 'unlikely').slice(0, 3)
+                    : [];
+                  return (
+                    <div data-testid="feed-filed" className="mt-3">
+                      {filed && (
+                        <div data-testid="feed-filed-stamp" className="mt-1 mb-2 border-4 border-green-500 text-green-500 rounded-[14px] py-2.5 text-center font-black text-[34px] tracking-[0.25em] -rotate-3 bg-green-500/[0.08] shadow-[0_0_30px_rgba(34,197,94,0.25)] select-none">
+                          FILED
+                          {filedStampLine(filed) && <small className="block text-[11px] tracking-normal font-bold text-green-300 mt-0.5">{filedStampLine(filed)}</small>}
+                        </div>
+                      )}
+                      {/* Not a <label>: a label would re-dispatch the click to the switch and toggle it twice */}
+                      <div className={`flex items-center gap-2.5 mt-2 text-xs font-bold text-slate-200 ${canEdit ? '' : 'opacity-60'}`}>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={!!filed}
+                          data-testid="feed-filed-toggle"
+                          disabled={!canEdit}
+                          onClick={() => {
+                            if (filed) setFiled(undefined);
+                            else {
+                              // A b/ on a Repro'd bug is the existing bug it was followed up on (summary: "(KI, updated)")
+                              setFiled(newFiled(isReprod && draftId ? 'follow-up' : 'manual', draftId));
+                              setFiledIssueDrafts(prev => { const n = { ...prev }; delete n[bug.id]; return n; });
+                            }
+                          }}
+                          className={`relative w-10 h-[22px] rounded-full transition flex-shrink-0 ${filed ? 'bg-green-500' : 'bg-slate-700'}`}
+                        >
+                          <span className={`absolute top-[3px] w-4 h-4 rounded-full bg-white transition-all ${filed ? 'right-[3px]' : 'left-[3px]'}`} />
+                        </button>
+                        {filed ? <>Filed <span className="text-[11px] font-medium text-slate-400">(hidden from the Buganizer tab)</span></> : 'Mark as filed'}
+                      </div>
+                      {!filed && canEdit && (
                         <input
-                          type="date"
-                          value={customDateInput}
-                          onChange={e => setCustomDateInput(e.target.value)}
-                          className="w-full liquid-glass-input rounded-xl px-3 py-1 text-xs text-blue-200 focus:outline-none mt-1 font-mono"
+                          data-testid="feed-filed-issue"
+                          aria-label="Filed b/ issue number"
+                          value={draftId}
+                          inputMode="numeric"
+                          onChange={e => setFiledIssueDrafts(prev => ({ ...prev, [bug.id]: normalizeIssueId(e.target.value) }))}
+                          placeholder={isReprod ? 'b/ of the bug you followed up on' : 'b/ issue number (optional)'}
+                          className="mt-2 w-full bg-[#0f172a] border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-green-500"
                         />
                       )}
+                      {!filed && canEdit && isReprod && followUpPicks.length > 0 && (
+                        <div data-testid="feed-filed-picks" className="mt-1.5 flex flex-wrap gap-1.5 items-center">
+                          <span className="text-[10px] text-slate-400">Followed up on:</span>
+                          {followUpPicks.map(c => (
+                            <button
+                              key={c.id}
+                              type="button"
+                              data-testid="feed-filed-pick"
+                              title={c.title}
+                              onClick={() => setFiledIssueDrafts(prev => ({ ...prev, [bug.id]: normalizeIssueId(String(c.id)) }))}
+                              className={`max-w-full truncate text-[10px] px-2 py-0.5 rounded-full border font-mono ${draftId === String(c.id) ? 'border-green-500 bg-green-500/15 text-green-200' : 'border-slate-600 bg-slate-800 text-slate-200 hover:border-green-500/60'}`}
+                            >
+                              b/{c.id} · {(c.title || '').replace(/^(\[[^\]]*\]\s*)+/, '').slice(0, 48)}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
+                  );
+                })()}
+              </div>
+            </div>
+                </div>
+              )}
+            </div>
+          );
+        };
 
-                    {/* Feature Filter */}
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1">
-                        <Tag className="w-3 h-3 text-blue-400" /> Feature Tag
-                      </label>
-                      <select
-                        value={selectedFeatureFilter}
-                        onChange={e => setSelectedFeatureFilter(e.target.value)}
-                        className="w-full liquid-glass-input rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none font-medium cursor-pointer"
-                      >
-                        <option value="all" className="bg-slate-900">All Features</option>
-                        {uniqueFeatures.map(feat => (
-                          <option key={feat} value={feat} className="bg-slate-900">
-                            {feat}
-                          </option>
-                        ))}
+        const dayValue = selectedDateFilter === 'custom' ? customDateInput : '';
+        const moreActive = selectedFeatureFilter !== 'all' || selectedDeviceFilter !== 'all' || sortByDevice !== 'newest' || (selectedDateFilter !== 'all' && selectedDateFilter !== 'custom');
+        const feedTabs = [
+          { key: 'new' as const, label: 'New', count: newFeedBugs.length, testid: 'feed-tab-new' },
+          { key: 'suggestions' as const, label: 'Bundle Suggestions', count: feedSuggestions.length, testid: 'feed-tab-suggestions' },
+          { key: 'reviewed' as const, label: 'Reviewed', count: reviewedFeedBugs.length, testid: 'feed-tab-reviewed' },
+        ];
+        return (
+          <div className="space-y-4" data-testid="bugs-feed">
+            {/* Header: status chips + plan / day / search (same look as the Buganizer tab) */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2" data-testid="feed-status-chips">
+                <Rx95LiveChip heartbeatAt={rx95Suggestions?.heartbeat?.at} nowMs={feedNow} testid="feed-rx95-chip" />
+                <button type="button" data-testid="feed-chip-new" className={`${chipCls} ${feedTab === 'new' ? chipOn : chipOff}`} onClick={() => setFeedTab('new')}>🆕 <b className="text-white">{newFeedBugs.length}</b> new</button>
+                <button type="button" data-testid="feed-chip-suggestions" className={`${chipCls} ${feedTab === 'suggestions' ? chipOn : chipOff}`} onClick={() => setFeedTab('suggestions')}>🧩 <b className="text-white">{feedSuggestions.length}</b> suggestion{feedSuggestions.length === 1 ? '' : 's'}</button>
+                <button type="button" data-testid="feed-chip-reviewed" className={`${chipCls} ${feedTab === 'reviewed' ? chipOn : chipOff}`} onClick={() => setFeedTab('reviewed')}>✓ <b className="text-white">{reviewedFeedBugs.length}</b> reviewed</button>
+              </div>
+              <div className="flex-1" />
+              <select aria-label="Plan filter" data-testid="feed-plan" className={`${inputCls} !w-auto max-w-[170px]`} value={selectedPlanFilter} onChange={e => setSelectedPlanFilter(e.target.value)}>
+                <option value="all">All plans ({bugLogs.length})</option>
+                {bugPlanOptions.map(opt => <option key={opt.planId} value={opt.planId}>{opt.planName} ({opt.count})</option>)}
+              </select>
+              <input aria-label="Day filter" data-testid="feed-day" type="date" className={`${inputCls} !w-[132px] [color-scheme:dark]`} value={dayValue}
+                onChange={e => { const v = e.target.value; if (v) { setSelectedDateFilter('custom'); setCustomDateInput(v); } else { setSelectedDateFilter('all'); setCustomDateInput(''); } }} />
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2" />
+                <input aria-label="Search bugs" data-testid="feed-search" className={`${inputCls} pl-7 !w-32`} value={searchBugQuery} onChange={e => setSearchBugQuery(e.target.value)} placeholder="Search…" />
+              </div>
+              <div className="relative">
+                <button type="button" data-testid="feed-more-toggle" className={`${chipCls} ${isBugFilterMenuOpen || moreActive ? chipOn : chipOff}`} onClick={() => setIsBugFilterMenuOpen(!isBugFilterMenuOpen)}>
+                  <Filter className="w-3.5 h-3.5" /> More ▾
+                </button>
+                {isBugFilterMenuOpen && (
+                  <div data-testid="feed-more-popover" className="absolute right-0 z-30 mt-2 w-72 max-w-[calc(100vw-2rem)] rounded-2xl border border-slate-700 bg-[#0f172a] p-3 space-y-2.5 shadow-2xl">
+                    <div>
+                      <label className="block text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1">Date range</label>
+                      <select className={inputCls} value={selectedDateFilter} onChange={e => setSelectedDateFilter(e.target.value)}>
+                        <option value="all">All dates</option>
+                        <option value="today">Today</option>
+                        <option value="yesterday">Yesterday</option>
+                        <option value="7days">Last 7 days</option>
+                        <option value="30days">Last 30 days</option>
+                        <option value="custom">Specific date (header)</option>
                       </select>
                     </div>
-
-                    {/* Device Filter */}
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1">
-                        <Smartphone className="w-3 h-3 text-blue-400" /> Device Model
-                      </label>
-                      <select
-                        value={selectedDeviceFilter}
-                        onChange={e => setSelectedDeviceFilter(e.target.value)}
-                        className="w-full liquid-glass-input rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none font-medium cursor-pointer"
-                      >
-                        <option value="all" className="bg-slate-900">All Devices ({bugLogs.length})</option>
-                        {uniqueDevices.map(dev => (
-                          <option key={dev} value={dev} className="bg-slate-900">
-                            {dev}
-                          </option>
-                        ))}
+                    <div>
+                      <label className="block text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1">CUJ</label>
+                      <select className={inputCls} value={selectedFeatureFilter} onChange={e => setSelectedFeatureFilter(e.target.value)}>
+                        <option value="all">All CUJs</option>
+                        {uniqueFeatures.map(feat => <option key={feat} value={feat}>{feat}</option>)}
                       </select>
                     </div>
-
-                    {/* Sort Order */}
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1">
-                        <ArrowUpDown className="w-3 h-3 text-blue-400" /> Sort Order
-                      </label>
-                      <select
-                        value={sortByDevice}
-                        onChange={e => setSortByDevice(e.target.value as any)}
-                        className="w-full liquid-glass-input rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none font-medium cursor-pointer"
-                      >
-                        <option value="newest" className="bg-slate-900">Timestamp (Newest First)</option>
-                        <option value="oldest" className="bg-slate-900">Timestamp (Oldest First)</option>
-                        <option value="priority" className="bg-slate-900">Priority (P0 First)</option>
-                        <option value="device-asc" className="bg-slate-900">Device Name (A → Z)</option>
-                        <option value="device-desc" className="bg-slate-900">Device Name (Z → A)</option>
+                    <div>
+                      <label className="block text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1">Device</label>
+                      <select className={inputCls} value={selectedDeviceFilter} onChange={e => setSelectedDeviceFilter(e.target.value)}>
+                        <option value="all">All devices</option>
+                        {uniqueDevices.map(dev => <option key={dev} value={dev}>{dev}</option>)}
                       </select>
                     </div>
-
-                    <div className="pt-2 border-t border-slate-800 space-y-2 text-center">
-                      <button
-                        type="button"
-                        onClick={() => exportBugsToCSV(processedBugs, { planName: selectedPlanFilterName || undefined, getPlanName: b => bugPlanLookup(b).planName })}
-                        className="w-full py-1.5 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5"
-                        title="Download CSV file for Excel / Sheets"
-                      >
-                        <Download className="w-3.5 h-3.5 text-emerald-300" />
-                        <span>{selectedPlanFilterName ? 'Export Plan Bugs to CSV' : 'Export to CSV File'}</span>
+                    <div>
+                      <label className="block text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1">Sort</label>
+                      <select className={inputCls} value={sortByDevice} onChange={e => setSortByDevice(e.target.value as any)}>
+                        <option value="newest">Newest first</option>
+                        <option value="oldest">Oldest first</option>
+                        <option value="priority">Priority (P0 first)</option>
+                        <option value="device-asc">Device (A → Z)</option>
+                        <option value="device-desc">Device (Z → A)</option>
+                      </select>
+                    </div>
+                    <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-800">
+                      <button type="button" className={smallBtnCls} onClick={() => { setSelectedDateFilter('all'); setSelectedFeatureFilter('all'); setSelectedDeviceFilter('all'); setSelectedPlanFilter('all'); setSortByDevice('newest'); setCustomDateInput(''); }}>Reset filters</button>
+                      <button type="button" className={smallBtnCls} onClick={() => { setIsBugFilterMenuOpen(false); setIsSheetModalOpen(true); }}>
+                        <FileSpreadsheet className="w-3.5 h-3.5 inline mr-1 text-emerald-400" />Sheets sync{autoSyncSheet ? ' · on' : ''}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => setIsBugFilterMenuOpen(false)}
-                        className="w-full py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl transition"
-                      >
-                        Done
-                      </button>
+                      {bugLogs.length > 0 && onWipeAllBugs && (
+                        <button type="button" className="px-2.5 h-7 rounded-xl text-xs font-semibold border border-rose-500/30 bg-rose-500/15 text-rose-300 hover:bg-rose-500/25"
+                          onClick={() => { if (window.confirm(`Are you sure you want to wipe all ${bugLogs.length} logged bug(s)? This will permanently remove all defect logs.`)) onWipeAllBugs(); }}>
+                          <Trash2 className="w-3.5 h-3.5 inline mr-1" />Wipe all bugs
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
               </div>
-
             </div>
-          </div>
 
-          <BundleSuggestionsPanel
-            shown={feedSuggestions}
-            bugsById={processedBugById}
-            plans={testPlans}
-            dismissed={dismissedSuggestions}
-            onDismissedChange={setDismissedSuggestions}
-            onApply={handleCategorizeAndBundle}
-            collapsed={suggestionsCollapsed}
-            onCollapsedChange={setSuggestionsCollapsed}
-          />
+            <TabBar tabs={feedTabs} active={feedTab} onChange={setFeedTab} testid="feed-tabs" />
 
-          <div className="space-y-3.5">
-            {processedBugs.length === 0 ? (
-              <div className="liquid-glass-panel rounded-3xl p-8 text-center text-xs text-slate-400 font-medium">
-                No matching bugs found for selected search query and filters.
-              </div>
+            {feedTab === 'suggestions' ? (
+              feedSuggestions.length === 0 ? (
+                <div className={`${listBoxCls} p-8 text-center text-sm text-slate-400`}>No bundle suggestions for these filters. RX95 suggests them as same-day duplicates come in.</div>
+              ) : (
+                <BundleSuggestionsPanel
+                  shown={feedSuggestions}
+                  bugsById={processedBugById}
+                  plans={testPlans}
+                  dismissed={dismissedSuggestions}
+                  onDismissedChange={setDismissedSuggestions}
+                  onApply={handleCategorizeAndBundle}
+                  collapsed={suggestionsCollapsed}
+                  onCollapsedChange={setSuggestionsCollapsed}
+                />
+              )
             ) : (
-              feedRows.map(row => {
-                const renderFeedBug = (bug: FeedBug) => {
-                const isBugExpanded = !!expandedBugIds[bug.id];
-                const formatted12HrTime = (() => {
-                  try {
-                    const d = bug.timestamp ? new Date(bug.timestamp) : new Date();
-                    if (!isNaN(d.getTime())) {
-                      return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
-                    }
-                  } catch (e) {}
-                  return bug.formattedTime || 'N/A';
-                })();
-
-                return (
-                  <div 
-                    key={bug.id} 
-                    className="liquid-glass-panel rounded-3xl border border-slate-800 overflow-hidden transition-all duration-200 shadow-xl hover:border-slate-700"
-                  >
-                    {/* Header Bar (Always Visible) */}
-                    <div 
-                      onClick={() => toggleBugExpand(bug.id)}
-                      className="p-4 flex flex-wrap items-center justify-between gap-3 cursor-pointer bg-[#111827] hover:bg-[#162033] transition"
-                    >
-                      <div className="flex items-center gap-3 flex-wrap">
-                        <button 
-                          type="button"
-                          className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-blue-300 transition"
-                        >
-                          <ChevronDown className={`w-4 h-4 transition-transform duration-300 ${isBugExpanded ? 'rotate-180 text-blue-400' : 'text-slate-400'}`} />
-                        </button>
-
-                        <div className="flex items-center gap-1.5 font-mono text-xs text-slate-200 font-bold bg-[#0f172a] px-3 py-1 rounded-xl border border-slate-800">
-                          <Clock className="w-3.5 h-3.5 text-blue-400" />
-                          <span>{formatted12HrTime}</span>
-                          <span className="text-[10px] text-slate-400 font-normal ml-0.5">({new Date(bug.timestamp).toLocaleDateString()})</span>
-                        </div>
-
-                        <span className="bg-blue-500/15 text-blue-300 font-mono text-xs px-3 py-1 rounded-xl border border-blue-500/30 flex items-center gap-1.5 font-bold">
-                          <Tag className="w-3.5 h-3.5 text-blue-400" />
-                          {bug.feature || 'General'}
-                        </span>
-
-                        <span className="bg-[#0f172a] text-slate-300 font-mono text-xs px-3 py-1 rounded-xl border border-slate-800 flex items-center gap-1.5 font-medium">
-                          <Smartphone className="w-3.5 h-3.5 text-slate-400" />
-                          {bug.deviceName || 'Unspecified'}
-                        </span>
-
-                        <span className="bg-[#0f172a] text-slate-200 font-mono text-xs px-3 py-1 rounded-xl border border-slate-800 flex items-center gap-1.5 font-medium">
-                          <User className="w-3.5 h-3.5 text-blue-400" />
-                          {bug.testerName}
-                        </span>
-
-                        {bug.priority && (
-                          <span className={`font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold uppercase ${
-                            bug.priority === 'P0' || bug.priority === '0'
-                              ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
-                              : bug.priority === 'P1' || bug.priority === '1'
-                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                              : 'bg-slate-800 text-slate-300 border-slate-700'
-                          }`}>
-                            {bug.priority}
-                          </span>
-                        )}
-                        {effectiveFiled(bugById.get(bug.id) || bug) && (
-                          <span data-testid="feed-filed-chip" className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-black tracking-wider bg-green-500/15 text-green-300 border-green-500/40">
-                            FILED
-                          </span>
-                        )}
-                        {!effectiveFiled(bugById.get(bug.id) || bug) && (bugById.get(bug.id) || bug).filePending && (
-                          <span data-testid="feed-waiting-chip" title="Opened in Buganizer - RX95 stamps it FILED once it finds it there" className={`font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold ${(bugById.get(bug.id) || bug).filePending!.expired ? 'bg-rose-500/15 text-rose-200 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
-                            {(bugById.get(bug.id) || bug).filePending!.expired ? '⚠ NOT FOUND' : '⏳ WAITING'}
-                          </span>
-                        )}
-                        {!effectiveFiled(bugById.get(bug.id) || bug) && effectiveStatus(bug.status) === REPROD && (
-                          <span data-testid="feed-reprod-chip" className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold bg-violet-500/15 text-violet-200 border-violet-500/40">
-                            REPRO'D
-                          </span>
-                        )}
-                        {suggestionByBugId.get(bug.id) && (() => {
-                          const sg = suggestionByBugId.get(bug.id)!;
-                          const others = sg.members.length - 1;
-                          return (
-                            <button
-                              type="button"
-                              data-testid="feed-dupe-chip"
-                              onClick={(e) => { e.stopPropagation(); jumpToSuggestion(sg.suggestion.id); }}
-                              className="text-[10px] px-2.5 py-0.5 rounded-full border border-violet-500/50 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20 font-bold"
-                              title="RX95 thinks this is the same issue as other reports - review the suggested group above"
-                            >
-                              🧩 Likely dupe of {others} other{others === 1 ? '' : 's'} · Review
-                            </button>
-                          );
-                        })()}
-                      </div>
-
-                      <div className="flex items-center gap-3 ml-auto min-w-0 max-w-full">
-                        <div className="text-xs text-slate-300 min-w-0 flex-1 max-w-xs md:max-w-md truncate font-medium">
-                          {bug.title ? <span className="text-white font-semibold">{bug.title}</span> : bug.note}
-                        </div>
-
-                        {bug.imageUrl && (
-                          <span className="px-2.5 py-1 bg-blue-500/15 text-blue-200 border border-blue-500/30 rounded-xl text-[11px] font-mono font-bold flex items-center gap-1">
-                            <ImageIcon className="w-3 h-3 text-blue-300" /> Photo
-                          </span>
-                        )}
-
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleCopySingleBug(bug);
-                          }}
-                          className={`p-2 rounded-xl border transition flex items-center gap-1 text-xs font-medium cursor-pointer ${
-                            copiedSingleBugId === bug.id
-                              ? 'text-emerald-300 bg-emerald-950/60 border-emerald-500/40'
-                              : 'text-slate-400 hover:text-blue-300 hover:bg-slate-800 border-transparent hover:border-slate-700'
-                          }`}
-                          title="Copy this bug & screenshot formatted for Google Docs"
-                        >
-                          {copiedSingleBugId === bug.id ? (
-                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                          ) : (
-                            <Copy className="w-4 h-4" />
-                          )}
-                        </button>
-
-                        {onUpdateBugLog && (
-                          <button
-                            type="button"
-                            data-testid="feed-edit-bug"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              startFeedEdit(bug);
-                            }}
-                            className="p-2 text-slate-400 hover:text-blue-300 hover:bg-slate-800 rounded-xl border border-transparent hover:border-slate-700 transition"
-                            title="Edit title & description"
-                          >
-                            <Edit className="w-4 h-4" />
-                          </button>
-                        )}
-
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onDeleteBug(bug.id);
-                          }}
-                          className="p-2 text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 rounded-xl border border-transparent hover:border-rose-800/50 transition"
-                          title="Delete Bug Log"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Accordion Content */}
-                    <div className={`liquid-accordion-wrapper ${isBugExpanded ? 'expanded' : ''}`}>
-                      <div className="liquid-accordion-inner">
-                        <div className="p-4 pt-0 border-t border-slate-800 bg-[#0b0f19]">
-                          <div className="liquid-glass-card rounded-2xl p-5 space-y-4 border-slate-800 text-left bg-[#111827] shadow-2xl mt-3">
-                            
-                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
-                              <span className="text-xs font-bold text-white flex items-center gap-2 font-mono">
-                                <Tag className="w-4 h-4 text-blue-400" />
-                                Feature Category: <span className="text-blue-300">{bug.feature || 'General'}</span>
-                              </span>
-                              <div className="flex items-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => handleCopySingleBug(bug)}
-                                  className={`px-3 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5 transition active:scale-95 border cursor-pointer ${
-                                    copiedSingleBugId === bug.id
-                                      ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/50 shadow-lg'
-                                      : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
-                                  }`}
-                                  title="Copy this bug & screenshot formatted for Google Docs, Word, or Email"
-                                >
-                                  {copiedSingleBugId === bug.id ? (
-                                    <>
-                                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                                      <span className="text-emerald-300">Copied to Clipboard!</span>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Copy className="w-3.5 h-3.5 text-blue-300" />
-                                      <span>Copy for Google Docs</span>
-                                    </>
-                                  )}
-                                </button>
-                                <span className="text-xs font-mono text-slate-300 flex items-center gap-1.5 bg-[#0f172a] px-3 py-1 rounded-xl border border-slate-800">
-                                  <Clock className="w-3.5 h-3.5 text-blue-400" />
-                                  Logged at {formatted12HrTime} on {new Date(bug.timestamp).toLocaleDateString()}
-                                </span>
-                              </div>
-                            </div>
-
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-5 text-xs">
-                              <div className="md:col-span-2 space-y-3">
-                                {feedEdit?.bugId === bug.id ? (
-                                  <div className="space-y-2.5 rounded-2xl border border-blue-500/40 bg-blue-950/20 p-3" data-testid="feed-edit-form">
-                                    <div>
-                                      <div className="flex items-center justify-between mb-1">
-                                        <label className="text-[11px] uppercase font-mono text-slate-300 font-bold">Title</label>
-                                        <span className="text-[10px] font-mono text-slate-500">{feedEdit.title.length}/120</span>
-                                      </div>
-                                      <input
-                                        data-testid="feed-edit-title"
-                                        value={feedEdit.title}
-                                        maxLength={120}
-                                        onChange={e => setFeedEdit({ ...feedEdit, title: e.target.value })}
-                                        placeholder="Short summary of the bug"
-                                        className="w-full bg-[#0f172a] border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-semibold focus:outline-none focus:border-blue-500"
-                                      />
-                                    </div>
-                                    <div className="flex flex-wrap items-end gap-3">
-                                      <div>
-                                        <label className="text-[11px] uppercase font-mono text-slate-300 font-bold block mb-1">Time it happened</label>
-                                        <input
-                                          type="time"
-                                          data-testid="feed-edit-time"
-                                          value={feedEdit.time}
-                                          onChange={e => setFeedEdit({ ...feedEdit, time: e.target.value })}
-                                          className="bg-[#0f172a] border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-blue-500 [color-scheme:dark]"
-                                        />
-                                      </div>
-                                      <span className="text-[10px] text-slate-400 pb-2">
-                                        Same day only{bug.originalTimestamp ? ` · first logged ${new Date(bug.originalTimestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}
-                                      </span>
-                                    </div>
-                                    <div>
-                                      <label className="text-[11px] uppercase font-mono text-slate-300 font-bold block mb-1">Description</label>
-                                      <textarea
-                                        data-testid="feed-edit-description"
-                                        rows={6}
-                                        value={feedEdit.note}
-                                        onChange={e => setFeedEdit({ ...feedEdit, note: e.target.value })}
-                                        placeholder="Steps to reproduce, expected vs. actual"
-                                        className="w-full bg-[#0f172a] border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 leading-relaxed focus:outline-none focus:border-blue-500"
-                                      />
-                                    </div>
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span className="text-[10px] text-slate-400">Changes carry over to the Buganizer tab.</span>
-                                      <div className="flex gap-2">
-                                        <button type="button" onClick={() => setFeedEdit(null)} className="px-3 h-8 rounded-xl text-xs font-semibold text-slate-300 hover:bg-slate-800">Cancel</button>
-                                        <button type="button" data-testid="feed-edit-save" disabled={!feedEdit.title.trim() && !feedEdit.note.trim()} onClick={() => saveFeedEdit(bug)} className="px-3 h-8 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40">Save changes</button>
-                                      </div>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <div>
-                                    <div className="flex items-center justify-between mb-1.5">
-                                      <span className="text-[11px] uppercase font-mono text-slate-300 font-bold flex items-center gap-1.5">
-                                        Observation / Bug Description Log:
-                                      </span>
-                                      {onUpdateBugLog && (
-                                        <button type="button" onClick={() => startFeedEdit(bug)} className="px-2.5 py-1 rounded-xl text-[11px] font-bold flex items-center gap-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700">
-                                          <Edit className="w-3 h-3 text-blue-300" /> Edit
-                                        </button>
-                                      )}
-                                    </div>
-                                    {bug.title && <div className="text-sm font-bold text-white mb-1.5">{bug.title}</div>}
-                                    <div className="liquid-glass-input p-4 rounded-2xl text-slate-100 text-xs leading-relaxed whitespace-pre-wrap font-medium shadow-inner">
-                                      {bug.note || 'No description attached.'}
-                                    </div>
-                                  </div>
-                                )}
-
-                                <div className="grid grid-cols-2 gap-3 text-xs font-mono">
-                                  <div className="liquid-glass-panel p-3 rounded-2xl border border-slate-800">
-                                    <span className="text-[10px] uppercase text-slate-400 block font-semibold">Step Target</span>
-                                    <span className="text-white font-bold">{bug.stepTitle || 'N/A'}</span>
-                                  </div>
-                                  <div className="liquid-glass-panel p-3 rounded-2xl border border-slate-800">
-                                    <span className="text-[10px] uppercase text-slate-400 block font-semibold">Reporter & Device</span>
-                                    <span className="text-blue-300 font-bold">{bug.testerName} ({bug.deviceName})</span>
-                                  </div>
-                                </div>
-
-                                {/* Bug Triage Controls */}
-                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
-                                  <div>
-                                    <label className="text-[10px] uppercase font-mono text-slate-400 block font-semibold mb-1">Bug Type</label>
-                                    <select
-                                      value={bugCategorizations[bug.id]?.bugType || bug.bugType || 'Bug'}
-                                      onChange={e => handleUpdateBugCategorization(bug.id, 'bugType', e.target.value)}
-                                      className="w-full bg-[#0f172a] border border-slate-700/80 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 font-semibold focus:outline-none focus:border-blue-500 cursor-pointer"
-                                    >
-                                      {(['Bug', 'Setup Issue', 'Known Issue', 'Feature Request', 'Misc Issue'] as const).map(opt => (
-                                        <option key={opt} value={opt} className="bg-slate-900">{opt}</option>
-                                      ))}
-                                    </select>
-                                  </div>
-                                  <div>
-                                    <label className="text-[10px] uppercase font-mono text-slate-400 block font-semibold mb-1">Priority</label>
-                                    <select
-                                      value={bugCategorizations[bug.id]?.priority || bug.priority || 'P2'}
-                                      onChange={e => handleUpdateBugCategorization(bug.id, 'priority', e.target.value)}
-                                      className="w-full bg-[#0f172a] border border-slate-700/80 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 font-semibold focus:outline-none focus:border-blue-500 cursor-pointer"
-                                    >
-                                      {(['P0', 'P1', 'P2'] as const).map(opt => (
-                                        <option key={opt} value={opt} className="bg-slate-900">{opt}</option>
-                                      ))}
-                                    </select>
-                                  </div>
-                                  <div>
-                                    <label className="text-[10px] uppercase font-mono text-slate-400 block font-semibold mb-1">Status</label>
-                                    <select
-                                      data-testid="feed-status"
-                                      value={effectiveStatus(bugCategorizations[bug.id]?.status || bug.status)}
-                                      onChange={e => handleUpdateBugCategorization(bug.id, 'status', e.target.value)}
-                                      className={`w-full bg-[#0f172a] border rounded-xl px-2.5 py-1.5 text-xs font-semibold focus:outline-none focus:border-blue-500 cursor-pointer ${effectiveStatus(bugCategorizations[bug.id]?.status || bug.status) === REPROD ? 'border-violet-500/70 text-violet-200 bg-violet-500/10' : 'border-slate-700/80 text-slate-200'}`}
-                                    >
-                                      {TRIAGE_STATUS_OPTIONS.map(opt => (
-                                        <option key={opt} value={opt} className="bg-slate-900">{opt}</option>
-                                      ))}
-                                    </select>
-                                  </div>
-                                </div>
-                                {effectiveStatus(bugCategorizations[bug.id]?.status || bug.status) === REPROD && (
-                                  <p className="text-[11px] text-slate-400" data-testid="feed-repro-hint">
-                                    💡 "Repro'd Issue" tells RX95 to look for an existing Buganizer bug in this plan's hotlist (shown on the Buganizer tab).
-                                  </p>
-                                )}
-                              </div>
-
-                              {/* Evidence Image Preview Box */}
-                              <div>
-                                <span className="text-[11px] uppercase font-mono text-slate-300 block font-bold mb-1.5">
-                                  Evidence Photo:
-                                </span>
-                                {bug.imageUrl && /^(data:image\/|https?:\/\/|blob:|\/)/i.test(bug.imageUrl) ? (
-                                  <div 
-                                    onClick={() => setSelectedImagePreviewUrl(bug.imageUrl!)}
-                                    className="relative group rounded-2xl overflow-hidden border border-slate-700 cursor-pointer bg-slate-900 max-h-56 flex items-center justify-center shadow-2xl"
-                                  >
-                                    <img src={bug.imageUrl} alt="Bug screenshot" className="w-full object-cover max-h-52 group-hover:scale-105 transition duration-300" />
-                                    <div className="absolute inset-0 bg-slate-950/60 opacity-0 group-hover:opacity-100 transition flex items-center justify-center backdrop-blur-[3px]">
-                                      <span className="px-4 py-2 bg-slate-900/95 text-slate-100 border border-blue-500/50 rounded-2xl text-xs font-bold font-mono flex items-center gap-2 shadow-2xl">
-                                        <ImageIcon className="w-4 h-4 text-blue-400" /> Click for Full Image
-                                      </span>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <div className="h-36 rounded-2xl border border-slate-800 bg-[#0f172a] flex items-center justify-center text-xs text-slate-500 font-mono">
-                                    No Photo Attached
-                                  </div>
-                                )}
-                                {(() => {
-                                  // Filed stamp: from the stored bug (a legacy stored status 'Filed' counts as filed)
-                                  const rawBug = bugById.get(bug.id) || bug;
-                                  const filed = effectiveFiled(rawBug);
-                                  const canEdit = !!(onPatchBugLog || onUpdateBugLog);
-                                  const setFiled = (next: ReturnType<typeof effectiveFiled>) => {
-                                    const patch = filedPatch(rawBug, next);
-                                    if (onPatchBugLog) onPatchBugLog(bug.id, patch);
-                                    else if (onUpdateBugLog) onUpdateBugLog({ ...rawBug, ...patch });
-                                  };
-                                  const draftId = filedIssueDrafts[bug.id] ?? '';
-                                  const isReprod = effectiveStatus(bugCategorizations[bug.id]?.status || rawBug.status) === REPROD;
-                                  // RX95's likely existing bugs, offered as one-click picks for the b/ field
-                                  const followUpPicks = isReprod
-                                    ? (currentReproMatches(rawBug as BugLog)?.candidates || []).filter(c => c.verdict !== 'unlikely').slice(0, 3)
-                                    : [];
-                                  return (
-                                    <div data-testid="feed-filed" className="mt-3">
-                                      {filed && (
-                                        <div data-testid="feed-filed-stamp" className="mt-1 mb-2 border-4 border-green-500 text-green-500 rounded-[14px] py-2.5 text-center font-black text-[34px] tracking-[0.25em] -rotate-3 bg-green-500/[0.08] shadow-[0_0_30px_rgba(34,197,94,0.25)] select-none">
-                                          FILED
-                                          {filedStampLine(filed) && <small className="block text-[11px] tracking-normal font-bold text-green-300 mt-0.5">{filedStampLine(filed)}</small>}
-                                        </div>
-                                      )}
-                                      {/* Not a <label>: a label would re-dispatch the click to the switch and toggle it twice */}
-                                      <div className={`flex items-center gap-2.5 mt-2 text-xs font-bold text-slate-200 ${canEdit ? '' : 'opacity-60'}`}>
-                                        <button
-                                          type="button"
-                                          role="switch"
-                                          aria-checked={!!filed}
-                                          data-testid="feed-filed-toggle"
-                                          disabled={!canEdit}
-                                          onClick={() => {
-                                            if (filed) setFiled(undefined);
-                                            else {
-                                              // A b/ on a Repro'd bug is the existing bug it was followed up on (summary: "(KI, updated)")
-                                              setFiled(newFiled(isReprod && draftId ? 'follow-up' : 'manual', draftId));
-                                              setFiledIssueDrafts(prev => { const n = { ...prev }; delete n[bug.id]; return n; });
-                                            }
-                                          }}
-                                          className={`relative w-10 h-[22px] rounded-full transition flex-shrink-0 ${filed ? 'bg-green-500' : 'bg-slate-700'}`}
-                                        >
-                                          <span className={`absolute top-[3px] w-4 h-4 rounded-full bg-white transition-all ${filed ? 'right-[3px]' : 'left-[3px]'}`} />
-                                        </button>
-                                        {filed ? <>Filed <span className="text-[11px] font-medium text-slate-400">(hidden from the Buganizer tab)</span></> : 'Mark as filed'}
-                                      </div>
-                                      {!filed && canEdit && (
-                                        <input
-                                          data-testid="feed-filed-issue"
-                                          aria-label="Filed b/ issue number"
-                                          value={draftId}
-                                          inputMode="numeric"
-                                          onChange={e => setFiledIssueDrafts(prev => ({ ...prev, [bug.id]: normalizeIssueId(e.target.value) }))}
-                                          placeholder={isReprod ? 'b/ of the bug you followed up on' : 'b/ issue number (optional)'}
-                                          className="mt-2 w-full bg-[#0f172a] border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-green-500"
-                                        />
-                                      )}
-                                      {!filed && canEdit && isReprod && followUpPicks.length > 0 && (
-                                        <div data-testid="feed-filed-picks" className="mt-1.5 flex flex-wrap gap-1.5 items-center">
-                                          <span className="text-[10px] text-slate-400">Followed up on:</span>
-                                          {followUpPicks.map(c => (
-                                            <button
-                                              key={c.id}
-                                              type="button"
-                                              data-testid="feed-filed-pick"
-                                              title={c.title}
-                                              onClick={() => setFiledIssueDrafts(prev => ({ ...prev, [bug.id]: normalizeIssueId(String(c.id)) }))}
-                                              className={`max-w-full truncate text-[10px] px-2 py-0.5 rounded-full border font-mono ${draftId === String(c.id) ? 'border-green-500 bg-green-500/15 text-green-200' : 'border-slate-600 bg-slate-800 text-slate-200 hover:border-green-500/60'}`}
-                                            >
-                                              b/{c.id} · {(c.title || '').replace(/^(\[[^\]]*\]\s*)+/, '').slice(0, 48)}
-                                            </button>
-                                          ))}
-                                        </div>
-                                      )}
-                                    </div>
-                                  );
-                                })()}
-                              </div>
-                            </div>
-
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+              <div className={listBoxCls} data-testid="feed-list">
+                {feedRows.length === 0 ? (
+                  <div className="p-8 text-center text-sm text-slate-400">
+                    {feedTab === 'new' ? (processedBugs.length ? 'Nothing new - every report here has been reviewed.' : 'No matching bugs for these filters.') : 'No reviewed reports for these filters yet.'}
                   </div>
-                );
-                };
-                if (row.kind === 'bundle') return renderFeedBundle(row, renderFeedBug);
-                return renderFeedBug(row.bug);
-              })
+                ) : feedRows.map(row => (row.kind === 'bundle' ? renderFeedBundle(row, renderFeedBug) : renderFeedBug(row.bug)))}
+              </div>
             )}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {feedToast && activeTab === 'bugs' && (
         <div data-testid="feed-toast" className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] px-4 py-2.5 rounded-2xl bg-slate-800 border border-slate-600 text-xs text-slate-100 shadow-2xl">

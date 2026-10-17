@@ -15,7 +15,11 @@ export const isStronglyReviewed = (b: BugLog): boolean => !!(effectiveFiled(b) |
 export function isReviewed(b: BugLog, cat?: LocalCategory): boolean {
   if (isStronglyReviewed(b)) return true;
   if (b.reviewed) return b.reviewed.state !== 'new';
-  return !!(b.bugType || b.priority || b.status || cat?.bugType || cat?.priority || cat?.status);
+  // Only non-default stored values count: Sheets sync used to stamp 'Bug' / 'P2' onto every synced report.
+  // This browser's categorizations are always explicit choices.
+  const p = String(b.priority ?? '').toUpperCase();
+  const storedTriage = (!!b.bugType && b.bugType !== 'Bug') || (!!p && p !== 'P2' && p !== '2') || !!b.status;
+  return storedTriage || !!(cat?.bugType || cat?.priority || cat?.status);
 }
 
 export const reviewedNow = (state: BugReviewed['state'] = 'reviewed'): BugReviewed => ({ at: new Date().toISOString(), state });
