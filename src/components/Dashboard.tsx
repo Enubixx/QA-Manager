@@ -3007,12 +3007,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               {/* Col 1: Avatar + Name + Live line */}
                               <div className="flex items-center gap-2.5 min-w-0">
                                 <span
-                                  className={`w-6 h-6 rounded-full text-[11px] font-bold inline-flex items-center justify-center shrink-0 ${
+                                  className={`w-6 h-6 rounded-full text-[11px] font-bold inline-flex items-center justify-center border shrink-0 ${
                                     tester.isActive
                                       ? tester.activeInfo?.isAway
-                                        ? 'bg-amber-500/20 text-amber-300'
-                                        : 'bg-[#1e293b] text-slate-100'
-                                      : 'bg-[#1e293b] text-slate-300'
+                                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/45'
+                                        : 'bg-blue-600 text-white border-blue-400'
+                                      : 'bg-slate-800 text-slate-300 border-slate-700'
                                   }`}
                                 >
                                   {tester.name.charAt(0).toUpperCase()}
@@ -3152,7 +3152,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                       return (
                         <>
-                          {/* Top header with ✕ button */}
+                          {/* Top header with trash + ✕ button */}
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0">
                               <div className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
@@ -3168,20 +3168,35 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 · {statusLabel}
                               </div>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setInspectorTarget(null);
-                                setSelectedInspectorTester('');
-                              }}
-                              className="text-slate-400 hover:text-white text-sm px-1.5 py-0.5 cursor-pointer"
-                              title="Close (Esc)"
-                            >
-                              ✕
-                            </button>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (confirm(`Delete device "${dev.name}"?`)) {
+                                    if (onDeleteDevice) onDeleteDevice(dev.id);
+                                    setInspectorTarget(null);
+                                  }
+                                }}
+                                className="p-1.5 rounded-lg border border-slate-800 text-slate-400 hover:text-rose-400 hover:border-rose-500/40 transition cursor-pointer"
+                                title={`Delete ${dev.name}`}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setInspectorTarget(null);
+                                  setSelectedInspectorTester('');
+                                }}
+                                className="text-slate-400 hover:text-white text-sm px-1.5 py-0.5 cursor-pointer"
+                                title="Close (Esc)"
+                              >
+                                ✕
+                              </button>
+                            </div>
                           </div>
 
-                          {/* Actions row: Unlock (in use only), Ready/Maintenance toggle, Unassign, trash */}
+                          {/* Actions row: Unlock (in use only), Ready/Maintenance toggle, Unassign */}
                           <div className="flex items-center gap-1.5 flex-wrap">
                             {dev.isInUse && (
                               <button
@@ -3247,20 +3262,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 Unassign
                               </button>
                             )}
-
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (confirm(`Delete device "${dev.name}"?`)) {
-                                  if (onDeleteDevice) onDeleteDevice(dev.id);
-                                  setInspectorTarget(null);
-                                }
-                              }}
-                              className="p-1.5 rounded-lg border border-slate-800 text-slate-400 hover:text-rose-400 hover:border-rose-500/40 transition cursor-pointer ml-auto"
-                              title={`Delete ${dev.name}`}
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
                           </div>
 
                           {/* Editable plan select + quota input live HERE */}
@@ -3445,7 +3446,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       const inspectedTester = resolvedInspector.tester;
                       return (
                         <>
-                          {/* Tester view header with ✕ */}
+                          {/* Tester view header with trash + ✕ */}
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0">
                               <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
@@ -3463,22 +3464,52 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   : 'Idle'}
                               </div>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setInspectorTarget(null);
-                                setSelectedInspectorTester('');
-                              }}
-                              className="text-slate-400 hover:text-white text-sm px-1.5 py-0.5 cursor-pointer"
-                              title="Close (Esc)"
-                            >
-                              ✕
-                            </button>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (
+                                    confirm(
+                                      `Delete tester "${inspectedTester.name}" and all associated performance data?`
+                                    )
+                                  ) {
+                                    if (inspectedTester.id && onDeleteTesterProfile) {
+                                      onDeleteTesterProfile(inspectedTester.id);
+                                    }
+                                    if (onDeleteTester) {
+                                      onDeleteTester(inspectedTester.name);
+                                    } else if (onDeleteTestRun) {
+                                      const runsToDelete = [...testRuns, ...archivedRuns].filter(
+                                        r => r.testerName === inspectedTester.name
+                                      );
+                                      runsToDelete.forEach(r => onDeleteTestRun(r.id));
+                                    }
+                                    setInspectorTarget(null);
+                                    setSelectedInspectorTester('');
+                                  }
+                                }}
+                                className="p-1.5 rounded-lg border border-slate-800 text-slate-400 hover:text-rose-400 hover:border-rose-500/40 transition cursor-pointer"
+                                title={`Delete ${inspectedTester.name}`}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setInspectorTarget(null);
+                                  setSelectedInspectorTester('');
+                                }}
+                                className="text-slate-400 hover:text-white text-sm px-1.5 py-0.5 cursor-pointer"
+                                title="Close (Esc)"
+                              >
+                                ✕
+                              </button>
+                            </div>
                           </div>
 
-                          {/* Actions row: Boot {device} when active + trash */}
-                          <div className="flex items-center gap-1.5">
-                            {inspectedTester.isActive && onBootTester && (
+                          {/* Actions row: Boot {device} when active */}
+                          {inspectedTester.isActive && onBootTester && (
+                            <div className="flex items-center gap-1.5">
                               <button
                                 type="button"
                                 onClick={() => {
@@ -3501,37 +3532,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               >
                                 Boot {inspectedTester.activeInfo?.deviceName || ''}
                               </button>
-                            )}
-
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (
-                                  confirm(
-                                    `Delete tester "${inspectedTester.name}" and all associated performance data?`
-                                  )
-                                ) {
-                                  if (inspectedTester.id && onDeleteTesterProfile) {
-                                    onDeleteTesterProfile(inspectedTester.id);
-                                  }
-                                  if (onDeleteTester) {
-                                    onDeleteTester(inspectedTester.name);
-                                  } else if (onDeleteTestRun) {
-                                    const runsToDelete = [...testRuns, ...archivedRuns].filter(
-                                      r => r.testerName === inspectedTester.name
-                                    );
-                                    runsToDelete.forEach(r => onDeleteTestRun(r.id));
-                                  }
-                                  setInspectorTarget(null);
-                                  setSelectedInspectorTester('');
-                                }
-                              }}
-                              className="p-1.5 rounded-lg border border-slate-800 text-slate-400 hover:text-rose-400 hover:border-rose-500/40 transition cursor-pointer ml-auto"
-                              title={`Delete ${inspectedTester.name}`}
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                            </div>
+                          )}
 
                           {/* Live run card (click device -> device view) */}
                           {inspectedTester.isActive && inspectedTester.activeInfo && (
