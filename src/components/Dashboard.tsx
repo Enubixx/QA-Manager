@@ -4004,7 +4004,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       )}
       {activeTab === 'bugs' && BUGANIZER_ENABLED && (
         <div className={bugsView === 'buganizer' ? '' : 'hidden'}>
-          <BuganizerTriage bugs={buganizerBugs} bugCategorizations={bugCategorizations} plans={testPlans} onApplyRefinements={onApplyBugRefinements} onPatchBugLog={onPatchBugLog} onPatchBugLogs={onPatchBugLogs} onApplyReproMatches={onApplyReproMatches} rx95Suggestions={rx95Suggestions} onOpenBugsFeed={openInFeed} focusBug={buganizerFocus} onFocused={() => setBuganizerFocus(null)} />
+          <BuganizerTriage bugs={buganizerBugs} bugCategorizations={bugCategorizations} dismissed={dismissedSuggestions} onDismissedChange={setDismissedSuggestions} plans={testPlans} onApplyRefinements={onApplyBugRefinements} onPatchBugLog={onPatchBugLog} onPatchBugLogs={onPatchBugLogs} onApplyReproMatches={onApplyReproMatches} rx95Suggestions={rx95Suggestions} onOpenBugsFeed={openInFeed} focusBug={buganizerFocus} onFocused={() => setBuganizerFocus(null)} />
         </div>
       )}
 

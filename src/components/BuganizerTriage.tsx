@@ -90,6 +90,9 @@ interface Props {
   onFocused?: () => void;
   /** Per-browser categorizations from Bugs Feed so unreviewed dots match the feed's Reviewed state. */
   bugCategorizations?: Record<string, { bugType?: string; priority?: string; status?: string }>;
+  /** Shared dismissed bundle suggestion IDs (kept in sync with Bugs Feed). */
+  dismissed?: Set<string>;
+  onDismissedChange?: (next: Set<string>) => void;
 }
 
 type Layout = 'a' | 'b' | 'c';
@@ -142,7 +145,7 @@ const topComponents = BUGANIZER_COMPONENTS.slice(0, TOP_COMPONENT_COUNT);
 const otherComponents = BUGANIZER_COMPONENTS.slice(TOP_COMPONENT_COUNT).sort((a, b) => a.name.localeCompare(b.name));
 const pathTail = (path: string) => path.split(' > ').slice(-2, -1)[0] || '';
 
-export default function BuganizerTriage({ bugs, bugCategorizations, plans, onApplyRefinements, onPatchBugLog, onApplyReproMatches, onPatchBugLogs, rx95Suggestions, onOpenBugsFeed, focusBug, onFocused }: Props) {
+export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: dismissedProp, onDismissedChange, plans, onApplyRefinements, onPatchBugLog, onApplyReproMatches, onPatchBugLogs, rx95Suggestions, onOpenBugsFeed, focusBug, onFocused }: Props) {
   const planName = (id?: string) => plans.find(p => p.id === id)?.name || id || 'Unknown plan';
   const bugReviewed = (b: BugLog) => isReviewed(b, bugCategorizations?.[b.id]);
   const [drafts, setDrafts] = useState<Record<string, BuganizerDraft>>(() => loadDrafts());
@@ -194,7 +197,8 @@ export default function BuganizerTriage({ bugs, bugCategorizations, plans, onApp
   const [matchTick, setMatchTick] = useState(0);
 
   // Same-day bundles
-  const [dismissed, setDismissed] = useState<Set<string>>(() => loadDismissed());
+  const [localDismissed, setLocalDismissed] = useState<Set<string>>(() => loadDismissed());
+  const dismissed = dismissedProp ?? localDismissed;
   const [ticks, setTicks] = useState<Record<string, string[]>>({});
   const [editingBundle, setEditingBundle] = useState<{ id: string; keep: Set<string> } | null>(null);
   const [waitingIssue, setWaitingIssue] = useState<Record<string, string>>({});
@@ -521,7 +525,13 @@ export default function BuganizerTriage({ bugs, bugCategorizations, plans, onApp
     patchMany(Object.fromEntries(g.members.map(m => [m.id, keep.has(m.id) ? { bundle: bd } : { bundle: undefined }])));
     setEditingBundle(null);
   };
-  const dismissSuggestion = (id: string) => setDismissed(prev => { const n = new Set(prev); n.add(id); saveDismissed(n); return n; });
+  const dismissSuggestion = (id: string) => {
+    const n = new Set(dismissed);
+    n.add(id);
+    saveDismissed(n);
+    setLocalDismissed(n);
+    onDismissedChange?.(n);
+  };
   const shown = useMemo(
     () => shownSuggestions(rx95Suggestions?.sets || [], bugs, dismissed, planName).filter(x => (planId === 'all' || (x.members[0]?.planId || x.set.planId) === planId) && (!day || x.set.day === day)),
     [rx95Suggestions, bugs, dismissed, planId, day],
