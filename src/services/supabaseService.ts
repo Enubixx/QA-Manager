@@ -101,7 +101,7 @@ export const fetchAllSupabaseData = async () => {
     // Worker-owned columns present on each bug_logs row (even when null): the row value wins over the run JSON.
     const rowOwned = new Map<string, Set<string>>();
     (bugsRes.data || []).forEach((item: any) => {
-      if (item && item.id) rowOwned.set(item.id, new Set(['filed', 'file_pending', 'bundle', 'repro_matches', 'refined'].filter(k => k in item)));
+      if (item && item.id) rowOwned.set(item.id, new Set(['filed', 'file_pending', 'bundle', 'repro_matches', 'refined', 'reviewed'].filter(k => k in item)));
       const itemTs = item.timestamp ? new Date(item.timestamp).getTime() : 0;
       if (bugsWipedAt > 0 && itemTs > 0 && itemTs <= bugsWipedAt) {
         return;
@@ -131,6 +131,7 @@ export const fetchAllSupabaseData = async () => {
         reproMatches: item.repro_matches && typeof item.repro_matches === 'object' ? item.repro_matches : undefined,
         filePending: item.file_pending && typeof item.file_pending === 'object' ? item.file_pending : undefined,
         bundle: item.bundle && typeof item.bundle === 'object' ? item.bundle : undefined,
+        reviewed: item.reviewed && typeof item.reviewed === 'object' ? item.reviewed : undefined,
       });
     });
 
@@ -161,8 +162,9 @@ export const fetchAllSupabaseData = async () => {
               reproMatches: rowOwned.get(b.id)?.has('repro_matches') ? existing.reproMatches : existing.reproMatches || b.reproMatches,
               filePending: rowOwned.get(b.id)?.has('file_pending') ? existing.filePending : existing.filePending || b.filePending,
               bundle: rowOwned.get(b.id)?.has('bundle') ? existing.bundle : existing.bundle || b.bundle,
+              reviewed: rowOwned.get(b.id)?.has('reviewed') ? existing.reviewed : existing.reviewed || b.reviewed,
             };
-            const keys = ['environment', 'title', 'refined', 'originalTimestamp', 'status', 'bugType', 'priority', 'filed', 'reproMatches', 'filePending', 'bundle'] as const;
+            const keys = ['environment', 'title', 'refined', 'originalTimestamp', 'status', 'bugType', 'priority', 'filed', 'reproMatches', 'filePending', 'bundle', 'reviewed'] as const;
             if (keys.some(k => merged[k] !== existing[k])) bugMap.set(b.id, merged);
           }
         }
@@ -334,7 +336,7 @@ export const deleteArchivedRunFromSupabase = async (runId: string) => {
 };
 
 /** Optional bug_logs columns; each flips to false if that column hasn't been added yet. */
-const optionalBugColumns = { environment: true, title: true, refined: true, original_timestamp: true, status: true, bug_type: true, priority: true, filed: true, repro_matches: true, file_pending: true, bundle: true };
+const optionalBugColumns = { environment: true, title: true, refined: true, original_timestamp: true, status: true, bug_type: true, priority: true, filed: true, repro_matches: true, file_pending: true, bundle: true, reviewed: true };
 
 export const syncBugLogToSupabase = async (bug: BugLog) => {
   if (!supabase || !isSupabaseConfigured) return;
@@ -398,7 +400,8 @@ export const syncBugLogToSupabase = async (bug: BugLog) => {
 };
 
 /** Bug fields owned by targeted writes (actions / the RX95 worker), and their bug_logs columns. */
-export const BUG_WORKER_FIELDS = { refined: 'refined', reproMatches: 'repro_matches', filed: 'filed', filePending: 'file_pending', bundle: 'bundle' } as const;
+// `reviewed` is written only by people (Bugs Feed), but like the others it never rides along with general saves.
+export const BUG_WORKER_FIELDS = { refined: 'refined', reproMatches: 'repro_matches', filed: 'filed', filePending: 'file_pending', bundle: 'bundle', reviewed: 'reviewed' } as const;
 export type BugWorkerField = keyof typeof BUG_WORKER_FIELDS;
 
 /**

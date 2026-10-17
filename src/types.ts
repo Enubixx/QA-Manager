@@ -48,6 +48,12 @@ export interface BugFiled {
  * Opened in Buganizer but not yet proven filed. The RX95 worker polls Buganizer (read-only) for
  * the QA Manager ID and, when found, replaces this with `filed { confirmed: true }`.
  */
+/** A person reviewed a report on the Bugs Feed (or moved it back to New). */
+export interface BugReviewed {
+  at: string;
+  state?: 'reviewed' | 'new';
+}
+
 export interface BugFilePending {
   kind: 'follow-up' | 'new' | 'bundle';
   /** Known for follow-ups (the existing bug); filled in by the worker for new bugs. */
@@ -163,6 +169,8 @@ export interface BugLog {
   filePending?: BugFilePending;
   /** Confirmed same-day bundle this report belongs to. */
   bundle?: BugBundle;
+  /** Bugs Feed review state (set by a person; never by the RX95 worker). `state: 'new'` = moved back to New. */
+  reviewed?: BugReviewed;
   environment?: BuildEnvironment;
 }
 

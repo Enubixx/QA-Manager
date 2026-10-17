@@ -1465,7 +1465,7 @@ export function App() {
     const merge = (cur: BugLog): BugLog => {
       const u = updateMap.get(cur.id);
       if (!u) return cur;
-      return { ...u, filed: cur.filed, filePending: cur.filePending, bundle: cur.bundle, reproMatches: cur.reproMatches, refined: cur.refined };
+      return { ...u, filed: cur.filed, filePending: cur.filePending, bundle: cur.bundle, reproMatches: cur.reproMatches, refined: cur.refined, reviewed: cur.reviewed };
     };
 
     setBugLogs(prev => {
@@ -1578,9 +1578,9 @@ export function App() {
         if (patchSyncedRef.current.has(key)) return;
         patchSyncedRef.current.add(key);
         const before = prev[i] || ({} as BugLog);
-        const workerChanged = (['refined', 'reproMatches', 'filed', 'filePending', 'bundle'] as const)
+        const workerChanged = (['refined', 'reproMatches', 'filed', 'filePending', 'bundle', 'reviewed'] as const)
           .filter(f => JSON.stringify(before[f] ?? null) !== JSON.stringify(b[f] ?? null));
-        const strip = (x: BugLog) => ({ ...x, refined: undefined, reproMatches: undefined, filed: undefined, filePending: undefined, bundle: undefined });
+        const strip = (x: BugLog) => ({ ...x, refined: undefined, reproMatches: undefined, filed: undefined, filePending: undefined, bundle: undefined, reviewed: undefined });
         // Base fields (status, title, ...) go through the general upsert; worker-owned columns only via a targeted write.
         if (JSON.stringify(strip(before)) !== JSON.stringify(strip(b))) safeSyncBugLog(b);
         if (workerChanged.length) safePatchBugColumns(b, [...workerChanged]);
@@ -1783,7 +1783,7 @@ export function App() {
       handleAddPopulatedFeature(newBug.feature);
     }
     // Editing an existing bug (phone): keep the worker-owned fields of the CURRENT copy (see handleUpdateBugLog)
-    const keepWorker = (cur: BugLog): BugLog => ({ ...newBug, filed: cur.filed, filePending: cur.filePending, bundle: cur.bundle, reproMatches: cur.reproMatches, refined: cur.refined });
+    const keepWorker = (cur: BugLog): BugLog => ({ ...newBug, filed: cur.filed, filePending: cur.filePending, bundle: cur.bundle, reproMatches: cur.reproMatches, refined: cur.refined, reviewed: cur.reviewed });
     setBugLogs(prev => {
       const exists = prev.some(b => b.id === newBug.id);
       const updated = exists ? prev.map(b => b.id === newBug.id ? keepWorker(b) : b) : [newBug, ...prev];
