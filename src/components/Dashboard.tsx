@@ -3988,7 +3988,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
       {activeTab === 'bugs' && BUGANIZER_ENABLED && bugsView === 'buganizer' && (
-        <BuganizerTriage bugs={buganizerBugs} plans={testPlans} onApplyRefinements={onApplyBugRefinements} onPatchBugLog={onPatchBugLog} onPatchBugLogs={onPatchBugLogs} onApplyReproMatches={onApplyReproMatches} rx95Suggestions={rx95Suggestions} />
+        <BuganizerTriage bugs={buganizerBugs} plans={testPlans} onApplyRefinements={onApplyBugRefinements} onPatchBugLog={onPatchBugLog} onPatchBugLogs={onPatchBugLogs} onApplyReproMatches={onApplyReproMatches} rx95Suggestions={rx95Suggestions} onOpenBugsFeed={() => setBugsView('feed')} />
       )}
 
       {/* Tab 3: Bugs Feed */}

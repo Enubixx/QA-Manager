@@ -80,6 +80,8 @@ interface Props {
   onPatchBugLogs?: (patches: Record<string, Partial<BugLog>>) => void;
   /** RX95 worker output (read-only): same-day bundle suggestions + background heartbeat. */
   rx95Suggestions?: Rx95SuggestionsData;
+  /** Switches to the Bugs Feed (where RX95's bundle suggestions are reviewed). */
+  onOpenBugsFeed?: () => void;
 }
 
 type Layout = 'a' | 'b' | 'c';
@@ -139,7 +141,7 @@ const topComponents = BUGANIZER_COMPONENTS.slice(0, TOP_COMPONENT_COUNT);
 const otherComponents = BUGANIZER_COMPONENTS.slice(TOP_COMPONENT_COUNT).sort((a, b) => a.name.localeCompare(b.name));
 const pathTail = (path: string) => path.split(' > ').slice(-2, -1)[0] || '';
 
-export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPatchBugLog, onApplyReproMatches, onPatchBugLogs, rx95Suggestions }: Props) {
+export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPatchBugLog, onApplyReproMatches, onPatchBugLogs, rx95Suggestions, onOpenBugsFeed }: Props) {
   const planName = (id?: string) => plans.find(p => p.id === id)?.name || id || 'Unknown plan';
   const [drafts, setDrafts] = useState<Record<string, BuganizerDraft>>(() => loadDrafts());
   const [tester, setTester] = useState('all');
@@ -519,7 +521,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
   };
   const dismissSuggestion = (id: string) => setDismissed(prev => { const n = new Set(prev); n.add(id); saveDismissed(n); return n; });
   const shown = useMemo(
-    () => shownSuggestions(rx95Suggestions?.sets || [], bugs, dismissed).filter(x => (planId === 'all' || x.set.planId === planId) && (!day || x.set.day === day)),
+    () => shownSuggestions(rx95Suggestions?.sets || [], bugs, dismissed, planName).filter(x => (planId === 'all' || x.set.planId === planId) && (!day || x.set.day === day)),
     [rx95Suggestions, bugs, dismissed, planId, day],
   );
 
@@ -1369,9 +1371,17 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
           </button>
         )}
         {(shown.length > 0 || bundleItems.length > 0 || layout !== 'a') && (
-          <button type="button" data-testid="chip-bundles" className={`${chipCls} ${bun.on ? chipOn : chipOff}`} onClick={bun.click}>
-            🧩 <b className="text-white">{shown.length}</b> suggested{bundleItems.length ? ` · ${bundleItems.length} bundled` : ''}
-          </button>
+          <span className="inline-flex items-center gap-1">
+            <button type="button" data-testid="chip-bundles" className={`${chipCls} ${bun.on ? chipOn : chipOff}`} onClick={bun.click}>
+              🧩 <b className="text-white">{bundleItems.length}</b> bundled
+            </button>
+            {shown.length > 0 && onOpenBugsFeed && (
+              <button type="button" data-testid="chip-suggestions-feed" className={`${chipCls} ${chipOff}`} onClick={onOpenBugsFeed}
+                title="RX95's same-day bundle suggestions are reviewed on the Bugs Feed">
+                ✨ <b className="text-white">{shown.length}</b> suggested · Bugs Feed ↗
+              </button>
+            )}
+          </span>
         )}
         {(waitItems.length > 0 || layout !== 'a') && (
           <button type="button" data-testid="chip-waiting" className={`${chipCls} ${wait.on ? chipOn : chipOff}`} onClick={wait.click}>⏳ <b className="text-white">{waitItems.length}</b> waiting</button>
@@ -1545,11 +1555,10 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
   const tabDefs: Array<{ key: TabKey; label: string; count: number }> = [
     { key: 'tofile', label: 'To file', count: toFileItems.length },
     { key: 'reprod', label: "Repro'd", count: reproItems.length },
-    { key: 'bundles', label: 'Bundles', count: shown.length + bundleItems.length },
+    { key: 'bundles', label: 'Bundles', count: bundleItems.length },
     { key: 'waiting', label: 'Waiting', count: waitItems.length },
     { key: 'filed', label: 'Filed', count: filedItems.length },
   ];
-  const suggestionsVisible = layout === 'b' ? tab === 'bundles' : (showSuggestions || listFilter === 'bundles');
 
   return (
     <div className="space-y-4" data-testid="buganizer-triage" data-layout={layout}>
@@ -1574,7 +1583,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
         </div>
       )}
 
-      {suggestionsVisible && renderSuggestions()}
+      {/* Same-day bundle SUGGESTIONS live on the Bugs Feed (BundleSuggestionsPanel); this tab shows confirmed bundles only. */}
       {renderBulkBar()}
 
       {layout === 'c' ? (
@@ -1587,7 +1596,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
       ) : (
         <div className="rounded-[20px] border border-slate-800 bg-[#0f172a] overflow-hidden" data-testid="item-list">
           {listItems.length === 0
-            ? emptyList(layout === 'b' && tab === 'bundles' && shown.length ? 'No confirmed bundles yet - see the suggestions above.' : undefined)
+            ? emptyList((layout === 'b' ? tab : listFilter) === 'bundles' ? "No confirmed bundles yet. RX95's bundle suggestions are on the Bugs Feed." : undefined)
             : listItems.map(it => renderCompactRow(it, 'expand'))}
         </div>
       )}
