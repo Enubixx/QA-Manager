@@ -4,7 +4,7 @@ import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuot
 import { REPROD, TRIAGE_STATUS_OPTIONS, currentReproMatches, effectiveFiled, effectiveStatus, filedPatch, filedStampLine, newFiled, normalizeIssueId } from '../utils/reproFollowUp';
 import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers, FileSpreadsheet, ExternalLink, MessageSquareText, ClipboardPaste, Bot } from 'lucide-react';
 import { exportAllQADataToCSV, exportAllQADataToJSON } from '../utils/exportUtils';
-import { TabBar, Rx95LiveChip, TAG_STYLE, chipCls, chipOff, chipOn, expandedCls, inputCls, listBoxCls, priTagCls, rowActionCls, rowCls, rowOpenCls, smallBtnCls, tagCls } from './triageUi';
+import { TabBar, Rx95LiveChip, TAG_STYLE, chipCls, chipOff, chipOn, expandedCls, inputCls, labelCls, listBoxCls, priTagCls, rowActionCls, rowCls, rowOpenCls, smallBtnCls, tagCls } from './triageUi';
 import { isReviewed, isStronglyReviewed, reviewedNow } from '../utils/bugReview';
 import { currentRefinement } from '../utils/bugRefine';
 import { isRunFullyCompleted, buildStepFirstSeenIndex } from '../utils/runUtils';
@@ -382,20 +382,29 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [buganizerFocus, setBuganizerFocus] = useState<{ id: string; n: number } | null>(null);
   const [feedNow, setFeedNow] = useState(() => Date.now());
   useEffect(() => { const t = setInterval(() => setFeedNow(Date.now()), 10000); return () => clearInterval(t); }, []);
-  // Bugs Feed inline edit (title + description) so bugs can be tidied before the Buganizer tab
-  const [feedEdit, setFeedEdit] = useState<{ bugId: string; title: string; note: string; time: string } | null>(null);
-  const startFeedEdit = (bug: BugLog) => {
-    setExpandedBugIds(prev => ({ ...prev, [bug.id]: true }));
-    setFeedEdit({ bugId: bug.id, title: bug.title || '', note: bug.title && bug.note === bug.title ? '' : (bug.note || ''), time: toLocalHHMM(bug.timestamp) });
+  // Bugs Feed inline edit (title, time, description), always shown on an expanded row so bugs can be
+  // tidied before the Buganizer tab. A draft exists per bug only while it has unsaved changes.
+  type FeedDraft = { title: string; note: string; time: string };
+  const [feedDrafts, setFeedDrafts] = useState<Record<string, FeedDraft>>({});
+  const feedBase = (bug: BugLog): FeedDraft => ({ title: bug.title || '', note: bug.title && bug.note === bug.title ? '' : (bug.note || ''), time: toLocalHHMM(bug.timestamp) });
+  const feedDraftFor = (bug: BugLog): FeedDraft => feedDrafts[bug.id] || feedBase(bug);
+  const feedDirty = (bug: BugLog) => {
+    const d = feedDrafts[bug.id]; if (!d) return false;
+    const b = feedBase(bug);
+    return d.title !== b.title || d.note !== b.note || d.time !== b.time;
   };
+  const setFeedDraft = (bug: BugLog, patch: Partial<FeedDraft>) =>
+    setFeedDrafts(prev => ({ ...prev, [bug.id]: { ...(prev[bug.id] || feedBase(bug)), ...patch } }));
+  const cancelFeedEdit = (bugId: string) => setFeedDrafts(prev => { const n = { ...prev }; delete n[bugId]; return n; });
   const saveFeedEdit = (bug: BugLog) => {
-    if (!feedEdit || !onUpdateBugLog) return;
-    const title = feedEdit.title.replace(/\s+/g, ' ').trim().slice(0, 120);
-    const note = feedEdit.note.trim() || title;
+    const d = feedDrafts[bug.id];
+    if (!d || !onUpdateBugLog) return;
+    const title = d.title.replace(/\s+/g, ' ').trim().slice(0, 120);
+    const note = d.note.trim() || title;
     if (!title && !note) return;
-    onUpdateBugLog(withBugTime({ ...bug, title: title || undefined, note }, feedEdit.time));
+    onUpdateBugLog(withBugTime({ ...bug, title: title || undefined, note }, d.time));
     markReviewed(bug.id);
-    setFeedEdit(null);
+    cancelFeedEdit(bug.id);
   };
 
   // Bugs Feed review state (New / Reviewed). Written with the targeted patch (bug_logs.reviewed), never by RX95.
@@ -4050,118 +4059,95 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </div>
               {isBugExpanded && (
                 <div data-testid="feed-row-expanded" className={expandedCls}>
-                  <div className="flex flex-wrap items-center gap-2 mb-3">
-                    {!strong && (reviewed ? (
-                      <button type="button" data-testid="move-to-new" className={smallBtnCls} onClick={() => { moveToNew(bug.id); flashFeed('Moved back to New.'); }}>↩ Move back to New</button>
-                    ) : (
-                      <button type="button" data-testid="mark-reviewed" className="px-2.5 h-7 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white" onClick={() => { markReviewed(bug.id); flashFeed('Marked reviewed.'); }}>✓ Mark reviewed</button>
-                    ))}
-                    {onUpdateBugLog && (
-                      <button type="button" data-testid="feed-edit-bug" className={smallBtnCls} onClick={() => startFeedEdit(bug)}>
-                        <Edit className="w-3 h-3 inline mr-1 text-blue-300" />Edit
-                      </button>
-                    )}
-                    {BUGANIZER_ENABLED && (
-                      <button type="button" data-testid="feed-open-buganizer" className={smallBtnCls} onClick={() => openInBuganizer(bug.id)}>Open in Buganizer tab ↗</button>
-                    )}
-                    <span className="text-[11px] text-slate-500">
-                      Logged {fmtT(bug.timestamp)} on {new Date(bug.timestamp).toLocaleDateString()} · {bug.feature || 'General'}{refined ? ' · title cleaned up by RX95' : ''}
-                    </span>
-                    <button type="button" data-testid="feed-delete-bug" onClick={() => onDeleteBug(bug.id)}
-                      className="ml-auto px-2.5 h-7 rounded-xl text-xs font-semibold text-rose-300 hover:bg-rose-950/40 border border-transparent hover:border-rose-800/50" title="Delete Bug Log">
-                      <Trash2 className="w-3.5 h-3.5 inline mr-1" />Delete
-                    </button>
-                  </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-5 text-xs">
+                  {(() => {
+                    const d = feedDraftFor(bug);
+                    const dirty = feedDirty(bug);
+                    const canEditText = !!onUpdateBugLog;
+                    const loggedAt = new Date(bug.timestamp);
+                    const meta = [bug.testerName, bug.deviceName, bug.stepTitle, bug.feature && bug.feature !== 'General' ? bug.feature : ''].filter(Boolean);
+                    const hasPhoto = !!(bug.imageUrl && /^(data:image\/|https?:\/\/|blob:|\/)/i.test(bug.imageUrl));
+                    const fieldCls = 'w-full bg-[#0f172a] border border-slate-700 rounded-xl px-2.5 py-1.5 text-slate-100 focus:outline-none focus:border-blue-500 read-only:opacity-80 placeholder:text-slate-500 placeholder:font-normal';
+                    return (
+                      <>
+                        <div className="flex flex-wrap items-center gap-2 mb-2">
+                          {!strong && (reviewed ? (
+                            <button type="button" data-testid="move-to-new" className={smallBtnCls} onClick={() => { moveToNew(bug.id); flashFeed('Moved back to New.'); }}>↩ Move back to New</button>
+                          ) : (
+                            <button type="button" data-testid="mark-reviewed" className="px-2.5 h-7 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white" onClick={() => { markReviewed(bug.id); flashFeed('Marked reviewed.'); }}>✓ Mark reviewed</button>
+                          ))}
+                          {BUGANIZER_ENABLED && (
+                            <button type="button" data-testid="feed-open-buganizer" className={smallBtnCls} onClick={() => openInBuganizer(bug.id)}>Open in Buganizer tab ↗</button>
+                          )}
+                          <button type="button" data-testid="feed-delete-bug" onClick={() => onDeleteBug(bug.id)}
+                            className="ml-auto px-2 h-7 rounded-xl text-[11px] font-semibold text-slate-400 hover:text-rose-300 hover:bg-rose-950/40" title="Delete Bug Log">
+                            <Trash2 className="w-3.5 h-3.5 inline mr-1" />Delete
+                          </button>
+                        </div>
+                        <p data-testid="feed-meta" className="text-[11px] text-slate-400 mb-3">
+                          {meta.join(' · ')}{meta.length ? ' · ' : ''}Logged {fmtT(bug.timestamp)} {loggedAt.toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                          {bug.originalTimestamp ? ` (first logged ${new Date(bug.originalTimestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})` : ''}
+                          {refined ? ' · title cleaned up by RX95' : ''}
+                        </p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
               <div className="md:col-span-2 space-y-3">
-                {feedEdit?.bugId === bug.id ? (
-                  <div className="space-y-2.5 rounded-2xl border border-blue-500/40 bg-blue-950/20 p-3" data-testid="feed-edit-form">
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-[11px] uppercase font-mono text-slate-300 font-bold">Title</label>
-                        <span className="text-[10px] font-mono text-slate-500">{feedEdit.title.length}/120</span>
+                <div className="space-y-2.5" data-testid="feed-edit-form">
+                  <div className="flex gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <label className={labelCls}>Title</label>
+                        <span className="text-[10px] text-slate-500 mb-1">{d.title.length}/120</span>
                       </div>
                       <input
                         data-testid="feed-edit-title"
-                        value={feedEdit.title}
+                        value={d.title}
                         maxLength={120}
-                        onChange={e => setFeedEdit({ ...feedEdit, title: e.target.value })}
+                        readOnly={!canEditText}
+                        onChange={e => setFeedDraft(bug, { title: e.target.value })}
                         placeholder="Short summary of the bug"
-                        className="w-full bg-[#0f172a] border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-semibold focus:outline-none focus:border-blue-500"
+                        className={`${fieldCls} text-sm font-semibold`}
                       />
                     </div>
-                    <div className="flex flex-wrap items-end gap-3">
-                      <div>
-                        <label className="text-[11px] uppercase font-mono text-slate-300 font-bold block mb-1">Time it happened</label>
-                        <input
-                          type="time"
-                          data-testid="feed-edit-time"
-                          value={feedEdit.time}
-                          onChange={e => setFeedEdit({ ...feedEdit, time: e.target.value })}
-                          className="bg-[#0f172a] border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-blue-500 [color-scheme:dark]"
-                        />
-                      </div>
-                      <span className="text-[10px] text-slate-400 pb-2">
-                        Same day only{bug.originalTimestamp ? ` · first logged ${new Date(bug.originalTimestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}
-                      </span>
-                    </div>
-                    <div>
-                      <label className="text-[11px] uppercase font-mono text-slate-300 font-bold block mb-1">Description</label>
-                      <textarea
-                        data-testid="feed-edit-description"
-                        rows={6}
-                        value={feedEdit.note}
-                        onChange={e => setFeedEdit({ ...feedEdit, note: e.target.value })}
-                        placeholder="Steps to reproduce, expected vs. actual"
-                        className="w-full bg-[#0f172a] border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 leading-relaxed focus:outline-none focus:border-blue-500"
+                    <div className="w-28 flex-shrink-0">
+                      <label className={labelCls} title="Same day only">Time</label>
+                      <input
+                        type="time"
+                        data-testid="feed-edit-time"
+                        value={d.time}
+                        readOnly={!canEditText}
+                        onChange={e => setFeedDraft(bug, { time: e.target.value })}
+                        className={`${fieldCls} text-xs [color-scheme:dark]`}
                       />
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[10px] text-slate-400">Changes carry over to the Buganizer tab.</span>
-                      <div className="flex gap-2">
-                        <button type="button" onClick={() => setFeedEdit(null)} className="px-3 h-8 rounded-xl text-xs font-semibold text-slate-300 hover:bg-slate-800">Cancel</button>
-                        <button type="button" data-testid="feed-edit-save" disabled={!feedEdit.title.trim() && !feedEdit.note.trim()} onClick={() => saveFeedEdit(bug)} className="px-3 h-8 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40">Save changes</button>
-                      </div>
                     </div>
                   </div>
-                ) : (
                   <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-[11px] uppercase font-mono text-slate-300 font-bold flex items-center gap-1.5">
-                        Observation / Bug Description Log:
-                      </span>
-                      {onUpdateBugLog && (
-                        <button type="button" onClick={() => startFeedEdit(bug)} className="px-2.5 py-1 rounded-xl text-[11px] font-bold flex items-center gap-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700">
-                          <Edit className="w-3 h-3 text-blue-300" /> Edit
-                        </button>
-                      )}
+                    <label className={labelCls}>Description</label>
+                    <textarea
+                      data-testid="feed-edit-description"
+                      rows={4}
+                      value={d.note}
+                      readOnly={!canEditText}
+                      onChange={e => setFeedDraft(bug, { note: e.target.value })}
+                      placeholder="Steps to reproduce, expected vs. actual"
+                      className={`${fieldCls} text-xs leading-relaxed`}
+                    />
+                  </div>
+                  {dirty && (
+                    <div className="flex items-center justify-end gap-2">
+                      <span className="text-[10px] text-slate-400 mr-auto">Unsaved changes · they carry over to the Buganizer tab.</span>
+                      <button type="button" data-testid="feed-edit-cancel" onClick={() => cancelFeedEdit(bug.id)} className="px-3 h-7 rounded-xl text-xs font-semibold text-slate-300 hover:bg-slate-800">Cancel</button>
+                      <button type="button" data-testid="feed-edit-save" disabled={!d.title.trim() && !d.note.trim()} onClick={() => saveFeedEdit(bug)} className="px-3 h-7 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40">Save</button>
                     </div>
-                    {bug.title && <div className="text-sm font-bold text-white mb-1.5">{bug.title}</div>}
-                    <div className="liquid-glass-input p-4 rounded-2xl text-slate-100 text-xs leading-relaxed whitespace-pre-wrap font-medium shadow-inner">
-                      {bug.note || 'No description attached.'}
-                    </div>
-                  </div>
-                )}
-
-                <div className="grid grid-cols-2 gap-3 text-xs font-mono">
-                  <div className="liquid-glass-panel p-3 rounded-2xl border border-slate-800">
-                    <span className="text-[10px] uppercase text-slate-400 block font-semibold">Step Target</span>
-                    <span className="text-white font-bold">{bug.stepTitle || 'N/A'}</span>
-                  </div>
-                  <div className="liquid-glass-panel p-3 rounded-2xl border border-slate-800">
-                    <span className="text-[10px] uppercase text-slate-400 block font-semibold">Reporter & Device</span>
-                    <span className="text-blue-300 font-bold">{bug.testerName} ({bug.deviceName})</span>
-                  </div>
+                  )}
                 </div>
 
                 {/* Bug Triage Controls */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                   <div>
-                    <label className="text-[10px] uppercase font-mono text-slate-400 block font-semibold mb-1">Bug Type</label>
+                    <label className={labelCls}>Bug Type</label>
                     <select
                       value={bugCategorizations[bug.id]?.bugType || bug.bugType || 'Bug'}
                       onChange={e => handleUpdateBugCategorization(bug.id, 'bugType', e.target.value)}
-                      className="w-full bg-[#0f172a] border border-slate-700/80 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 font-semibold focus:outline-none focus:border-blue-500 cursor-pointer"
+                      className={`${inputCls} cursor-pointer`}
                     >
                       {(['Bug', 'Setup Issue', 'Known Issue', 'Feature Request', 'Misc Issue'] as const).map(opt => (
                         <option key={opt} value={opt} className="bg-slate-900">{opt}</option>
@@ -4169,11 +4155,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     </select>
                   </div>
                   <div>
-                    <label className="text-[10px] uppercase font-mono text-slate-400 block font-semibold mb-1">Priority</label>
+                    <label className={labelCls}>Priority</label>
                     <select
                       value={bugCategorizations[bug.id]?.priority || bug.priority || 'P2'}
                       onChange={e => handleUpdateBugCategorization(bug.id, 'priority', e.target.value)}
-                      className="w-full bg-[#0f172a] border border-slate-700/80 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 font-semibold focus:outline-none focus:border-blue-500 cursor-pointer"
+                      className={`${inputCls} cursor-pointer`}
                     >
                       {(['P0', 'P1', 'P2'] as const).map(opt => (
                         <option key={opt} value={opt} className="bg-slate-900">{opt}</option>
@@ -4181,12 +4167,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     </select>
                   </div>
                   <div>
-                    <label className="text-[10px] uppercase font-mono text-slate-400 block font-semibold mb-1">Status</label>
+                    <label className={labelCls}>Status</label>
                     <select
                       data-testid="feed-status"
                       value={effectiveStatus(bugCategorizations[bug.id]?.status || bug.status)}
                       onChange={e => handleUpdateBugCategorization(bug.id, 'status', e.target.value)}
-                      className={`w-full bg-[#0f172a] border rounded-xl px-2.5 py-1.5 text-xs font-semibold focus:outline-none focus:border-blue-500 cursor-pointer ${effectiveStatus(bugCategorizations[bug.id]?.status || bug.status) === REPROD ? 'border-violet-500/70 text-violet-200 bg-violet-500/10' : 'border-slate-700/80 text-slate-200'}`}
+                      className={`w-full bg-[#0f172a] border rounded-xl px-2.5 py-1.5 text-xs focus:outline-none focus:border-blue-500 cursor-pointer ${effectiveStatus(bugCategorizations[bug.id]?.status || bug.status) === REPROD ? 'border-violet-500/70 text-violet-200 bg-violet-500/10' : 'border-slate-700 text-slate-100'}`}
                     >
                       {TRIAGE_STATUS_OPTIONS.map(opt => (
                         <option key={opt} value={opt} className="bg-slate-900">{opt}</option>
@@ -4201,28 +4187,28 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 )}
               </div>
 
-              {/* Evidence Image Preview Box */}
-              <div>
-                <span className="text-[11px] uppercase font-mono text-slate-300 block font-bold mb-1.5">
-                  Evidence Photo:
-                </span>
-                {bug.imageUrl && /^(data:image\/|https?:\/\/|blob:|\/)/i.test(bug.imageUrl) ? (
-                  <div 
-                    onClick={() => setSelectedImagePreviewUrl(bug.imageUrl!)}
-                    className="relative group rounded-2xl overflow-hidden border border-slate-700 cursor-pointer bg-slate-900 max-h-56 flex items-center justify-center shadow-2xl"
-                  >
-                    <img src={bug.imageUrl} alt="Bug screenshot" className="w-full object-cover max-h-52 group-hover:scale-105 transition duration-300" />
-                    <div className="absolute inset-0 bg-slate-950/60 opacity-0 group-hover:opacity-100 transition flex items-center justify-center backdrop-blur-[3px]">
-                      <span className="px-4 py-2 bg-slate-900/95 text-slate-100 border border-blue-500/50 rounded-2xl text-xs font-bold font-mono flex items-center gap-2 shadow-2xl">
-                        <ImageIcon className="w-4 h-4 text-blue-400" /> Click for Full Image
-                      </span>
+              {/* Evidence photo + Filed */}
+              <div className="space-y-3">
+                <div>
+                  <label className={labelCls}>Photo</label>
+                  {hasPhoto ? (
+                    <div
+                      data-testid="feed-photo"
+                      onClick={() => setSelectedImagePreviewUrl(bug.imageUrl!)}
+                      className="relative group rounded-xl overflow-hidden border border-slate-700 cursor-pointer bg-slate-900 max-h-32 flex items-center justify-center"
+                      title="Click for full image"
+                    >
+                      <img src={bug.imageUrl} alt="Bug screenshot" className="w-full object-cover max-h-32" />
+                      <div className="absolute inset-0 bg-slate-950/60 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
+                        <span className="px-2.5 py-1 bg-slate-900/95 text-slate-100 border border-slate-600 rounded-xl text-[11px] font-semibold flex items-center gap-1.5">
+                          <ImageIcon className="w-3.5 h-3.5 text-blue-400" /> Full image
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  <div className="h-36 rounded-2xl border border-slate-800 bg-[#0f172a] flex items-center justify-center text-xs text-slate-500 font-mono">
-                    No Photo Attached
-                  </div>
-                )}
+                  ) : (
+                    <p data-testid="feed-no-photo" className="text-[11px] text-slate-500">No photo</p>
+                  )}
+                </div>
                 {(() => {
                   // Filed stamp: from the stored bug (a legacy stored status 'Filed' counts as filed)
                   const rawBug = bugById.get(bug.id) || bug;
@@ -4240,15 +4226,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     ? (currentReproMatches(rawBug as BugLog)?.candidates || []).filter(c => c.verdict !== 'unlikely').slice(0, 3)
                     : [];
                   return (
-                    <div data-testid="feed-filed" className="mt-3">
+                    <div data-testid="feed-filed" className={`rounded-2xl border p-3 ${filed ? 'border-green-500/40 bg-green-500/[0.05]' : 'border-slate-800 bg-[#111827]'}`}>
                       {filed && (
-                        <div data-testid="feed-filed-stamp" className="mt-1 mb-2 border-4 border-green-500 text-green-500 rounded-[14px] py-2.5 text-center font-black text-[34px] tracking-[0.25em] -rotate-3 bg-green-500/[0.08] shadow-[0_0_30px_rgba(34,197,94,0.25)] select-none">
+                        <div data-testid="feed-filed-stamp" className="mb-2.5 border-4 border-green-500 text-green-500 rounded-[14px] py-2.5 text-center font-black text-[28px] tracking-[0.25em] -rotate-3 bg-green-500/[0.08] shadow-[0_0_30px_rgba(34,197,94,0.25)] select-none">
                           FILED
                           {filedStampLine(filed) && <small className="block text-[11px] tracking-normal font-bold text-green-300 mt-0.5">{filedStampLine(filed)}</small>}
                         </div>
                       )}
                       {/* Not a <label>: a label would re-dispatch the click to the switch and toggle it twice */}
-                      <div className={`flex items-center gap-2.5 mt-2 text-xs font-bold text-slate-200 ${canEdit ? '' : 'opacity-60'}`}>
+                      <div className={`flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-200 ${canEdit ? '' : 'opacity-60'}`}>
                         <button
                           type="button"
                           role="switch"
@@ -4268,18 +4254,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           <span className={`absolute top-[3px] w-4 h-4 rounded-full bg-white transition-all ${filed ? 'right-[3px]' : 'left-[3px]'}`} />
                         </button>
                         {filed ? <>Filed <span className="text-[11px] font-medium text-slate-400">(hidden from the Buganizer tab)</span></> : 'Mark as filed'}
+                        {!filed && canEdit && (
+                          <input
+                            data-testid="feed-filed-issue"
+                            aria-label="Filed b/ issue number"
+                            value={draftId}
+                            inputMode="numeric"
+                            onChange={e => setFiledIssueDrafts(prev => ({ ...prev, [bug.id]: normalizeIssueId(e.target.value) }))}
+                            placeholder={isReprod ? 'b/ followed up on' : 'b/ (optional)'}
+                            className="ml-auto w-36 bg-[#0f172a] border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-100 font-mono font-normal focus:outline-none focus:border-green-500"
+                          />
+                        )}
                       </div>
-                      {!filed && canEdit && (
-                        <input
-                          data-testid="feed-filed-issue"
-                          aria-label="Filed b/ issue number"
-                          value={draftId}
-                          inputMode="numeric"
-                          onChange={e => setFiledIssueDrafts(prev => ({ ...prev, [bug.id]: normalizeIssueId(e.target.value) }))}
-                          placeholder={isReprod ? 'b/ of the bug you followed up on' : 'b/ issue number (optional)'}
-                          className="mt-2 w-full bg-[#0f172a] border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-green-500"
-                        />
-                      )}
                       {!filed && canEdit && isReprod && followUpPicks.length > 0 && (
                         <div data-testid="feed-filed-picks" className="mt-1.5 flex flex-wrap gap-1.5 items-center">
                           <span className="text-[10px] text-slate-400">Followed up on:</span>
@@ -4302,6 +4288,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 })()}
               </div>
             </div>
+                      </>
+                    );
+                  })()}
                 </div>
               )}
             </div>

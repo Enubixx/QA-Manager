@@ -73,3 +73,5 @@ export const stopProp = (e: React.SyntheticEvent) => e.stopPropagation();
 
 /** Inputs / selects in the header and editors. */
 export const inputCls = 'w-full bg-[#0f172a] border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-blue-500';
+/** Small uppercase field label (same as the Buganizer tab's form labels). */
+export const labelCls = 'block text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1';
