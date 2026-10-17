@@ -198,7 +198,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   // Check localStorage for any persistent in-progress run for this plan
   let localSavedRunJson: string | null = null;
+  let lastSessionSetupDate: string | null = null;
   try {
+    lastSessionSetupDate = localStorage.getItem('qa_session_setup_date');
     localSavedRunJson = currentPlan ? localStorage.getItem(`qa_in_progress_run_${currentPlan.id}`) : null;
   } catch {}
   let localSavedRun: TestRun | null = null;
@@ -210,7 +212,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         ((localSavedRun.status as any) !== 'in_progress' ||
           archivedIdSet.has(localSavedRun.id) ||
           isTestRunDeleted(localSavedRun.id) ||
-          (localSavedRun.startedAt && getLocalDateStr(localSavedRun.startedAt) !== todayStr))
+          !localSavedRun.startedAt ||
+          getLocalDateStr(localSavedRun.startedAt) !== todayStr ||
+          (lastSessionSetupDate && lastSessionSetupDate !== todayStr))
       ) {
         try {
           if (currentPlan?.id) localStorage.removeItem(`qa_in_progress_run_${currentPlan.id}`);
@@ -392,7 +396,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     (!activeRun.startedAt || getLocalDateStr(activeRun.startedAt) === todayStr)
   );
 
-  // Keep tester identity reliably in localStorage and sessionStorage; clear stale device selection on new day
+  // Keep tester identity reliably in localStorage and sessionStorage; clear stale device selection & stale in-progress runs on new day
   useEffect(() => {
     const name = getStoredTesterName();
     const dev = getStoredDeviceName();
@@ -402,6 +406,24 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         sessionStorage.setItem('qa_tester_name', name);
       }
       const lastSetupDate = localStorage.getItem('qa_session_setup_date');
+      Object.keys(localStorage).forEach(k => {
+        if (!k.startsWith('qa_in_progress_run_')) return;
+        try {
+          const parsed = JSON.parse(localStorage.getItem(k) || 'null');
+          if (
+            !parsed ||
+            parsed.status !== 'in_progress' ||
+            !parsed.startedAt ||
+            getLocalDateStr(parsed.startedAt) !== todayStr ||
+            (lastSetupDate && lastSetupDate !== todayStr) ||
+            (lastSetupDate !== todayStr && !hasValidLiveRun)
+          ) {
+            localStorage.removeItem(k);
+          }
+        } catch {
+          localStorage.removeItem(k);
+        }
+      });
       if (lastSetupDate !== todayStr && !hasValidLiveRun) {
         localStorage.removeItem('qa_device_name');
         sessionStorage.removeItem('qa_device_name');
@@ -856,15 +878,27 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       archivedIdSet.has(activeRun.id) ||
       isTestRunDeleted(activeRun.id);
 
-    if (isBrandNew && activeRun.planId && activeRun.planId !== targetPlan.id) {
+    if (isBrandNew && activeRun.id && activeRun.status === 'in_progress' && !archivedIdSet.has(activeRun.id)) {
+      try {
+        if (activeRun.planId) localStorage.removeItem(`qa_in_progress_run_${activeRun.planId}`);
+      } catch {}
+      if (onDeleteRun) {
+        onDeleteRun(activeRun.id);
+      }
+    } else if (isBrandNew && activeRun.planId && activeRun.planId !== targetPlan.id) {
       try {
         localStorage.removeItem(`qa_in_progress_run_${activeRun.planId}`);
       } catch {}
     }
 
+    const baseNewId = `run-${targetPlan.id}-${deviceIdToSave}-${Date.now().toString(36)}`;
+    const mintedId = isBrandNew
+      ? (baseNewId === activeRun.id ? `${baseNewId}${Math.random().toString(36).slice(2, 5)}` : baseNewId)
+      : activeRun.id;
+
     const updatedRun: TestRun = {
       ...activeRun,
-      id: isBrandNew ? `run-${targetPlan.id}-${deviceIdToSave}-${Date.now().toString(36)}` : activeRun.id,
+      id: mintedId,
       planId: targetPlan.id,
       planName: targetPlan.name,
       deviceId: deviceIdToSave,

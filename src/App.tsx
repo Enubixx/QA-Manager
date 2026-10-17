@@ -1856,11 +1856,42 @@ export function App() {
       };
 
       setTestRuns(prev => {
-        const exists = prev.some(r => r.id === runWithBugs.id);
-        if (exists) {
-          return prev.map(r => r.id === runWithBugs.id ? runWithBugs : r);
+        let base = prev;
+        if (runWithBugs.status === 'in_progress') {
+          const superseded = prev.filter(r => {
+            if (!r || r.id === runWithBugs.id || r.status !== 'in_progress') return false;
+            const sameDevId = Boolean(
+              r.deviceId &&
+              runWithBugs.deviceId &&
+              r.deviceId.toLowerCase().trim() === runWithBugs.deviceId.toLowerCase().trim()
+            );
+            const sameDevName = Boolean(
+              r.deviceName &&
+              runWithBugs.deviceName &&
+              r.deviceName.toLowerCase().trim() === runWithBugs.deviceName.toLowerCase().trim()
+            );
+            const rStepCount = Object.entries(r.results || {}).filter(
+              ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
+            ).length;
+            const sameTesterZeroStep = Boolean(
+              rStepCount === 0 &&
+              r.testerName &&
+              runWithBugs.testerName &&
+              r.testerName.toLowerCase().trim() === runWithBugs.testerName.toLowerCase().trim()
+            );
+            return sameDevId || sameDevName || sameTesterZeroStep;
+          });
+          if (superseded.length > 0) {
+            const supersededIds = new Set(superseded.map(r => r.id));
+            superseded.forEach(r => safeDeleteTestRun(r.id));
+            base = prev.filter(r => !supersededIds.has(r.id));
+          }
         }
-        return [runWithBugs, ...prev];
+        const exists = base.some(r => r.id === runWithBugs.id);
+        if (exists) {
+          return base.map(r => r.id === runWithBugs.id ? runWithBugs : r);
+        }
+        return [runWithBugs, ...base];
       });
 
       safeSyncTestRun(runWithBugs);
