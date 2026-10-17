@@ -878,23 +878,52 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       archivedIdSet.has(activeRun.id) ||
       isTestRunDeleted(activeRun.id);
 
-    if (isBrandNew && activeRun.id && activeRun.status === 'in_progress' && !archivedIdSet.has(activeRun.id)) {
-      try {
-        if (activeRun.planId) localStorage.removeItem(`qa_in_progress_run_${activeRun.planId}`);
-      } catch {}
-      if (onDeleteRun) {
-        onDeleteRun(activeRun.id);
-      }
-    } else if (isBrandNew && activeRun.planId && activeRun.planId !== targetPlan.id) {
-      try {
-        localStorage.removeItem(`qa_in_progress_run_${activeRun.planId}`);
-      } catch {}
-    }
-
     const baseNewId = `run-${targetPlan.id}-${deviceIdToSave}-${Date.now().toString(36)}`;
     const mintedId = isBrandNew
       ? (baseNewId === activeRun.id ? `${baseNewId}${Math.random().toString(36).slice(2, 5)}` : baseNewId)
       : activeRun.id;
+
+    if (isBrandNew) {
+      const prevTesterLower = (getStoredTesterName() || '').toLowerCase().trim();
+      const newTesterLower = testerNameToSave.toLowerCase().trim();
+      const prevDevLower = (prevSavedDevice || '').toLowerCase().trim();
+      const newDevLower = deviceNameToSave.toLowerCase().trim();
+      const newDevIdLower = deviceIdToSave.toLowerCase().trim();
+
+      const runsToSupersede = new Map<string, TestRun>();
+      if (activeRun.id && activeRun.id !== mintedId && activeRun.status === 'in_progress' && !archivedIdSet.has(activeRun.id)) {
+        runsToSupersede.set(activeRun.id, activeRun);
+      }
+      testRuns.forEach(r => {
+        if (!r || !r.id || r.id === mintedId || r.status !== 'in_progress' || archivedIdSet.has(r.id)) return;
+        const rTester = (r.testerName || '').toLowerCase().trim();
+        const rDevName = (r.deviceName || '').toLowerCase().trim();
+        const rDevId = (r.deviceId || '').toLowerCase().trim();
+        const matchesTester = Boolean(rTester && (rTester === newTesterLower || (prevTesterLower && rTester === prevTesterLower)));
+        const matchesDevice = Boolean(
+          (rDevId && rDevId === newDevIdLower) ||
+          (rDevName && (rDevName === newDevLower || (prevDevLower && rDevName === prevDevLower)))
+        );
+        if (matchesTester || matchesDevice) {
+          runsToSupersede.set(r.id, r);
+        }
+      });
+
+      runsToSupersede.forEach(oldRun => {
+        try {
+          if (oldRun.planId) localStorage.removeItem(`qa_in_progress_run_${oldRun.planId}`);
+        } catch {}
+        if (onDeleteRun) {
+          onDeleteRun(oldRun.id);
+        }
+      });
+
+      if (activeRun.planId && activeRun.planId !== targetPlan.id) {
+        try {
+          localStorage.removeItem(`qa_in_progress_run_${activeRun.planId}`);
+        } catch {}
+      }
+    }
 
     const updatedRun: TestRun = {
       ...activeRun,
@@ -1543,7 +1572,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           setOpenDevicePickerModal(false);
         } else if (activeMobileTab === 'bugs') {
           setActiveMobileTab('plans');
-        } else if (!showSetupModal && activeRun && activeRun.status !== 'completed') {
+        } else if (!showSetupModal && !isCompleted && hasValidLiveRun) {
           // If actively running a test walkthrough, prompt user to Quit & Release to suspend cleanly
           setShowQuitConfirmModal(true);
         } else if (showSetupModal) {
@@ -1559,7 +1588,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     return () => {
       if (sub && typeof sub.remove === 'function') sub.remove();
     };
-  }, [previewImageUrl, showBugModal, showQuitConfirmModal, openTesterPickerModal, openDevicePickerModal, activeMobileTab, showSetupModal, activeRun, onNavigateToDashboard]);
+  }, [previewImageUrl, showBugModal, showQuitConfirmModal, openTesterPickerModal, openDevicePickerModal, activeMobileTab, showSetupModal, isCompleted, hasValidLiveRun, activeRun, onNavigateToDashboard]);
 
   // Requirement 5: App Version Enforcement Blocker
   if (minAppVersion && minAppVersion > APP_VERSION_CODE) {
@@ -1601,7 +1630,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           <button
             type="button"
             onClick={() => {
-              if (!showSetupModal && activeRun && activeRun.status !== 'completed') {
+              if (!showSetupModal && !isCompleted && hasValidLiveRun) {
                 setShowQuitConfirmModal(true);
               } else {
                 onNavigateToDashboard();
@@ -1628,7 +1657,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (!showSetupModal && activeRun && activeRun.status !== 'completed') {
+                  if (!showSetupModal && !isCompleted && hasValidLiveRun) {
                     setShowQuitConfirmModal(true);
                   } else {
                     onNavigateToDashboard();
@@ -1670,7 +1699,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
             </button>
 
             {/* Compact Quit & Release */}
-            {!showSetupModal && activeRun && activeRun.status !== 'completed' && (
+            {!showSetupModal && !isCompleted && hasValidLiveRun && (
               <button
                 type="button"
                 onClick={() => setShowQuitConfirmModal(true)}

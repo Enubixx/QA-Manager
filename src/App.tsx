@@ -1870,16 +1870,12 @@ export function App() {
               runWithBugs.deviceName &&
               r.deviceName.toLowerCase().trim() === runWithBugs.deviceName.toLowerCase().trim()
             );
-            const rStepCount = Object.entries(r.results || {}).filter(
-              ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
-            ).length;
-            const sameTesterZeroStep = Boolean(
-              rStepCount === 0 &&
+            const sameTester = Boolean(
               r.testerName &&
               runWithBugs.testerName &&
               r.testerName.toLowerCase().trim() === runWithBugs.testerName.toLowerCase().trim()
             );
-            return sameDevId || sameDevName || sameTesterZeroStep;
+            return sameDevId || sameDevName || sameTester;
           });
           if (superseded.length > 0) {
             const supersededIds = new Set(superseded.map(r => r.id));
