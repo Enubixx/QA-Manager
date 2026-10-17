@@ -120,3 +120,35 @@ export const isRunFullyCompleted = (run: TestRun, plans: TestPlan[], firstSeen?:
   if (!plan || !Array.isArray(plan.steps) || plan.steps.length === 0) return false;
   return plan.steps.every(s => isRecordedResult(s.id, run.results?.[s.id]));
 };
+
+export const getEffectiveRunStatus = (run: TestRun, plans?: TestPlan[]) => {
+  if (!run) return 'not_started';
+  if ((run.status as any) === 'terminated') return 'terminated';
+  const plan = plans?.find(p => p.id === run.planId);
+  const totalSteps = plan?.steps?.length || 0;
+  const stepEntries = Object.entries(run.results || {}).filter(
+    ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
+  );
+  const completedCount = stepEntries.length;
+
+  if (completedCount === 0) {
+    if (run.status === 'in_progress' || (run.testerName && run.deviceName && run.status !== 'not_started')) {
+      return 'in_progress';
+    }
+    return 'not_started';
+  }
+
+  if (
+    run.status === 'completed' ||
+    (totalSteps > 0 && (completedCount >= totalSteps || (run.currentStepIndex !== undefined && run.currentStepIndex >= totalSteps)))
+  ) {
+    return 'completed';
+  }
+  if (run.status === 'in_progress' || (run.testerName && run.deviceName)) {
+    return 'in_progress';
+  }
+  if (run.status === 'not_started' || (!run.testerName && completedCount === 0)) {
+    return 'not_started';
+  }
+  return 'in_progress';
+};

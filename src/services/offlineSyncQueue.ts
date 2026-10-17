@@ -6,7 +6,9 @@ import {
   type BugWorkerField,
   deleteTestRunFromSupabase,
   deleteArchivedRunFromSupabase,
-  syncDevicesListToCloud
+  syncDevicesListToCloud,
+  isTestRunDeleted,
+  markTestRunDeleted
 } from './supabaseService';
 import { TestRun, BugLog, DeviceProfile } from '../types';
 
@@ -135,6 +137,9 @@ const notifyQueueChange = (count: number) => {
 };
 
 export const enqueueOfflineMutation = (type: OfflineMutationType, payload: any) => {
+  if (type === 'syncTestRun' && (!payload?.id || isTestRunDeleted(payload.id) || payload.status === 'completed')) {
+    return;
+  }
   const queue = getOfflineQueue();
   const mutation: OfflineMutation = {
     id: 'mut-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7),
@@ -228,9 +233,13 @@ export const drainOfflineQueue = async () => {
       try {
         switch (mut.type) {
           case 'syncTestRun':
+            if (!mut.payload?.id || isTestRunDeleted(mut.payload.id) || mut.payload.status === 'completed') {
+              break;
+            }
             await syncTestRunToSupabase(mut.payload as TestRun);
             break;
           case 'syncArchivedRun':
+            if (mut.payload?.id) markTestRunDeleted(mut.payload.id);
             await syncArchivedRunToSupabase(mut.payload as TestRun);
             break;
           case 'syncBugLog':
@@ -272,6 +281,9 @@ export const drainOfflineQueue = async () => {
 
 // Safe wrappers that automatically queue mutations if offline or network fails
 export const safeSyncTestRun = async (run: TestRun) => {
+  if (!run?.id || isTestRunDeleted(run.id) || run.status === 'completed') {
+    return;
+  }
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
     enqueueOfflineMutation('syncTestRun', run);
     return;
@@ -281,11 +293,17 @@ export const safeSyncTestRun = async (run: TestRun) => {
     await syncTestRunToSupabase(run);
     supersedeQueued('syncTestRun', run, startedAt);
   } catch (e) {
-    enqueueOfflineMutation('syncTestRun', run);
+    if (!isTestRunDeleted(run.id) && (run.status as string) !== 'completed') {
+      enqueueOfflineMutation('syncTestRun', run);
+    }
   }
 };
 
 export const safeSyncArchivedRun = async (run: TestRun) => {
+  if (run?.id) {
+    markTestRunDeleted(run.id);
+    supersedeQueued('syncTestRun', { id: run.id }, Date.now());
+  }
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
     enqueueOfflineMutation('syncArchivedRun', run);
     return;
@@ -330,12 +348,17 @@ export const safePatchBugColumns = async (bug: BugLog, fields: BugWorkerField[])
 };
 
 export const safeDeleteTestRun = async (runId: string) => {
+  if (!runId) return;
+  markTestRunDeleted(runId);
+  const startedAt = Date.now();
+  supersedeQueued('syncTestRun', { id: runId }, startedAt);
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
     enqueueOfflineMutation('deleteTestRun', runId);
     return;
   }
   try {
     await deleteTestRunFromSupabase(runId);
+    supersedeQueued('deleteTestRun', runId, Date.now());
   } catch (e) {
     enqueueOfflineMutation('deleteTestRun', runId);
   }

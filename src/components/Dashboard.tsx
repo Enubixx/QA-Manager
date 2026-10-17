@@ -219,6 +219,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return 'in_progress';
   };
 
+  // Archived + active runs, one per id (completed archived copy protected from stale in_progress overwrites),
+  // and when each plan step was first recorded - the history-aware "finished run" rule judges runs against the steps that existed then.
+  const mergedRuns = useMemo(() => mergeRunsById(archivedRuns, testRuns), [archivedRuns, testRuns]);
+  const stepFirstSeen = useMemo(() => buildStepFirstSeenIndex(mergedRuns), [mergedRuns]);
+  const archivedIdSet = useMemo(() => new Set(archivedRuns.map(r => r.id)), [archivedRuns]);
+  const liveInProgressRuns = useMemo(() => {
+    const currentTodayStr = getLocalDateStr(new Date());
+    return testRuns.filter(
+      r =>
+        r &&
+        r.id &&
+        !archivedIdSet.has(r.id) &&
+        r.status === 'in_progress' &&
+        getEffectiveRunStatus(r) === 'in_progress' &&
+        (!r.startedAt || getLocalDateStr(r.startedAt) === currentTodayStr)
+    );
+  }, [testRuns, archivedIdSet]);
+
   // Determine active testers currently running a test session on a device (with live step and status metrics)
   const activeTesterMap = useMemo(() => {
     const map = new Map<string, { 
@@ -281,27 +299,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
       });
     };
 
-    // 1. Check devices that are currently locked by a tester WITH an actual in_progress run
+    // 1. Check devices that are currently locked by a tester WITH an actual live in_progress run on that device
     devices.forEach(d => {
       const activeTester = d.activeTesterName?.trim();
       if (activeTester) {
-        const activeRun = testRuns.find(r => 
-          r.status === 'in_progress' && (
-            (d.activeRunId && r.id === d.activeRunId) || 
-            (r.deviceId && r.deviceId.toLowerCase().trim() === d.id.toLowerCase().trim()) ||
-            (r.deviceName && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim()) ||
-            (r.testerName && r.testerName.toLowerCase().trim() === activeTester.toLowerCase())
-          )
+        const activeRun = liveInProgressRuns.find(r => 
+          (d.activeRunId && r.id === d.activeRunId) || 
+          (r.deviceId && r.deviceId.toLowerCase().trim() === d.id.toLowerCase().trim()) ||
+          (r.deviceName && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim())
         );
         if (activeRun) {
-          computeMetrics(activeTester, d.name, activeRun, d.id);
+          computeMetrics(activeRun.testerName || activeTester, d.name, activeRun, d.id);
         }
       }
     });
 
-    // 2. Also check in_progress runs directly so step changes sync with zero lag
-    testRuns.forEach(r => {
-      if (r.status === 'in_progress' && r.testerName && r.testerName.trim()) {
+    // 2. Also check live in_progress runs directly so step changes sync with zero lag
+    liveInProgressRuns.forEach(r => {
+      if (r.testerName && r.testerName.trim()) {
         const key = r.testerName.toLowerCase().trim();
         const existing = map.get(key);
         const currentEntriesCount = Object.entries(r.results || {}).filter(
@@ -315,23 +330,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
     });
 
     return map;
-  }, [devices, testRuns, testPlans]);
+  }, [devices, liveInProgressRuns, testPlans]);
 
-  // Archived + active runs, one per id (active copy wins), and when each plan step was first
-  // recorded - the history-aware "finished run" rule judges runs against the steps that existed then.
-  const mergedRuns = useMemo(() => mergeRunsById(archivedRuns, testRuns), [archivedRuns, testRuns]);
-  const stepFirstSeen = useMemo(() => buildStepFirstSeenIndex(mergedRuns), [mergedRuns]);
-
-  // Calculate completed runs today per device ID and plan ID (deduplicated by run.id)
+  // Calculate completed runs today per device ID and plan ID (deduplicated by run.id using mergeRunsById)
   const todayRunsMap = useMemo(() => {
     const todayStr = getLocalDateStr(new Date());
     const map: Record<string, Record<string, number>> = {};
-    const runMap = new Map<string, TestRun>();
-    [...archivedRuns, ...testRuns].forEach(r => {
-      if (r && r.id) runMap.set(r.id, r);
-    });
     
-    runMap.forEach(run => {
+    mergedRuns.forEach(run => {
       // Only runs that recorded every step that existed when they finished count toward quota
       if (!run.completedAt || !isRunFullyCompleted(run, testPlans, stepFirstSeen)) return;
 
@@ -348,7 +354,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       }
     });
     return map;
-  }, [archivedRuns, testRuns, devices, testPlans, stepFirstSeen]);
+  }, [mergedRuns, devices, testPlans, stepFirstSeen]);
 
   const fleetProgress = useMemo(() => {
     let totalTarget = 0;
@@ -705,15 +711,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   // Filter runs to ONLY include fully finished test plan executions (100% of steps completed)
   const completedRuns = useMemo(() => {
-    const map = new Map<string, TestRun>();
-    const combined = [...archivedRuns, ...testRuns];
-    combined.forEach(run => {
-      if (isRunFullyCompleted(run, testPlans, stepFirstSeen)) {
-        map.set(run.id, run);
-      }
-    });
-    return Array.from(map.values());
-  }, [testRuns, archivedRuns, testPlans, stepFirstSeen]);
+    return mergedRuns.filter(run => isRunFullyCompleted(run, testPlans, stepFirstSeen));
+  }, [mergedRuns, testPlans, stepFirstSeen]);
 
   // Unique devices populated across bug logs and completed test runs (memoized)
   const uniqueDevices = useMemo(() => Array.from(
@@ -781,7 +780,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   }, [selectedPlanFilter, bugPlanOptions]);
 
   // Today Local Date string (YYYY-MM-DD)
-  const todayStr = useMemo(() => getLocalDateStr(new Date()), []);
+  const todayStr = useMemo(() => getLocalDateStr(new Date()), [testRuns, archivedRuns, devices]);
 
   // Selected Daily QA Session Date (defaults to Today, or specific saved day YYYY-MM-DD, or 'all')
   const [selectedDailySessionDate, setSelectedDailySessionDate] = useState<string>(todayStr);
@@ -880,11 +879,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   // Compute QA Status metrics for individual tester profiles & daily tracking (case-insensitive grouping)
   const testerProfilesMap = useMemo(() => {
-    const runsMap = new Map<string, TestRun>();
-    [...archivedRuns, ...testRuns].forEach(r => {
-      if (r && r.id) runsMap.set(r.id, r);
-    });
-    const combinedRuns = Array.from(runsMap.values());
+    const combinedRuns = mergedRuns;
     const planTitleMap = new Map(testPlans.map(p => [p.id, p.name]));
     const map = new Map<string, {
       testerName: string;
@@ -1795,7 +1790,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   // Stats calculation
   const totalPlans = testPlans.length;
-  const activeRuns = testRuns.filter(r => getEffectiveRunStatus(r) === 'in_progress').length;
+  const activeRuns = liveInProgressRuns.length;
   const totalBugs = bugLogs.length;
 
   return (
@@ -2093,11 +2088,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   const remaining = assignedQuota ? Math.max(0, targetRuns - doneToday) : 0;
                   const pct = assignedQuota && targetRuns > 0 ? Math.min(100, Math.round((doneToday / targetRuns) * 100)) : 0;
 
-                  const activeRunForDevice = testRuns.find(r => 
-                    getEffectiveRunStatus(r) === 'in_progress' && 
-                    (r.id === device.activeRunId || (r.deviceId && r.deviceId === device.id) || (r.deviceName && r.deviceName.toLowerCase().trim() === device.name.toLowerCase().trim()))
+                  const activeRunForDevice = liveInProgressRuns.find(r => 
+                    (device.activeRunId && r.id === device.activeRunId) ||
+                    (r.deviceId && r.deviceId.toLowerCase().trim() === device.id.toLowerCase().trim()) ||
+                    (r.deviceName && r.deviceName.toLowerCase().trim() === device.name.toLowerCase().trim())
                   );
-                  const isInUse = Boolean(activeRunForDevice || (device.activeRunId && device.activeTesterName));
+                  const isInUse = Boolean(activeRunForDevice);
                   const inUseTesterName = activeRunForDevice?.testerName || device.activeTesterName || 'Tester';
 
                   return (
@@ -2995,7 +2991,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
             <div className="space-y-3">
               {(() => {
-                const ongoingRuns = testRuns.filter(r => getEffectiveRunStatus(r) === 'in_progress');
+                const ongoingRuns = liveInProgressRuns;
                 if (ongoingRuns.length === 0) {
                   return (
                     <div className="liquid-glass-card rounded-2xl p-6 text-center space-y-2">

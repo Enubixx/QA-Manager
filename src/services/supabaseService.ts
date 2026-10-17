@@ -1,6 +1,89 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, BundleSuggestion, BundleSuggestionSet } from '../types';
 
+const deletedTestRunIdsMemory = new Set<string>();
+
+export const getDeletedTestRunIds = (): Set<string> => {
+  const result = new Set<string>(deletedTestRunIdsMemory);
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const raw = localStorage.getItem('qa_deleted_test_run_ids');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          parsed.forEach(id => {
+            if (typeof id === 'string') result.add(id);
+          });
+        }
+      }
+    }
+  } catch (e) {}
+  return result;
+};
+
+export const isTestRunDeleted = (runId?: string | null): boolean => {
+  if (!runId) return false;
+  if (deletedTestRunIdsMemory.has(runId)) return true;
+  return getDeletedTestRunIds().has(runId);
+};
+
+export const markTestRunDeleted = (runId: string) => {
+  if (!runId) return;
+  deletedTestRunIdsMemory.add(runId);
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const current = Array.from(getDeletedTestRunIds());
+      const trimmed = current.slice(-500);
+      localStorage.setItem('qa_deleted_test_run_ids', JSON.stringify(trimmed));
+    }
+  } catch (e) {}
+};
+
+export const unmarkTestRunDeleted = (runId: string) => {
+  if (!runId) return;
+  deletedTestRunIdsMemory.delete(runId);
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const current = getDeletedTestRunIds();
+      current.delete(runId);
+      localStorage.setItem('qa_deleted_test_run_ids', JSON.stringify(Array.from(current)));
+    }
+  } catch (e) {}
+};
+
+/**
+ * Extracts the canonical device ID (e.g. "dev-1790876661069") from a run ID
+ * such as "run-plan-1791908761906-dev-1790876661069-mvb5nn18" or "run-plan-1-dev-1790876661069",
+ * stripping the trailing per-run timestamp suffix when present.
+ */
+export const extractDeviceIdFromRunId = (runId: string, knownDeviceIds?: Iterable<string>): string | undefined => {
+  if (!runId || typeof runId !== 'string' || !runId.includes('-dev-')) return undefined;
+  if (knownDeviceIds) {
+    const sortedKnown = Array.from(knownDeviceIds)
+      .filter(Boolean)
+      .sort((a, b) => b.length - a.length);
+    for (const devId of sortedKnown) {
+      if (runId.endsWith(`-${devId}`) || runId.includes(`-${devId}-`)) {
+        return devId;
+      }
+    }
+  }
+  const afterDev = runId.split('-dev-').slice(1).join('-dev-');
+  if (!afterDev) return undefined;
+  // Standard numeric device ID + base36/numeric run timestamp suffix: dev-1790876661069-mvb5nn18
+  const numericMatch = afterDev.match(/^(\d{10,})-[a-z0-9]{6,13}$/i);
+  if (numericMatch) return `dev-${numericMatch[1]}`;
+  // Two-segment device ID + base36/numeric run timestamp suffix: dev-abc1234-xyz5678-mvb5nn18
+  const twoSegMatch = afterDev.match(/^([a-z0-9]+-[a-z0-9]+)-[a-z0-9]{6,13}$/i);
+  if (twoSegMatch) return `dev-${twoSegMatch[1]}`;
+  // Fallback: if there are multiple segments and the last looks like a base36 run timestamp
+  const parts = afterDev.split('-');
+  if (parts.length >= 2 && /^[a-z0-9]{6,13}$/i.test(parts[parts.length - 1])) {
+    return `dev-${parts.slice(0, -1).join('-')}`;
+  }
+  return `dev-${afterDev}`;
+};
+
 export const fetchAllSupabaseData = async () => {
   if (!supabase || !isSupabaseConfigured) return null;
 
@@ -46,10 +129,40 @@ export const fetchAllSupabaseData = async () => {
       return item.created_at || undefined;
     };
 
-    const testRuns: TestRun[] = (runsRes.data || [])
+    const rawFeaturesData = featuresRes.data || [];
+    let populatedFeatures: string[] = [];
+    let devices: DeviceProfile[] = [];
+    let testers: TesterProfile[] = [];
+
+    rawFeaturesData.forEach((item: any) => {
+      const name = item.feature_name || '';
+      if (name.startsWith('__GLOBAL_DEVICES_CONFIG__:') || name.startsWith('__CONFIG_DEVICES__:')) {
+        try {
+          const jsonStr = name.startsWith('__GLOBAL_DEVICES_CONFIG__:')
+            ? name.replace('__GLOBAL_DEVICES_CONFIG__:', '')
+            : name.replace('__CONFIG_DEVICES__:', '');
+          const parsed = JSON.parse(jsonStr);
+          if (Array.isArray(parsed)) devices = parsed;
+        } catch (e) {}
+      } else if (name.startsWith('__GLOBAL_TESTERS_CONFIG__:') || name.startsWith('__CONFIG_TESTERS__:')) {
+        try {
+          const jsonStr = name.startsWith('__GLOBAL_TESTERS_CONFIG__:')
+            ? name.replace('__GLOBAL_TESTERS_CONFIG__:', '')
+            : name.replace('__CONFIG_TESTERS__:', '');
+          const parsed = JSON.parse(jsonStr);
+          if (Array.isArray(parsed)) testers = parsed;
+        } catch (e) {}
+      } else {
+        populatedFeatures.push(name);
+      }
+    });
+
+    const knownDeviceIds = new Set(devices.map(d => d.id).filter(Boolean));
+
+    const archivedRuns: TestRun[] = (archivedRes.data || [])
       .filter((item: any) => item && typeof item.id === 'string')
       .map((item: any) => {
-        const devIdFromId = item.id.includes('-dev-') ? 'dev-' + item.id.split('-dev-')[1] : undefined;
+        const devIdFromId = extractDeviceIdFromRunId(item.id, knownDeviceIds);
         return {
           id: item.id,
           planId: item.plan_id,
@@ -57,7 +170,7 @@ export const fetchAllSupabaseData = async () => {
           testerName: item.tester_name || '',
           deviceName: item.device_name || '',
           deviceId: item.device_id || devIdFromId,
-          status: item.status || 'not_started',
+          status: item.status || 'completed',
           currentStepIndex: item.current_step_index || 0,
           results: item.results || {},
           bugLogs: item.bug_logs || [],
@@ -67,10 +180,22 @@ export const fetchAllSupabaseData = async () => {
         };
       });
 
-    const archivedRuns: TestRun[] = (archivedRes.data || [])
-      .filter((item: any) => item && typeof item.id === 'string')
+    const archivedIdSet = new Set(archivedRuns.map(r => r.id));
+    const deletedRunIds = getDeletedTestRunIds();
+
+    const testRuns: TestRun[] = (runsRes.data || [])
+      .filter((item: any) => {
+        if (!item || typeof item.id !== 'string') return false;
+        if (deletedRunIds.has(item.id)) return false;
+        if (archivedIdSet.has(item.id)) {
+          // Clean up zombie row in test_runs that is already archived
+          supabase!.from('test_runs').delete().eq('id', item.id).then(() => {}, () => {});
+          return false;
+        }
+        return true;
+      })
       .map((item: any) => {
-        const devIdFromId = item.id.includes('-dev-') ? 'dev-' + item.id.split('-dev-')[1] : undefined;
+        const devIdFromId = extractDeviceIdFromRunId(item.id, knownDeviceIds);
         return {
           id: item.id,
           planId: item.plan_id,
@@ -78,7 +203,7 @@ export const fetchAllSupabaseData = async () => {
           testerName: item.tester_name || '',
           deviceName: item.device_name || '',
           deviceId: item.device_id || devIdFromId,
-          status: item.status || 'completed',
+          status: item.status || 'not_started',
           currentStepIndex: item.current_step_index || 0,
           results: item.results || {},
           bugLogs: item.bug_logs || [],
@@ -173,34 +298,6 @@ export const fetchAllSupabaseData = async () => {
 
     const bugLogs: BugLog[] = Array.from(bugMap.values());
 
-    const rawFeaturesData = featuresRes.data || [];
-    let populatedFeatures: string[] = [];
-    let devices: DeviceProfile[] = [];
-    let testers: TesterProfile[] = [];
-
-    rawFeaturesData.forEach((item: any) => {
-      const name = item.feature_name || '';
-      if (name.startsWith('__GLOBAL_DEVICES_CONFIG__:') || name.startsWith('__CONFIG_DEVICES__:')) {
-        try {
-          const jsonStr = name.startsWith('__GLOBAL_DEVICES_CONFIG__:')
-            ? name.replace('__GLOBAL_DEVICES_CONFIG__:', '')
-            : name.replace('__CONFIG_DEVICES__:', '');
-          const parsed = JSON.parse(jsonStr);
-          if (Array.isArray(parsed)) devices = parsed;
-        } catch (e) {}
-      } else if (name.startsWith('__GLOBAL_TESTERS_CONFIG__:') || name.startsWith('__CONFIG_TESTERS__:')) {
-        try {
-          const jsonStr = name.startsWith('__GLOBAL_TESTERS_CONFIG__:')
-            ? name.replace('__GLOBAL_TESTERS_CONFIG__:', '')
-            : name.replace('__CONFIG_TESTERS__:', '');
-          const parsed = JSON.parse(jsonStr);
-          if (Array.isArray(parsed)) testers = parsed;
-        } catch (e) {}
-      } else {
-        populatedFeatures.push(name);
-      }
-    });
-
     const deletedDeviceIds = getDeletedDeviceIds();
     const deletedTesterIds = getDeletedTesterIds();
     devices = devices.filter(d => !deletedDeviceIds.has(d.id));
@@ -246,6 +343,7 @@ export const deleteTestPlanFromSupabase = async (planId: string) => {
 };
 
 export const syncTestRunToSupabase = async (run: TestRun) => {
+  if (!run?.id || isTestRunDeleted(run.id) || run.status === 'completed') return;
   if (!supabase || !isSupabaseConfigured) return;
   try {
     const basePayload: any = {
@@ -271,6 +369,10 @@ export const syncTestRunToSupabase = async (run: TestRun) => {
       const retry = await supabase.from('test_runs').upsert(basePayload);
       error = retry.error;
     }
+    if (isTestRunDeleted(run.id)) {
+      await supabase.from('test_runs').delete().eq('id', run.id);
+      return;
+    }
     if (error) {
       console.error('syncTestRunToSupabase error:', error);
       throw error;
@@ -282,6 +384,7 @@ export const syncTestRunToSupabase = async (run: TestRun) => {
 };
 
 export const syncArchivedRunToSupabase = async (run: TestRun) => {
+  if (run?.id) markTestRunDeleted(run.id);
   if (!supabase || !isSupabaseConfigured) return;
   try {
     const basePayload: any = {
@@ -318,6 +421,7 @@ export const syncArchivedRunToSupabase = async (run: TestRun) => {
 };
 
 export const deleteTestRunFromSupabase = async (runId: string) => {
+  if (runId) markTestRunDeleted(runId);
   if (!supabase || !isSupabaseConfigured) return;
   const { error } = await supabase.from('test_runs').delete().eq('id', runId);
   if (error) {
@@ -327,6 +431,7 @@ export const deleteTestRunFromSupabase = async (runId: string) => {
 };
 
 export const deleteArchivedRunFromSupabase = async (runId: string) => {
+  if (runId) unmarkTestRunDeleted(runId);
   if (!supabase || !isSupabaseConfigured) return;
   const { error } = await supabase.from('archived_runs').delete().eq('id', runId);
   if (error) {

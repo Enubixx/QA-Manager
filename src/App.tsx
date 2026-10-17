@@ -30,10 +30,13 @@ import {
   subscribeToSystemCommands,
   broadcastBootSignal,
   BootSignal,
+  isTestRunDeleted,
+  markTestRunDeleted,
+  unmarkTestRunDeleted,
 } from './services/supabaseService';
 import { isSupabaseConfigured } from './lib/supabase';
 import { getLocalDateStr } from './utils/dateUtils';
-import { isRunFullyCompleted, buildStepFirstSeenIndex } from './utils/runUtils';
+import { isRunFullyCompleted, buildStepFirstSeenIndex, getEffectiveRunStatus } from './utils/runUtils';
 import { mergeRunsById } from './utils/cujReportUtils';
 import {
   drainOfflineQueue,
@@ -309,6 +312,17 @@ export function App() {
     return latest;
   };
 
+  const clearLocalDailySessionCache = () => {
+    try {
+      Object.keys(localStorage).forEach(k => {
+        if (k.startsWith('qa_in_progress_run_')) localStorage.removeItem(k);
+      });
+      localStorage.removeItem('qa_device_name');
+      localStorage.removeItem('qa_session_setup_date');
+      sessionStorage.removeItem('qa_device_name');
+    } catch (e) {}
+  };
+
   // Daily Quota Reset check (auto resets devices to no plan assigned on date rollover).
   // Gated on the shared cloud date so rollover happens at most once per day across timezones.
   const checkDailyQuotaReset = (devList: DeviceProfile[], cloudFeatures?: string[]) => {
@@ -318,6 +332,7 @@ export function App() {
     // Someone already rolled over today (or a client in an earlier timezone already rolled over to >= todayStr).
     if (cloudResetDate && cloudResetDate >= todayStr) {
       if (localStorage.getItem('qa_last_quota_reset_date') !== todayStr) {
+        clearLocalDailySessionCache();
         safeSetStorageItem('qa_last_quota_reset_date', todayStr);
       }
       return devList;
@@ -327,6 +342,7 @@ export function App() {
     // Fail closed: record today locally and anchor the initial marker in the cloud rather than wiping quotas.
     if (!cloudResetDate) {
       if (localStorage.getItem('qa_last_quota_reset_date') !== todayStr) {
+        clearLocalDailySessionCache();
         safeSetStorageItem('qa_last_quota_reset_date', todayStr);
       }
       if (Array.isArray(cloudFeatures)) {
@@ -336,6 +352,12 @@ export function App() {
     }
 
     // Cloud marker exists and strictly predates today -> genuine date rollover.
+    clearLocalDailySessionCache();
+    testRunsRef.current.forEach(r => {
+      if (r.status === 'in_progress') {
+        safeDeleteTestRun(r.id);
+      }
+    });
     const resetList = devList.map(d => ({
       ...d,
       quotas: [],
@@ -379,17 +401,7 @@ export function App() {
           }
         }
       }
-      // Filter out empty ghost runs (0 recorded non-pending steps and 0 bugs)
-      const validTestRuns = normalizeRuns(cloudData.testRuns || []).filter(r => {
-        const stepEntries = Object.entries(r.results || {}).filter(
-          ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
-        );
-        return r.testerName || r.status !== 'not_started' || stepEntries.length > 0 || (r.bugLogs && r.bugLogs.length > 0);
-      });
-      if (cloudData.testRuns && JSON.stringify(validTestRuns) !== JSON.stringify(testRunsRef.current)) {
-        setTestRuns(validTestRuns);
-      }
-
+      const todayStr = getLocalDateStr();
       const validArchivedRuns = normalizeRuns(cloudData.archivedRuns || []).filter(r => {
         const stepEntries = Object.entries(r.results || {}).filter(
           ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
@@ -399,6 +411,31 @@ export function App() {
       });
       if (cloudData.archivedRuns && JSON.stringify(validArchivedRuns) !== JSON.stringify(archivedRunsRef.current)) {
         setArchivedRuns(validArchivedRuns);
+      }
+
+      const archivedIdSet = new Set([
+        ...validArchivedRuns.map(r => r.id),
+        ...archivedRunsRef.current.map(r => r.id)
+      ]);
+
+      // Filter out empty ghost runs, already-archived runs, tombstoned runs, and prior-day orphaned in_progress runs
+      const validTestRuns = normalizeRuns(cloudData.testRuns || []).filter(r => {
+        if (!r || !r.id || isTestRunDeleted(r.id)) return false;
+        if (archivedIdSet.has(r.id) || r.status === 'completed') {
+          safeDeleteTestRun(r.id);
+          return false;
+        }
+        if (r.status === 'in_progress' && r.startedAt && getLocalDateStr(r.startedAt) !== todayStr) {
+          safeDeleteTestRun(r.id);
+          return false;
+        }
+        const stepEntries = Object.entries(r.results || {}).filter(
+          ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
+        );
+        return r.testerName || r.status !== 'not_started' || stepEntries.length > 0 || (r.bugLogs && r.bugLogs.length > 0);
+      });
+      if (cloudData.testRuns && JSON.stringify(validTestRuns) !== JSON.stringify(testRunsRef.current)) {
+        setTestRuns(validTestRuns);
       }
       if (cloudData.bugLogs) {
         let cloudWipedAt = 0;
@@ -453,7 +490,16 @@ export function App() {
 
         const currentDevices = checkDailyQuotaReset(baseDevices, cloudData.populatedFeatures);
 
-        const inProgressRuns = validTestRuns.filter(r => r.status === 'in_progress');
+        const plansForQuota = cloudData.testPlans ? normalizePlans(cloudData.testPlans) : testPlansRef.current;
+
+        const inProgressRuns = validTestRuns.filter(
+          r =>
+            r.status === 'in_progress' &&
+            getEffectiveRunStatus(r, plansForQuota) === 'in_progress' &&
+            !archivedIdSet.has(r.id) &&
+            !isTestRunDeleted(r.id) &&
+            getLocalDateStr(r.startedAt) === todayStr
+        );
         const allCompletedRuns = mergeRunsById([
           ...validArchivedRuns,
           ...validTestRuns.filter(r => {
@@ -464,11 +510,9 @@ export function App() {
             return stepEntries.length > 0;
           })
         ]);
-        const todayStr = getLocalDateStr();
 
         // Calculate today's completed runs per device and plan for quota automation
-        const plansForQuota = cloudData.testPlans ? normalizePlans(cloudData.testPlans) : testPlansRef.current;
-        const stepFirstSeen = buildStepFirstSeenIndex(allCompletedRuns);
+        const stepFirstSeen = buildStepFirstSeenIndex(mergeRunsById(validArchivedRuns, validTestRuns));
         const runsTodayPerDevice: Record<string, Record<string, number>> = {};
         allCompletedRuns.forEach(r => {
           if (!r.completedAt || !isRunFullyCompleted(r, plansForQuota, stepFirstSeen)) return;
@@ -488,7 +532,7 @@ export function App() {
         const syncedDevices = currentDevices.map(d => {
           const dev = { ...d };
 
-          // 1. Align active run lock using exact matching
+          // 1. Align active run lock using exact matching against live in-progress runs today
           const matchingRun = inProgressRuns.find(r =>
             (d.activeRunId && r.id === d.activeRunId) ||
             (r.deviceId && r.deviceId.toLowerCase().trim() === d.id.toLowerCase().trim()) ||
@@ -501,15 +545,11 @@ export function App() {
               dev.activeRunId = matchingRun.id;
               dev.activeTesterName = matchingRun.testerName;
             }
-          } else if (d.activeRunId) {
-            // Check if the run has explicitly completed or was booted/terminated
-            const runCompletedOrTerminated = allCompletedRuns.some(r => r.id === d.activeRunId) ||
-              (cloudData.testRuns || []).some(r => r.id === d.activeRunId && ((r as any).status === 'terminated' || r.status === 'completed'));
-            if (runCompletedOrTerminated) {
-              needsSync = true;
-              dev.activeRunId = undefined;
-              dev.activeTesterName = undefined;
-            }
+          } else if ((d.activeRunId || d.activeTesterName) && !isRecentUserEdit) {
+            // No live in-progress run exists for this device -> release orphaned device lock
+            needsSync = true;
+            dev.activeRunId = undefined;
+            dev.activeTesterName = undefined;
           }
 
           return dev;
@@ -1006,8 +1046,17 @@ export function App() {
     setTestRuns(prev => prev.filter(r => r.id !== runId));
     setArchivedRuns(prev => prev.filter(r => r.id !== runId));
 
-    deleteTestRunFromSupabase(runId);
+    safeDeleteTestRun(runId);
     deleteArchivedRunFromSupabase(runId);
+    markTestRunDeleted(runId);
+    if (deletedRun?.planId) {
+      try {
+        const raw = localStorage.getItem(`qa_in_progress_run_${deletedRun.planId}`);
+        if (raw && JSON.parse(raw)?.id === runId) {
+          localStorage.removeItem(`qa_in_progress_run_${deletedRun.planId}`);
+        }
+      } catch (e) {}
+    }
 
     // Cascade delete associated bug logs from state and Supabase
     const embeddedBugIds = new Set((deletedRun?.bugLogs || []).map(b => b.id).filter(Boolean));
@@ -1091,11 +1140,7 @@ export function App() {
       }
       return r;
     }));
-    try {
-      Object.keys(localStorage).forEach(k => {
-        if (k.startsWith('qa_in_progress_run_')) localStorage.removeItem(k);
-      });
-    } catch (e) {}
+    clearLocalDailySessionCache();
 
     setDevices(prev => {
       const next = prev.map(d => ({
@@ -1781,6 +1826,30 @@ export function App() {
         return next;
       });
     } else {
+      // Guard against resurrecting a run that is already archived/completed, deleted, or terminated
+      const alreadyArchived = archivedRunsRef.current.some(r => r.id === updatedRun.id);
+      const alreadyTerminated = testRunsRef.current.some(r => r.id === updatedRun.id && (r.status as any) === 'terminated');
+      if (alreadyArchived || isTestRunDeleted(updatedRun.id) || (alreadyTerminated && updatedRun.status === 'in_progress')) {
+        if (alreadyArchived && updatedRun.status === 'completed') {
+          setArchivedRuns(prev => prev.map(r => r.id === updatedRun.id ? { ...r, bugLogs: fullBugLogs } : r));
+          const existingArchived = archivedRunsRef.current.find(r => r.id === updatedRun.id);
+          if (existingArchived) {
+            safeSyncArchivedRun({ ...existingArchived, bugLogs: fullBugLogs });
+          }
+        }
+        return;
+      }
+
+      // Do not persist or sync an unassigned, 0-step, 0-bug fallback placeholder run
+      if (
+        updatedRun.status === 'not_started' &&
+        stepResultsEntries.length === 0 &&
+        fullBugLogs.length === 0 &&
+        !updatedRun.testerName
+      ) {
+        return;
+      }
+
       const runWithBugs: TestRun = {
         ...updatedRun,
         bugLogs: fullBugLogs
@@ -1821,18 +1890,21 @@ export function App() {
 
     // Also attach the bug to the corresponding active testRun or archivedRun so it is embedded
     if (newBug.testRunId) {
-      setTestRuns(prev => prev.map(r => {
-        if (r.id === newBug.testRunId) {
-          const exists = (r.bugLogs || []).some(b => b.id === newBug.id);
-          const updatedRun = {
-            ...r,
-            bugLogs: exists ? (r.bugLogs || []).map(b => b.id === newBug.id ? keepWorker(b) : b) : [...(r.bugLogs || []), newBug]
-          };
-          safeSyncTestRun(updatedRun);
-          return updatedRun;
-        }
-        return r;
-      }));
+      const isArchivedOrDeleted = archivedRunsRef.current.some(r => r.id === newBug.testRunId) || isTestRunDeleted(newBug.testRunId);
+      if (!isArchivedOrDeleted) {
+        setTestRuns(prev => prev.map(r => {
+          if (r.id === newBug.testRunId && r.status !== 'completed') {
+            const exists = (r.bugLogs || []).some(b => b.id === newBug.id);
+            const updatedRun = {
+              ...r,
+              bugLogs: exists ? (r.bugLogs || []).map(b => b.id === newBug.id ? keepWorker(b) : b) : [...(r.bugLogs || []), newBug]
+            };
+            safeSyncTestRun(updatedRun);
+            return updatedRun;
+          }
+          return r;
+        }));
+      }
 
       setArchivedRuns(prev => prev.map(r => {
         if (r.id === newBug.testRunId) {
