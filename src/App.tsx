@@ -1433,7 +1433,31 @@ export function App() {
 
   const handleDeleteBug = (bugId: string) => {
     markUserMutation();
-    setBugLogs(prev => prev.filter(b => b.id !== bugId));
+    const target = bugLogs.find(b => b.id === bugId);
+    const bundleId = target?.bundle?.id;
+    if (bundleId) {
+      const survivors = bugLogs.filter(b => b.id !== bugId && b.bundle?.id === bundleId);
+      if (survivors.length < 2) {
+        survivors.forEach(s => handlePatchBugLog(s.id, { bundle: undefined }));
+      } else {
+        const latest = survivors.reduce((acc, s) => (String(s.bundle!.at) > String(acc.at) ? s.bundle! : acc), survivors[0].bundle!);
+        const nextBundle = {
+          ...latest,
+          memberIds: latest.memberIds.filter(id => id !== bugId && survivors.some(s => s.id === id)),
+          at: new Date().toISOString(),
+        };
+        handlePatchBugLogs(Object.fromEntries(survivors.map(s => [s.id, { bundle: nextBundle }])));
+      }
+    }
+    setBugLogs(prev => {
+      const next = prev.filter(b => b.id !== bugId);
+      safeSetStorageItem(
+        'qa_bug_logs',
+        JSON.stringify(next),
+        () => JSON.stringify(next.map((b, idx) => (idx >= 5 && b?.imageUrl?.startsWith('data:')) ? { ...b, imageUrl: undefined } : b))
+      );
+      return next;
+    });
     deleteBugLogFromSupabase(bugId);
 
     setTestRuns(prev => prev.map(r => {

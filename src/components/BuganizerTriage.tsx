@@ -3,7 +3,7 @@ import { Bug, CheckCircle2, Copy, ExternalLink, Eye, Filter, Repeat, Search, Shi
 import type { BugFilePending, BugLog, RefinedBugText, ReproCandidate, ReproMatches, TestPlan } from '../types';
 import type { Rx95SuggestionsData } from '../services/supabaseService';
 import { TabBar, TAG_STYLE, UnreviewedDot, chipCls, chipOff, chipOn, expandedCls, listBoxCls, rowActionCls, rowCls, rowOpenCls, tagCls } from './triageUi';
-import { isReviewed } from '../utils/bugReview';
+import { isReviewed, reviewedNow } from '../utils/bugReview';
 import {
   type BundleGroup,
   buildBundleFollowUpComment,
@@ -86,6 +86,10 @@ interface Props {
   onOpenBugsFeed?: (bugId?: string) => void;
   /** Bring this bug's row into view (tab, expanded, scrolled) - e.g. from the Bugs Feed's "Open in Buganizer tab". */
   focusBug?: { id: string; n: number } | null;
+  /** Called once `focusBug` has been handled so later tab switches do not replay it. */
+  onFocused?: () => void;
+  /** Per-browser categorizations from Bugs Feed so unreviewed dots match the feed's Reviewed state. */
+  bugCategorizations?: Record<string, { bugType?: string; priority?: string; status?: string }>;
 }
 
 type Layout = 'a' | 'b' | 'c';
@@ -138,8 +142,9 @@ const topComponents = BUGANIZER_COMPONENTS.slice(0, TOP_COMPONENT_COUNT);
 const otherComponents = BUGANIZER_COMPONENTS.slice(TOP_COMPONENT_COUNT).sort((a, b) => a.name.localeCompare(b.name));
 const pathTail = (path: string) => path.split(' > ').slice(-2, -1)[0] || '';
 
-export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPatchBugLog, onApplyReproMatches, onPatchBugLogs, rx95Suggestions, onOpenBugsFeed, focusBug }: Props) {
+export default function BuganizerTriage({ bugs, bugCategorizations, plans, onApplyRefinements, onPatchBugLog, onApplyReproMatches, onPatchBugLogs, rx95Suggestions, onOpenBugsFeed, focusBug, onFocused }: Props) {
   const planName = (id?: string) => plans.find(p => p.id === id)?.name || id || 'Unknown plan';
+  const bugReviewed = (b: BugLog) => isReviewed(b, bugCategorizations?.[b.id]);
   const [drafts, setDrafts] = useState<Record<string, BuganizerDraft>>(() => loadDrafts());
   const [tester, setTester] = useState('all');
   const [planId, setPlanId] = useState('all');
@@ -500,7 +505,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
     if (ok.length < 2) return flash('Pick at least two unfiled reports to bundle.');
     if (!sameHotlist(ok, planName)) return flash("Can't bundle these: they're from test plans linked to different hotlists.");
     const bd = newBundle(ok.map(m => m.id), title, summary, by);
-    forMembers(ok, () => ({ bundle: bd }));
+    forMembers(ok, () => ({ bundle: bd, reviewed: reviewedNow('reviewed') }));
     setSelected(new Set());
     flash(`Bundled ${ok.length} reports into one bug.`);
   };
@@ -518,7 +523,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
   };
   const dismissSuggestion = (id: string) => setDismissed(prev => { const n = new Set(prev); n.add(id); saveDismissed(n); return n; });
   const shown = useMemo(
-    () => shownSuggestions(rx95Suggestions?.sets || [], bugs, dismissed, planName).filter(x => (planId === 'all' || x.set.planId === planId) && (!day || x.set.day === day)),
+    () => shownSuggestions(rx95Suggestions?.sets || [], bugs, dismissed, planName).filter(x => (planId === 'all' || (x.members[0]?.planId || x.set.planId) === planId) && (!day || x.set.day === day)),
     [rx95Suggestions, bugs, dismissed, planId, day],
   );
 
@@ -835,14 +840,15 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
     shown.forEach(x => { const k = x.set.id || `${x.set.planId}|${x.set.day}`; bySet.set(k, [...(bySet.get(k) || []), x]); });
     return Array.from(bySet.entries()).map(([k, items]) => {
       const set = items[0].set;
-      const unfiled = bugs.filter(b => b.planId === set.planId && localDay(b.timestamp) === set.day && isBundleable(b)).length;
+      const setPlanId = items[0].members[0]?.planId || set.planId;
+      const unfiled = bugs.filter(b => b.planId === setPlanId && localDay(b.timestamp) === set.day && isBundleable(b)).length;
       const reports = items.reduce((n, x) => n + x.members.length, 0);
       return (
         <div key={k} className="space-y-3" data-testid="bundle-suggestions">
           <div className="rounded-[20px] border border-violet-500/35 bg-violet-500/10 px-4 py-2.5 flex flex-wrap items-center gap-3 text-xs text-violet-100">
             <span>✨</span>
             <div className="flex-1 min-w-[240px]">
-              <b>RX95 same-day check.</b> {planName(set.planId)} · <b>{fmtDay(set.day)}</b>: {unfiled} unfiled report{unfiled === 1 ? '' : 's'} → <b>{items.length} suggested bundle{items.length === 1 ? '' : 's'}</b> ({reports} reports).
+              <b>RX95 same-day check.</b> {planName(setPlanId)} · <b>{fmtDay(set.day)}</b>: {unfiled} unfiled report{unfiled === 1 ? '' : 's'} → <b>{items.length} suggested bundle{items.length === 1 ? '' : 's'}</b> ({reports} reports).
             </div>
             {set.at && <span className="text-slate-400">checked {minutesAgo(set.at)}</span>}
           </div>
@@ -1129,7 +1135,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
               <p className="text-[11px] text-slate-500 truncate">{planName(bug.planId)} › {bug.stepTitle}</p>
               {onOpenBugsFeed && (
                 <button type="button" data-testid="open-in-feed" className="text-[11px] text-blue-300 hover:underline" onClick={() => onOpenBugsFeed(bug.id)}>
-                  Open in Bugs Feed ↗{!isReviewed(bug) ? ' · not reviewed yet' : ''}
+                  Open in Bugs Feed ↗{!bugReviewed(bug) ? ' · not reviewed yet' : ''}
                 </button>
               )}
               {repro && bug.environment && (
@@ -1283,7 +1289,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
               onClick={e => e.stopPropagation()} onChange={() => toggle(it.key)} />
           ) : <span className="w-[13px]" />)}
           <span className={`${tagCls} ${KIND_TAG[it.kind]}`}>{mode === 'select' ? it.shortTag : it.tag}</span>
-          {it.bug && !isReviewed(it.bug) && <UnreviewedDot />}
+          {it.bug && !bugReviewed(it.bug) && <UnreviewedDot />}
           <span className="flex-1 min-w-0 truncate text-slate-100">{it.title}</span>
           {mode === 'expand' && <span className="hidden md:inline text-[11.5px] text-slate-400 truncate max-w-[180px]">{it.cuj}</span>}
           {mode === 'expand' && it.priority && <span className="text-[10.5px] rounded-md px-1.5 py-0.5 font-semibold bg-slate-800 text-slate-300">{it.priority}</span>}
@@ -1303,6 +1309,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
   // Focus requested from the Bugs Feed ("Open in Buganizer tab ↗")
   useEffect(() => {
     if (!focusBug?.id) return;
+    onFocused?.();
     const holds = (it: Item) => it.key === focusBug.id || it.key === `wait:${focusBug.id}`
       || !!it.group?.members.some(m => m.id === focusBug.id) || !!it.entry?.members.some(m => m.id === focusBug.id);
     const order: TabKey[] = ['tofile', 'reprod', 'bundles', 'waiting', 'filed'];

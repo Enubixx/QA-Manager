@@ -1626,20 +1626,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
   /** Suggestions limited to the reports the feed currently shows (plan/date/search filters), hotlist-safe. */
   const feedSuggestions = useMemo<ShownSuggestion[]>(() => {
     const visibleIds = new Set(processedBugs.map(b => b.id));
-    return shownSuggestions(rx95Suggestions?.sets || [], bugLogs, dismissedSuggestions, planNameById)
-      .map(x => {
-        const members = x.members.filter(m => visibleIds.has(m.id));
-        return { ...x, members, maybe: new Set(Array.from(x.maybe).filter(id => members.some(m => m.id === id))) };
-      })
-      .filter(x => x.members.length >= 2);
+    return shownSuggestions(rx95Suggestions?.sets || [], bugLogs.filter(b => visibleIds.has(b.id)), dismissedSuggestions, planNameById);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rx95Suggestions, bugLogs, dismissedSuggestions, processedBugs, testPlans]);
   const processedBugById = useMemo(() => new Map<string, BugLog>(processedBugs.map(b => [b.id, b as BugLog])), [processedBugs]);
-  /** Buganizer tab gets the feed's Bug Type / Priority (this browser's choices win), so mega-bug drafts use them. */
+  /** Buganizer tab gets the feed's Bug Type / Priority / Status (this browser's choices win), so mega-bug drafts and Repro'd status use them. */
   const buganizerBugs = useMemo(() => bugLogs.map(b => {
     const cat = bugCategorizations[b.id];
-    if (!cat || (!cat.bugType && !cat.priority)) return b;
-    return { ...b, bugType: cat.bugType || b.bugType, priority: cat.priority || b.priority };
+    if (!cat || (!cat.bugType && !cat.priority && !cat.status)) return b;
+    return { ...b, bugType: cat.bugType || b.bugType, priority: cat.priority || b.priority, status: cat.status || b.status };
   }), [bugLogs, bugCategorizations]);
   const suggestionByBugId = useMemo(() => {
     const m = new Map<string, ShownSuggestion>();
@@ -1675,7 +1670,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       try { localStorage.setItem('qa_bug_categorizations', JSON.stringify(updated)); } catch (e) {}
       return updated;
     });
-    const patch = { bugType: cat.bugType, priority: cat.priority, status: cat.status, bundle };
+    const patch = { bugType: cat.bugType, priority: cat.priority, status: cat.status, bundle, reviewed: reviewedNow('reviewed') };
     if (onPatchBugLogs) onPatchBugLogs(Object.fromEntries(current.map(m => [m.id, patch])));
     else if (onUpdateBugLog) onUpdateBugLog(current.map(m => ({ ...m, ...patch })));
     flashFeed(`Set ${cat.bugType} · ${cat.priority} · ${cat.status} on ${current.length} reports and bundled them into one bug.`);
@@ -1719,7 +1714,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   /** Opens a report on the Bugs Feed (from the Buganizer tab): its tab, expanded, scrolled into view. */
   const openInFeed = (bugId?: string) => {
     setBugsView('feed');
-    if (!bugId) { setFeedTab('suggestions'); return; }
+    if (!bugId) { setFeedTab('suggestions'); setSuggestionsCollapsed(false); return; }
     const b = bugById.get(bugId);
     if (!b) return;
     if (!processedBugs.some(x => x.id === bugId)) flashFeed('That report is hidden by the current plan / day / search filters.');
@@ -4007,8 +4002,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
             className={`px-3 h-7 rounded-xl text-xs font-semibold ${bugsView === 'buganizer' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}>Buganizer</button>
         </div>
       )}
-      {activeTab === 'bugs' && BUGANIZER_ENABLED && bugsView === 'buganizer' && (
-        <BuganizerTriage bugs={buganizerBugs} plans={testPlans} onApplyRefinements={onApplyBugRefinements} onPatchBugLog={onPatchBugLog} onPatchBugLogs={onPatchBugLogs} onApplyReproMatches={onApplyReproMatches} rx95Suggestions={rx95Suggestions} onOpenBugsFeed={openInFeed} focusBug={buganizerFocus} />
+      {activeTab === 'bugs' && BUGANIZER_ENABLED && (
+        <div className={bugsView === 'buganizer' ? '' : 'hidden'}>
+          <BuganizerTriage bugs={buganizerBugs} bugCategorizations={bugCategorizations} plans={testPlans} onApplyRefinements={onApplyBugRefinements} onPatchBugLog={onPatchBugLog} onPatchBugLogs={onPatchBugLogs} onApplyReproMatches={onApplyReproMatches} rx95Suggestions={rx95Suggestions} onOpenBugsFeed={openInFeed} focusBug={buganizerFocus} onFocused={() => setBuganizerFocus(null)} />
+        </div>
       )}
 
       {/* Tab 3: Bugs Feed (Layout B look: status chips + plan/day/search, tabs New / Bundle Suggestions / Reviewed, one-line rows) */}
@@ -4133,7 +4130,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </div>
                   {dirty && (
                     <div className="flex items-center justify-end gap-2">
-                      <span className="text-[10px] text-slate-400 mr-auto">Unsaved changes · they carry over to the Buganizer tab.</span>
+                      <span className="text-[10px] text-slate-400 mr-auto">Unsaved changes · save to carry over to the Buganizer tab.</span>
                       <button type="button" data-testid="feed-edit-cancel" onClick={() => cancelFeedEdit(bug.id)} className="px-3 h-7 rounded-xl text-xs font-semibold text-slate-300 hover:bg-slate-800">Cancel</button>
                       <button type="button" data-testid="feed-edit-save" disabled={!d.title.trim() && !d.note.trim()} onClick={() => saveFeedEdit(bug)} className="px-3 h-7 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40">Save</button>
                     </div>
