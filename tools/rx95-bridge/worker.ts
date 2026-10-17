@@ -24,7 +24,7 @@ import { REFINE_MAX_BUGS_PER_REQUEST, bugTextSig, parseRefineReply, toRefineInpu
 import { bundleGroupSig, laDay, parseBundleReply, splitForPrompt, toBundleInput, type BundleReportInput } from '../../src/utils/bundleMatch';
 import { parseMatchReply, toMatchInput, type MatchBugInput } from '../../src/utils/reproMatch';
 
-const WORKER_VERSION = 'w1';
+const WORKER_VERSION = 'w2';
 const DAY_MS = 86_400_000;
 const WATCH_DAYS = 7;
 const COALESCE_MS = Number(process.env.RX95_WORKER_COALESCE_MS || 3000);
@@ -44,6 +44,12 @@ const LINK_EVERY_MS = 10 * 60_000;
 const LINK_BEFORE_MS = 6 * 60 * 60_000;
 const LINK_AFTER_MS = 60 * 60_000;
 const BUNDLE_WAIT_FOR_REFINE_MS = 3 * 60_000;
+/** A plan-day is re-judged only after it has been quiet this long (testers log in bursts)... */
+const BUNDLE_QUIET_MS = Number(process.env.RX95_BUNDLE_QUIET_MS || 90_000);
+/** ...or, while it keeps changing, at most once per this interval. */
+const BUNDLE_MAX_WAIT_MS = Number(process.env.RX95_BUNDLE_MAX_WAIT_MS || 10 * 60_000);
+/** A finished run whose plan-day changed meanwhile is still stored if this share of its reports is unchanged. */
+const BUNDLE_KEEP_IF_UNCHANGED = 0.8;
 const REPROD = "Repro'd Issue";
 const BUG_ID = /^bug-\d{6,16}-[a-z0-9]{2,12}$/i;
 const SUGGESTIONS = 'rx95_bundle_suggestions';
@@ -405,6 +411,12 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
   };
   const rateLimited = new Map<string, number>();
   function enqueue(job: Job) {
+    if (job.kind === 'bundle') {
+      // one queued bundle job per plan-day: a newer snapshot replaces the waiting one
+      const day = job.key.split(':')[1];
+      const i = queue.findIndex(j => j.kind === 'bundle' && j.key.split(':')[1] === day && j.key !== job.key);
+      if (i >= 0) { queued.delete(queue[i].key); queue.splice(i, 1); }
+    }
     if (queued.has(job.key) || running?.key === job.key || inBackoff(job.key)) return;
     queued.add(job.key);
     queue.push(job);
@@ -469,11 +481,15 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
 
   const bundleRows = new Map<string, { sig: string; empty: boolean }>();
   const planDaySeen = new Map<string, { sig: string; at: number }>();
+  /** Per plan-day: when its candidate set last changed, since when changes are waiting, and the last run. */
+  const bundleChangedAt = new Map<string, { sig: string; at: number; pendingSince: number }>();
+  const bundleLastRun = new Map<string, number>();
   function bundleJob(planId: string, day: string, cands: WBug[], sig: string): Job {
     const id = `${planId}|${day}`;
     return {
       key: `bundle:${id}:${sig}`, kind: 'bundle', size: cands.length,
       run: async () => {
+        log(`bundle: judging ${id} (${cands.length} reports)`);
         const suggestions: BundleSuggestion[] = [];
         const chunks = splitForPrompt(cands.map(toBundleInput));
         for (const [i, chunk] of chunks.entries()) {
@@ -484,9 +500,22 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
         }
         const freshMap = await fresh(cands.map(b => b.id));
         const now = [...freshMap.values()].filter(b => b.planId === planId && bugDay(b) === day && isBundleCandidate(b));
-        if (bundleGroupSig(now) !== sig) { log(`bundle: ${id} changed meanwhile; will re-run`); return; }
-        await writeSuggestions(planId, day, sig, suggestions);
-        log(`bundle: ${id} -> ${suggestions.length} suggestion(s) from ${cands.length} report(s)`);
+        bundleLastRun.set(id, Date.now());
+        if (bundleGroupSig(now) === sig) {
+          await writeSuggestions(planId, day, sig, suggestions);
+          log(`bundle: ${id} -> ${suggestions.length} suggestion(s) from ${cands.length} report(s)`);
+          return;
+        }
+        // Changed while RX95 was reading. Keep what still holds if most reports are unchanged:
+        // drop suggestions that touch an edited / filed / removed report; new reports wait for the next (debounced) run.
+        const nowById = new Map(now.map(b => [b.id, b]));
+        const changed = new Set(cands.filter(b => { const n = nowById.get(b.id); return !n || bugTextSig(n) !== bugTextSig(b); }).map(b => b.id));
+        const unchangedShare = (cands.length - changed.size) / cands.length;
+        if (unchangedShare < BUNDLE_KEEP_IF_UNCHANGED) { log(`bundle: ${id} changed meanwhile (${changed.size}/${cands.length} reports); will re-run`); return; }
+        const kept = suggestions.filter(sg => !sg.memberIds.some(m => changed.has(m)));
+        // stored under the sig it was judged from, so the plan-day stays due for a (debounced) re-run
+        await writeSuggestions(planId, day, sig, kept);
+        log(`bundle: ${id} -> ${kept.length}/${suggestions.length} suggestion(s) kept (partial: ${changed.size} of ${cands.length} report(s) changed meanwhile)`);
       },
     };
   }
@@ -566,6 +595,16 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
             if (!seen || seen.sig !== sig) planDaySeen.set(k, { sig, at: Date.now() });
             const waiting = cols.has('refined') && cands.some(b => !currentRefine(b) && !inBackoff(`refine1:${b.id}:${bugTextSig(b)}`));
             if (waiting && Date.now() - planDaySeen.get(k)!.at < BUNDLE_WAIT_FOR_REFINE_MS) continue;
+            // debounce: wait until the plan-day has been quiet for 90 s; while it keeps changing, run at most every 10 min
+            const ch = bundleChangedAt.get(k);
+            if (!ch) bundleChangedAt.set(k, { sig, at: Date.now(), pendingSince: Date.now() });
+            else if (ch.sig !== sig) bundleChangedAt.set(k, { sig, at: Date.now(), pendingSince: ch.pendingSince });
+            const c = bundleChangedAt.get(k)!;
+            const quiet = Date.now() - c.at >= BUNDLE_QUIET_MS;
+            const overdue = Date.now() - Math.max(c.pendingSince, bundleLastRun.get(k) || 0) >= BUNDLE_MAX_WAIT_MS;
+            if (!quiet && !overdue) continue;
+            if (running?.kind === 'bundle' && running.key.split(':')[1] === k) continue; // let the current run finish first
+            bundleChangedAt.set(k, { sig, at: c.at, pendingSince: Date.now() });
             enqueue(bundleJob(planId, day, cands, sig));
           }
         }
@@ -693,10 +732,12 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
   }
 
   // ---------- heartbeat ----------
+  /** Heartbeat queues are JOB counts (what the app shows as "in progress"); report sizes go in reportsPending. */
   const queueSizes = () => {
-    const count = (k: Job['kind']) => queue.filter(j => j.kind === k).reduce((n, j) => n + j.size, 0) + (running?.kind === k ? running.size : 0);
+    const jobs = (k: Job['kind']) => queue.filter(j => j.kind === k).length + (running?.kind === k ? 1 : 0);
+    const reports = (k: Job['kind']) => queue.filter(j => j.kind === k).reduce((n, j) => n + j.size, 0) + (running?.kind === k ? running.size : 0);
     const confirm = [...merged.values()].filter(b => b.filePending && !b.filePending.expired && !isFiled(b)).length;
-    return { refine: count('refine'), match: count('match'), bundle: count('bundle'), confirm };
+    return { refine: jobs('refine'), match: jobs('match'), bundle: jobs('bundle'), confirm, reportsPending: { refine: reports('refine'), bundle: reports('bundle') } };
   };
   async function heartbeat() {
     if (!suggestionsTable) return;
