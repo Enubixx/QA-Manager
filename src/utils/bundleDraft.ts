@@ -224,6 +224,20 @@ export function pendingFor(kind: BugFilePending['kind'], opts: { issueId?: strin
 /** Bugs that can still be bundled: unfiled, not waiting for Buganizer, not already in a bundle. */
 export const isBundleable = (b: BugLog) => !effectiveFiled(b) && !b.filePending && !b.bundle;
 
+/**
+ * Where a report gets filed: its plan's Buganizer hotlist, or (for plans with no hotlist) the plan
+ * itself. Reports may only be bundled together when this key matches.
+ */
+export function hotlistKey(b: Pick<BugLog, 'planId'>, planName?: (id?: string) => string | undefined): string {
+  const h = hotlistForPlan(b.planId, planName?.(b.planId));
+  return h ? `hotlist:${h.hotlistId}` : `plan:${b.planId || ''}`;
+}
+
+/** True when every report would be filed to the same hotlist (or the same un-hotlisted plan). */
+export function sameHotlist(members: Array<Pick<BugLog, 'planId'>>, planName?: (id?: string) => string | undefined): boolean {
+  return new Set(members.map(m => hotlistKey(m, planName))).size <= 1;
+}
+
 export interface ShownSuggestion {
   set: BundleSuggestionSet;
   suggestion: BundleSuggestion;
@@ -234,19 +248,22 @@ export interface ShownSuggestion {
 
 /**
  * Suggestions worth showing: not dismissed, and still with >= 2 bundleable members (IDs RX95 didn't
- * get from the day's list, or reports filed/bundled since, are dropped).
+ * get from the day's list, or reports filed/bundled since, are dropped). Members that would go to a
+ * different hotlist than the suggestion's first member are dropped too.
  */
-export function shownSuggestions(sets: BundleSuggestionSet[], bugs: BugLog[], dismissed: Set<string>): ShownSuggestion[] {
+export function shownSuggestions(sets: BundleSuggestionSet[], bugs: BugLog[], dismissed: Set<string>, planName?: (id?: string) => string | undefined): ShownSuggestion[] {
   const byId = new Map(bugs.map(b => [b.id, b]));
   const out: ShownSuggestion[] = [];
   const used = new Set<string>();
   for (const set of sets) {
     for (const s of set.suggestions || []) {
       if (!s || dismissed.has(s.id)) continue;
-      const members = Array.from(new Set(s.memberIds))
+      let members = Array.from(new Set(s.memberIds))
         .map(id => byId.get(id))
         .filter((b): b is BugLog => !!b && isBundleable(b) && (!set.planId || b.planId === set.planId) && !used.has(b.id))
         .sort(byTime);
+      const key = members[0] ? hotlistKey(members[0], planName) : '';
+      members = members.filter(m => hotlistKey(m, planName) === key);
       if (members.length < 2) continue;
       members.forEach(m => used.add(m.id));
       out.push({ set, suggestion: s, members, maybe: new Set((s.maybeIds || []).filter(id => members.some(m => m.id === id))) });

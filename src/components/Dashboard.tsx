@@ -11,6 +11,8 @@ import type { CujMetric } from '../utils/cujReportUtils';
 import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel, discoverAvailableGeminiModels, rankModelsForSummaries, DEFAULT_GEMINI_MODEL, getGeminiKeyErrorHint, buildChatSummaryPrompt, applyChatSummaryReply, isChatSummaryPrompt, getChatReplyReportId } from '../services/geminiService';
 import { requestRx95Summary, isRx95Available } from '../services/rx95Service';
 import BuganizerTriage from './BuganizerTriage';
+import BundleSuggestionsPanel, { type GroupCategory } from './BundleSuggestionsPanel';
+import { type ShownSuggestion, isBundleable, loadDismissed, newBundle, sameHotlist, shownSuggestions } from '../utils/bundleDraft';
 
 /** Buganizer triage view: on by default; set VITE_BUGANIZER_ENABLED=0 to hide it. */
 const BUGANIZER_ENABLED = ((import.meta as any).env?.VITE_BUGANIZER_ENABLED || '') !== '0';
@@ -1622,6 +1624,123 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
     return list;
   }, [bugLogs, bugCategorizations, selectedPlanFilter, bugPlanLookup, selectedDeviceFilter, selectedFeatureFilter, selectedDateFilter, customDateInput, searchBugQuery, sortByDevice]);
+
+  // ---------- RX95 same-day duplicate groups (Bugs Feed) ----------
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(() => loadDismissed());
+  const [expandedFeedBundles, setExpandedFeedBundles] = useState<Set<string>>(new Set());
+  const [feedToast, setFeedToast] = useState<string | null>(null);
+  const flashFeed = (msg: string) => { setFeedToast(msg); setTimeout(() => setFeedToast(null), 4000); };
+  const planNameById = (id?: string) => testPlans.find(p => p.id === id)?.name;
+
+  /** Suggestions limited to the reports the feed currently shows (plan/date/search filters), hotlist-safe. */
+  const feedSuggestions = useMemo<ShownSuggestion[]>(() => {
+    const visibleIds = new Set(processedBugs.map(b => b.id));
+    return shownSuggestions(rx95Suggestions?.sets || [], bugLogs, dismissedSuggestions, planNameById)
+      .map(x => {
+        const members = x.members.filter(m => visibleIds.has(m.id));
+        return { ...x, members, maybe: new Set(Array.from(x.maybe).filter(id => members.some(m => m.id === id))) };
+      })
+      .filter(x => x.members.length >= 2);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rx95Suggestions, bugLogs, dismissedSuggestions, processedBugs, testPlans]);
+  const processedBugById = useMemo(() => new Map<string, BugLog>(processedBugs.map(b => [b.id, b as BugLog])), [processedBugs]);
+  const suggestionByBugId = useMemo(() => {
+    const m = new Map<string, ShownSuggestion>();
+    feedSuggestions.forEach(x => x.members.forEach(b => m.set(b.id, x)));
+    return m;
+  }, [feedSuggestions]);
+
+  const jumpToSuggestion = (sugId: string) => {
+    const el = document.getElementById(`feed-sug-${sugId}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('ring-2', 'ring-violet-400');
+    setTimeout(() => el.classList.remove('ring-2', 'ring-violet-400'), 1400);
+  };
+
+  /** Option A: one category for every ticked report, then bundle them into one bug. */
+  const handleCategorizeAndBundle = (members: BugLog[], title: string, summary: string | undefined, cat: GroupCategory) => {
+    const current = members.map(m => bugById.get(m.id) || m).filter(isBundleable);
+    if (current.length < 2) return flashFeed('Pick at least two unfiled reports to bundle.');
+    if (!sameHotlist(current, planNameById)) return flashFeed("Can't bundle these: they're from test plans linked to different hotlists.");
+    const bundle = newBundle(current.map(m => m.id), title, summary, 'rx95');
+    setBugCategorizations(prev => {
+      const updated = { ...prev };
+      current.forEach(m => { updated[m.id] = { ...(prev[m.id] || {}), bugType: cat.bugType, priority: cat.priority, status: cat.status }; });
+      try { localStorage.setItem('qa_bug_categorizations', JSON.stringify(updated)); } catch (e) {}
+      return updated;
+    });
+    const patch = { bugType: cat.bugType, priority: cat.priority, status: cat.status, bundle };
+    if (onPatchBugLogs) onPatchBugLogs(Object.fromEntries(current.map(m => [m.id, patch])));
+    else if (onUpdateBugLog) onUpdateBugLog(current.map(m => ({ ...m, ...patch })));
+    flashFeed(`Set ${cat.bugType} · ${cat.priority} · ${cat.status} on ${current.length} reports and bundled them into one bug.`);
+  };
+
+  const unbundleFromFeed = (bundleId: string) => {
+    const members = bugLogs.filter(b => b.bundle?.id === bundleId);
+    if (!members.length) return;
+    if (onPatchBugLogs) onPatchBugLogs(Object.fromEntries(members.map(m => [m.id, { bundle: undefined }])));
+    else if (onUpdateBugLog) onUpdateBugLog(members.map(m => ({ ...m, bundle: undefined })));
+    flashFeed(`Unbundled ${members.length} reports. Their categories stay as set.`);
+  };
+
+  type FeedBug = (typeof processedBugs)[number];
+  type FeedRow = { kind: 'bug'; bug: FeedBug } | { kind: 'bundle'; id: string; members: FeedBug[] };
+  /** Bundled reports collapse into one row (placed where the first visible member would be). */
+  const feedRows = useMemo<FeedRow[]>(() => {
+    const rows: FeedRow[] = [];
+    const bundleRows = new Map<string, { kind: 'bundle'; id: string; members: FeedBug[] }>();
+    processedBugs.forEach(b => {
+      const bid = b.bundle?.id;
+      if (!bid) { rows.push({ kind: 'bug', bug: b }); return; }
+      let row = bundleRows.get(bid);
+      if (!row) { row = { kind: 'bundle', id: bid, members: [] }; bundleRows.set(bid, row); rows.push(row); }
+      row.members.push(b);
+    });
+    // A bundle with only one visible member (others filtered out) shows as a normal row
+    return rows.map(r => (r.kind === 'bundle' && r.members.length === 1 ? { kind: 'bug', bug: r.members[0] } as FeedRow : r));
+  }, [processedBugs]);
+
+  const renderFeedBundle = (row: { id: string; members: FeedBug[] }, renderBug: (b: FeedBug) => React.ReactNode) => {
+    const open = expandedFeedBundles.has(row.id);
+    const first = row.members[0];
+    const bd = first.bundle!;
+    const total = bd.memberIds?.length || row.members.length;
+    const pri = String(first.priority || 'P2');
+    const testersN = new Set(row.members.map(m => (m.testerName || '').trim()).filter(Boolean)).size;
+    const allFiled = row.members.every(m => effectiveFiled(bugById.get(m.id) || m));
+    const waiting = !allFiled && row.members.some(m => (bugById.get(m.id) || m).filePending);
+    return (
+      <div key={`bundle-${row.id}`} data-testid="feed-bundle-row" className="liquid-glass-panel rounded-3xl border border-violet-500/50 ring-1 ring-violet-500/25 overflow-hidden shadow-xl">
+        <div onClick={() => setExpandedFeedBundles(prev => { const n = new Set(prev); n.has(row.id) ? n.delete(row.id) : n.add(row.id); return n; })}
+          className="p-4 flex flex-wrap items-center gap-3 cursor-pointer bg-[#111827] hover:bg-[#162033] transition">
+          <button type="button" className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-blue-300 transition">
+            <ChevronDown className={`w-4 h-4 transition-transform duration-300 ${open ? 'rotate-180 text-violet-300' : 'text-slate-400'}`} />
+          </button>
+          <span className="text-xs px-2.5 py-1 rounded-xl border border-violet-500/50 bg-violet-500/15 text-violet-200 font-bold">🧩 Bundle · {total} reports</span>
+          <span className={`font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold uppercase ${pri === 'P0' || pri === '0' ? 'bg-rose-500/20 text-rose-300 border-rose-500/40' : pri === 'P1' || pri === '1' ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' : 'bg-slate-800 text-slate-300 border-slate-700'}`}>{pri}</span>
+          <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border border-slate-700 bg-slate-800 text-slate-300">{first.bugType || 'Bug'}</span>
+          {effectiveStatus(first.status) === REPROD && <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold bg-violet-500/15 text-violet-200 border-violet-500/40">REPRO'D</span>}
+          {allFiled && <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-black tracking-wider bg-green-500/15 text-green-300 border-green-500/40">FILED</span>}
+          {waiting && <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold bg-amber-500/15 text-amber-200 border-amber-500/40">⏳ WAITING</span>}
+          <span className="text-xs text-slate-400">{testersN} tester{testersN === 1 ? '' : 's'}{row.members.length < total ? ` · ${row.members.length} shown` : ''}</span>
+          <span className="ml-auto text-sm text-white font-extrabold truncate max-w-md">{bd.title}</span>
+        </div>
+        {open && (
+          <div className="p-3 pt-0 bg-[#0b0f19] border-t border-slate-800 space-y-3">
+            <div className="flex flex-wrap items-center gap-2 pt-3">
+              {!allFiled && !waiting && (
+                <button type="button" data-testid="feed-unbundle" onClick={() => unbundleFromFeed(row.id)}
+                  className="px-2.5 h-7 rounded-xl text-xs font-semibold border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700">Unbundle</button>
+              )}
+              <span className="text-[11px] text-slate-500">Shows on the Buganizer tab as one bug. Change a single report's category below if needed.</span>
+            </div>
+            {row.members.map(m => renderBug(m))}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // Filter plans by search query (memoized and null-safe)
   const filteredPlans = useMemo(() => {
@@ -4113,13 +4232,23 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </div>
           </div>
 
+          <BundleSuggestionsPanel
+            shown={feedSuggestions}
+            bugsById={processedBugById}
+            plans={testPlans}
+            dismissed={dismissedSuggestions}
+            onDismissedChange={setDismissedSuggestions}
+            onApply={handleCategorizeAndBundle}
+          />
+
           <div className="space-y-3.5">
             {processedBugs.length === 0 ? (
               <div className="liquid-glass-panel rounded-3xl p-8 text-center text-xs text-slate-400 font-medium">
                 No matching bugs found for selected search query and filters.
               </div>
             ) : (
-              processedBugs.map(bug => {
+              feedRows.map(row => {
+                const renderFeedBug = (bug: FeedBug) => {
                 const isBugExpanded = !!expandedBugIds[bug.id];
                 const formatted12HrTime = (() => {
                   try {
@@ -4196,6 +4325,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             REPRO'D
                           </span>
                         )}
+                        {suggestionByBugId.get(bug.id) && (() => {
+                          const sg = suggestionByBugId.get(bug.id)!;
+                          const others = sg.members.length - 1;
+                          return (
+                            <button
+                              type="button"
+                              data-testid="feed-dupe-chip"
+                              onClick={(e) => { e.stopPropagation(); jumpToSuggestion(sg.suggestion.id); }}
+                              className="text-[10px] px-2.5 py-0.5 rounded-full border border-violet-500/50 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20 font-bold"
+                              title="RX95 thinks this is the same issue as other reports - review the suggested group above"
+                            >
+                              🧩 Likely dupe of {others} other{others === 1 ? '' : 's'} · Review
+                            </button>
+                          );
+                        })()}
                       </div>
 
                       <div className="flex items-center gap-3 ml-auto">
@@ -4513,9 +4657,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     </div>
                   </div>
                 );
+                };
+                if (row.kind === 'bundle') return renderFeedBundle(row, renderFeedBug);
+                return renderFeedBug(row.bug);
               })
             )}
           </div>
+        </div>
+      )}
+
+      {feedToast && activeTab === 'bugs' && (
+        <div data-testid="feed-toast" className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] px-4 py-2.5 rounded-2xl bg-slate-800 border border-slate-600 text-xs text-slate-100 shadow-2xl">
+          {feedToast}
         </div>
       )}
 

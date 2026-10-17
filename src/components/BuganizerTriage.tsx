@@ -15,6 +15,7 @@ import {
   memberReportText,
   newBundle,
   pendingFor,
+  sameHotlist,
   saveDismissed,
   shownSuggestions,
   syncMegaDraft,
@@ -456,6 +457,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
   const createBundle = (members: BugLog[], title: string, summary: string | undefined, by: 'rx95' | 'manual') => {
     const ok = members.filter(isBundleable);
     if (ok.length < 2) return flash('Pick at least two unfiled reports to bundle.');
+    if (!sameHotlist(ok, planName)) return flash("Can't bundle these: they're from test plans linked to different hotlists.");
     const bd = newBundle(ok.map(m => m.id), title, summary, by);
     forMembers(ok, () => ({ bundle: bd }));
     setSelected(new Set());
@@ -1123,8 +1125,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
         );
       })()}
 
-      {/* Same-day bundle suggestions */}
-      {renderSuggestions()}
+      {/* Same-day bundle suggestions now live on the Bugs Feed (BundleSuggestionsPanel). */}
 
       {/* Waiting for Buganizer (opened, not yet confirmed) */}
       {waitingEntries.length > 0 && (
