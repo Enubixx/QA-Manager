@@ -2305,7 +2305,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
 
-      {/* Tab: Unified QA Testers Directory & Live Performance Tracking (Option A: Telemetry Scorecard + Docked Shift-Log Inspector) */}
+      {/* Tab: Unified QA Testers Directory & Live Performance Tracking */}
       {activeTab === 'testers' && (() => {
         const formatFloorDuration = (ms: number) => {
           if (!ms || ms <= 0) return '0m';
@@ -2398,6 +2398,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           }).length;
 
           const lastRun = completedRunsList.length > 0 ? completedRunsList[completedRunsList.length - 1] : null;
+          const allTimeRuns = profile?.allTimeCompletedCount || 0;
 
           return {
             ...tester,
@@ -2412,24 +2413,32 @@ export const Dashboard: React.FC<DashboardProps> = ({
             devicePills,
             dayDevices,
             bugCount,
-            lastRun
+            lastRun,
+            allTimeRuns
           };
         });
 
-        // Sort by: (1) currently active, (2) completedCount descending, (3) alphabetical name
+        // Sort by: (1) currently active, (2) completedCount descending, (3) bugCount descending, (4) alphabetical name
         const sortedTesters = [...enrichedTesters].sort((a, b) => {
           if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
           if (b.dayData.completedCount !== a.dayData.completedCount) {
             return b.dayData.completedCount - a.dayData.completedCount;
           }
+          if (b.bugCount !== a.bugCount) {
+            return b.bugCount - a.bugCount;
+          }
           return a.name.localeCompare(b.name);
         });
 
-        const testedTesters = sortedTesters.filter(t => t.isActive || t.dayData.completedCount > 0);
-        const idleTesters = sortedTesters.filter(t => !t.isActive);
-        const offShiftTesters = sortedTesters.filter(t => !t.isActive && t.dayData.completedCount === 0);
+        // Only testers who actually have data on selectedQaDate (live, completed runs, or bugs reported) appear in the main table
+        const activeOrTestedTesters = sortedTesters.filter(
+          t => t.isActive || t.dayData.completedCount > 0 || t.bugCount > 0
+        );
+        const noDataTesters = sortedTesters.filter(
+          t => !t.isActive && t.dayData.completedCount === 0 && t.bugCount === 0
+        );
 
-        // Shift KPI Ribbon aggregations for selectedQaDate
+        // KPI Ribbon aggregations for selectedQaDate
         let liveNowCount = 0;
         let awayNowCount = 0;
         activeTesterMap.forEach(info => {
@@ -2438,7 +2447,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         });
 
         const shiftTotalRuns = sortedTesters.reduce((acc, t) => acc + t.dayData.completedCount, 0);
-        const shiftActiveTestersCount = testedTesters.length;
+        const shiftActiveTestersCount = activeOrTestedTesters.length;
         const shiftTotalFloorMs = sortedTesters.reduce((acc, t) => acc + t.dayData.totalDurationMs, 0);
         const shiftAvgPaceMs = shiftTotalRuns > 0 ? Math.round(shiftTotalFloorMs / shiftTotalRuns) : 0;
         const shiftAvgPaceMins = Math.floor(shiftAvgPaceMs / 60000);
@@ -2450,23 +2459,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
         const shiftTotalBugs = sortedTesters.reduce((acc, t) => acc + t.bugCount, 0);
         const testersWithBugsCount = sortedTesters.filter(t => t.bugCount > 0).length;
 
-        // Filter testers by mode + search query
-        let displayed = sortedTesters;
-        if (testerViewMode === 'tested') {
-          if (testedTesters.length > 0) {
-            displayed = showOffShiftTesters ? sortedTesters : testedTesters;
-          } else {
-            displayed = sortedTesters;
-          }
-        } else if (testerViewMode === 'active') {
+        // Filter testers by mode + search query (never dump 0-data testers into the table unless explicitly searching)
+        let displayed = activeOrTestedTesters;
+        if (testerViewMode === 'active') {
           displayed = sortedTesters.filter(t => t.isActive);
-        } else if (testerViewMode === 'idle') {
-          displayed = idleTesters;
         }
 
         if (searchTesterQuery.trim()) {
           const q = searchTesterQuery.toLowerCase().trim();
-          displayed = displayed.filter(t =>
+          const sourcePool = testerViewMode === 'active' ? sortedTesters.filter(t => t.isActive) : sortedTesters;
+          displayed = sourcePool.filter(t =>
             t.name.toLowerCase().includes(q) ||
             (t.role || '').toLowerCase().includes(q) ||
             t.dayDevices.some(d => d.toLowerCase().includes(q)) ||
@@ -2476,13 +2478,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
         const inspectedTester =
           displayed.find(t => t.testerKey === selectedInspectorTester.toLowerCase().trim()) ||
-          sortedTesters.find(t => t.testerKey === selectedInspectorTester.toLowerCase().trim()) ||
+          (showOffShiftTesters ? sortedTesters.find(t => t.testerKey === selectedInspectorTester.toLowerCase().trim()) : null) ||
           displayed[0] ||
-          sortedTesters[0] ||
           null;
 
-        const testedLabel = selectedQaDate === todayStr ? 'Tested Today' : 'Tested';
+        const testedLabel = selectedQaDate === todayStr
+          ? 'Active & Tested Today'
+          : selectedQaDate === 'all'
+            ? 'With Recorded Runs'
+            : `Tested on ${selectedQaDate}`;
         const dateScopeLabel = selectedQaDate === 'all' ? 'all time' : selectedQaDate;
+        const mostRecentHistoricalDate = allQaDatesList.find(d => d !== todayStr);
 
         return (
           <div className="space-y-3.5">
@@ -2498,7 +2504,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       : 'border-slate-800 bg-[#0f172a] text-slate-300 hover:border-slate-700 hover:text-white font-medium'
                   }`}
                 >
-                  <span>{testedLabel} ({testedTesters.length})</span>
+                  <span>{testedLabel} ({activeOrTestedTesters.length})</span>
                 </button>
                 <button
                   type="button"
@@ -2512,31 +2518,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
                   <span>Live Now ({activeTesterMap.size})</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setTesterViewMode('idle')}
-                  className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] border transition cursor-pointer ${
-                    testerViewMode === 'idle'
-                      ? 'border-blue-500 bg-[#13203a] text-white font-bold shadow-sm'
-                      : 'border-slate-800 bg-[#0f172a] text-slate-300 hover:border-slate-700 hover:text-white font-medium'
-                  }`}
-                >
-                  <span>Idle / Off-Shift ({idleTesters.length})</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTesterViewMode('all')}
-                  className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] border transition cursor-pointer ${
-                    testerViewMode === 'all'
-                      ? 'border-blue-500 bg-[#13203a] text-white font-bold shadow-sm'
-                      : 'border-slate-800 bg-[#0f172a] text-slate-300 hover:border-slate-700 hover:text-white font-medium'
-                  }`}
-                >
-                  <span>All Roster ({unifiedTesters.length})</span>
-                </button>
               </div>
 
-              {/* Right: Date Selector + Search + New Tester Button */}
+              {/* Right: Date Selector + Search + Tucked Roster Drawer Toggle + New Tester Button */}
               <div className="flex flex-wrap items-center gap-2">
                 <div className="flex items-center gap-1.5 bg-[#0f172a] border border-slate-800 rounded-lg px-2.5 py-1">
                   <Calendar className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
@@ -2575,6 +2559,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   )}
                 </div>
 
+                {/* Compact Saved Roster Drawer Toggle (tucks away inactive / 0-run testers cleanly) */}
+                {unifiedTesters.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowOffShiftTesters(prev => !prev)}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border flex items-center gap-1.5 transition cursor-pointer ${
+                      showOffShiftTesters
+                        ? 'bg-[#13203a] border-blue-500/60 text-blue-200'
+                        : 'bg-[#0f172a] border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                    }`}
+                    title="View or manage saved tester profiles without cluttering the table"
+                  >
+                    <User className="w-3 h-3 text-slate-400" />
+                    <span>Saved Roster ({unifiedTesters.length})</span>
+                    <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showOffShiftTesters ? 'rotate-180 text-blue-400' : ''}`} />
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={() => setShowCreateTesterForm(prev => !prev)}
@@ -2585,6 +2587,75 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </button>
               </div>
             </div>
+
+            {/* Collapsible Tucked-Away Saved Roster Pill Tray */}
+            {showOffShiftTesters && (
+              <div className="bg-[#0d1424] border border-slate-800 rounded-2xl p-3.5 space-y-2.5 animate-in fade-in duration-150">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[11px] font-bold text-slate-300 flex items-center gap-2">
+                    <span>Saved Tester Profiles ({unifiedTesters.length})</span>
+                    {noDataTesters.length > 0 && (
+                      <span className="text-[10.5px] font-normal text-slate-500">
+                        · {noDataTesters.length} with no runs on {selectedQaDate === todayStr ? 'today' : dateScopeLabel} are kept out of the table below
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowOffShiftTesters(false)}
+                    className="text-[11px] text-slate-400 hover:text-white font-semibold cursor-pointer"
+                  >
+                    Hide ▴
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap gap-1.5">
+                  {sortedTesters.map(t => {
+                    const hasActivity = t.isActive || t.dayData.completedCount > 0 || t.bugCount > 0;
+                    return (
+                      <div
+                        key={t.id || t.name}
+                        className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-lg border text-[11px] transition ${
+                          hasActivity
+                            ? 'bg-[#13203a] border-blue-500/40 text-slate-100'
+                            : 'bg-[#0b101d] border-slate-800/90 text-slate-400'
+                        }`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${t.isActive ? 'bg-emerald-400' : hasActivity ? 'bg-blue-400' : 'bg-slate-600'}`} />
+                        <span className="font-semibold text-slate-200">{t.name}</span>
+                        {t.dayData.completedCount > 0 ? (
+                          <span className="font-mono text-[10px] text-blue-300">{t.dayData.completedCount}d</span>
+                        ) : t.allTimeRuns > 0 ? (
+                          <span className="font-mono text-[10px] text-slate-500">{t.allTimeRuns} all-time</span>
+                        ) : (
+                          <span className="font-mono text-[10px] text-slate-600">0 runs</span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (confirm(`Delete tester "${t.name}" and all associated performance data?`)) {
+                              if (t.id && onDeleteTesterProfile) {
+                                onDeleteTesterProfile(t.id);
+                              }
+                              if (onDeleteTester) {
+                                onDeleteTester(t.name);
+                              } else if (onDeleteTestRun) {
+                                const runsToDelete = [...testRuns, ...archivedRuns].filter(r => r.testerName === t.name);
+                                runsToDelete.forEach(r => onDeleteTestRun(r.id));
+                              }
+                            }
+                          }}
+                          className="text-slate-500 hover:text-rose-400 ml-0.5 cursor-pointer"
+                          title={`Delete ${t.name}`}
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Collapsible Create Tester Profile Form */}
             {showCreateTesterForm && (
@@ -2651,10 +2722,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </div>
             )}
 
-            {/* Top 4 KPI Ribbon (Pure F-A: Live Floor Status, Shift Throughput, Avg Run Pace & Floor Time, Defects Discovered) */}
+            {/* Top 4 KPI Ribbon */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
               <div className="bg-[#0f172a] border border-slate-800 rounded-xl px-3.5 py-2.5 flex flex-col justify-between">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Live Floor Status</div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Live Status</div>
                 <div className="text-lg font-extrabold text-white mt-0.5 flex items-baseline gap-1.5 flex-wrap">
                   <span>{activeTesterMap.size} Active</span>
                   <span className="text-[10.5px] font-semibold text-emerald-400">
@@ -2664,27 +2735,27 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </div>
 
               <div className="bg-[#0f172a] border border-slate-800 rounded-xl px-3.5 py-2.5 flex flex-col justify-between">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Shift Throughput</div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Completed Runs</div>
                 <div className="text-lg font-extrabold text-white mt-0.5 flex items-baseline gap-1.5 flex-wrap">
                   <span>{shiftTotalRuns} Runs</span>
                   <span className="text-[10.5px] font-medium text-slate-400">
-                    across {shiftActiveTestersCount} active tester{shiftActiveTestersCount === 1 ? '' : 's'}
+                    across {shiftActiveTestersCount} tester{shiftActiveTestersCount === 1 ? '' : 's'}
                   </span>
                 </div>
               </div>
 
               <div className="bg-[#0f172a] border border-slate-800 rounded-xl px-3.5 py-2.5 flex flex-col justify-between">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Avg Run Pace &amp; Floor Time</div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Avg Run Time &amp; Total</div>
                 <div className="text-lg font-extrabold text-[#93c5fd] mt-0.5 flex items-baseline gap-1.5 flex-wrap font-mono">
                   <span>{shiftAvgPaceFormatted}</span>
                   <span className="text-[10.5px] font-sans font-medium text-slate-400">
-                    · {shiftTotalFloorFormatted} total floor
+                    · {shiftTotalFloorFormatted} total
                   </span>
                 </div>
               </div>
 
               <div className="bg-[#0f172a] border border-slate-800 rounded-xl px-3.5 py-2.5 flex flex-col justify-between">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Defects Discovered</div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Bugs Reported</div>
                 <div className="text-lg font-extrabold text-[#fda4af] mt-0.5 flex items-baseline gap-1.5 flex-wrap">
                   <span>{shiftTotalBugs} Bug{shiftTotalBugs === 1 ? '' : 's'}</span>
                   <span className="text-[10.5px] font-medium text-slate-400">
@@ -2694,18 +2765,47 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </div>
             </div>
 
-            {/* 2-Pane Scorecard + Docked Shift-Log Inspector */}
+            {/* 2-Pane Scorecard + Selected Tester Run History */}
             {displayed.length === 0 ? (
-              <div className="liquid-glass-panel rounded-2xl p-8 text-center space-y-2 border border-slate-800">
+              <div className="bg-[#0e1526] rounded-2xl p-8 text-center space-y-3 border border-slate-800">
                 <UserCheck className="w-6 h-6 text-slate-500 mx-auto" />
-                <h4 className="text-sm font-bold text-white">
-                  {testerViewMode === 'active' ? 'No Testers Currently Active' : 'No Testers Found'}
-                </h4>
-                <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                  {testerViewMode === 'active'
-                    ? 'No tester is actively running a walkthrough on a device right now.'
-                    : 'Try adjusting your filter or search query, or create a tester profile above.'}
-                </p>
+                <div className="space-y-1">
+                  <h4 className="text-sm font-bold text-white">
+                    {testerViewMode === 'active'
+                      ? 'No Testers Currently Active'
+                      : searchTesterQuery.trim()
+                        ? 'No Matching Testers Found'
+                        : `No Test Runs Recorded Yet for ${selectedQaDate === todayStr ? `Today (${todayStr})` : dateScopeLabel}`}
+                  </h4>
+                  <p className="text-xs text-slate-400 max-w-md mx-auto">
+                    {testerViewMode === 'active'
+                      ? 'No tester is actively running a walkthrough on a device right now.'
+                      : searchTesterQuery.trim()
+                        ? 'Try clearing your search filter above.'
+                        : `Testers appear here automatically as soon as they start or finish a run.${noDataTesters.length > 0 ? ` (${noDataTesters.length} saved tester profiles with 0 runs are tucked into Saved Roster above.)` : ''}`}
+                  </p>
+                </div>
+
+                {!searchTesterQuery.trim() && testerViewMode === 'tested' && (
+                  <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                    {mostRecentHistoricalDate && selectedQaDate === todayStr && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedQaDate(mostRecentHistoricalDate)}
+                        className="px-3 py-1.5 rounded-lg bg-[#13203a] hover:bg-blue-600/30 border border-blue-500/40 text-blue-200 text-xs font-semibold transition cursor-pointer"
+                      >
+                        View latest active day ({mostRecentHistoricalDate}) →
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedQaDate('all')}
+                      className="px-3 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+                    >
+                      View All-Time Combined
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="grid grid-cols-1 xl:grid-cols-[1fr_390px] gap-3.5 items-start">
@@ -2716,7 +2816,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <div>Device Quota Attribution</div>
                     <div>Runs Done</div>
                     <div>Bugs Logged</div>
-                    <div className="text-right">Avg Pace / Floor</div>
+                    <div className="text-right">Avg / Total Time</div>
                   </div>
 
                   <div className="divide-y divide-[#162033]">
@@ -2769,7 +2869,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 </div>
                               ) : (
                                 <div className="text-[10.5px] text-slate-500 truncate">
-                                  Idle · Off-shift (0 runs)
+                                  Idle · 0 runs
                                 </div>
                               )}
                             </div>
@@ -2824,36 +2924,34 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             )}
                           </div>
 
-                          {/* Column 5: Avg Pace / Floor */}
+                          {/* Column 5: Avg / Total Time */}
                           <div className="text-right font-mono text-[10.5px]">
                             <b className="text-[#93c5fd]">{tester.avgFormatted !== '—' ? `${tester.avgFormatted} avg` : '—'}</b>
-                            <div className="text-slate-500">{tester.floorTimeFormatted} floor</div>
+                            <div className="text-slate-500">{tester.floorTimeFormatted} total</div>
                           </div>
                         </div>
                       );
                     })}
                   </div>
 
-                  {/* Collapsible Off-Shift Footer */}
-                  {testerViewMode === 'tested' && testedTesters.length > 0 && offShiftTesters.length > 0 && !searchTesterQuery.trim() && (
+                  {/* Subtle Footer Note when inactive profiles are tucked away */}
+                  {noDataTesters.length > 0 && !searchTesterQuery.trim() && (
                     <div className="px-3.5 py-2 bg-[#0a101d] border-t border-[#162033] text-[11px] text-slate-500 flex items-center justify-between gap-2">
                       <span>
-                        + {offShiftTesters.length} off-shift tester{offShiftTesters.length === 1 ? '' : 's'} with 0 runs on {dateScopeLabel} {showOffShiftTesters ? 'shown above' : 'are tucked away'}
+                        {noDataTesters.length} saved tester{noDataTesters.length === 1 ? '' : 's'} with 0 runs on {selectedQaDate === todayStr ? 'today' : dateScopeLabel} tucked into Saved Roster
                       </span>
                       <button
                         type="button"
                         onClick={() => setShowOffShiftTesters(prev => !prev)}
-                        className="text-[#93c5fd] hover:text-white font-bold cursor-pointer"
+                        className="text-[#93c5fd] hover:text-white font-semibold cursor-pointer"
                       >
-                        {showOffShiftTesters
-                          ? 'Hide off-shift testers ▴'
-                          : `Show ${offShiftTesters.length} off-shift tester${offShiftTesters.length === 1 ? '' : 's'} ▾`}
+                        {showOffShiftTesters ? 'Hide Saved Roster ▴' : `View Saved Roster (${unifiedTesters.length}) ▾`}
                       </button>
                     </div>
                   )}
                 </div>
 
-                {/* Right: Docked Shift-Log Inspector */}
+                {/* Right: Selected Tester Details & Completed Runs */}
                 {inspectedTester && (
                   <div className="bg-[#10192d] border border-[#263859] rounded-2xl p-3.5 flex flex-col gap-2.5 shadow-xl">
                     <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
@@ -2871,7 +2969,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         </span>
                         <div className="min-w-0">
                           <div className="text-[13.5px] font-bold text-white truncate">
-                            {inspectedTester.name} · Shift Inspector
+                            {inspectedTester.name}
                           </div>
                           <div className="text-[10.5px] text-slate-400 truncate">
                             {inspectedTester.dayData.completedCount} Completed ·{' '}
