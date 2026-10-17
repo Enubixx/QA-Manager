@@ -151,8 +151,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [quotaPlanMap, setQuotaPlanMap] = useState<Record<string, string>>({});
   const [quotaRunsMap, setQuotaRunsMap] = useState<Record<string, number>>({});
   const [showCreateTesterForm, setShowCreateTesterForm] = useState(false);
-  const [testerViewMode, setTesterViewMode] = useState<'all' | 'active'>('all');
+  const [testerViewMode, setTesterViewMode] = useState<'tested' | 'active' | 'idle' | 'all'>('tested');
   const [searchTesterQuery, setSearchTesterQuery] = useState('');
+  const [selectedInspectorTester, setSelectedInspectorTester] = useState<string>('');
+  const [showOffShiftTesters, setShowOffShiftTesters] = useState<boolean>(false);
 
   // Live ongoing test duration ticker (gated on active in-progress runs & relevant tabs to prevent 1Hz full-tree re-renders)
   const [liveTickerTime, setLiveTickerTime] = useState(() => Date.now());
@@ -2303,459 +2305,731 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
 
-      {/* Tab: Unified QA Testers Directory & Live Performance Tracking */}
-      {activeTab === 'testers' && (
-        <div className="space-y-4">
-          
-          {/* Unified Compact Header, Filter & Date Control Bar */}
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 liquid-glass-panel rounded-2xl p-3.5 shadow-xl border border-slate-800">
-            {/* Left: Title + Active Badge + View Toggle */}
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-slate-800/90 border border-slate-700/80 text-blue-400">
-                  <UserCheck className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-sm font-bold text-slate-50 tracking-tight">Testers & Performance</h2>
-                    {activeTesterMap.size > 0 && (
-                      <span className="text-[10px] font-bold text-emerald-400 font-mono flex items-center gap-1 bg-emerald-500/15 px-2 py-0.5 rounded-full border border-emerald-500/30">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                        {activeTesterMap.size} Active
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[10px] text-slate-400 hidden sm:block">
-                    Daily execution speed, completed plans & live device telemetry
-                  </p>
-                </div>
-              </div>
+      {/* Tab: Unified QA Testers Directory & Live Performance Tracking (Option A: Telemetry Scorecard + Docked Shift-Log Inspector) */}
+      {activeTab === 'testers' && (() => {
+        const formatFloorDuration = (ms: number) => {
+          if (!ms || ms <= 0) return '0m';
+          const totalMins = Math.max(1, Math.round(ms / 60000));
+          const hrs = Math.floor(totalMins / 60);
+          const mins = totalMins % 60;
+          return hrs > 0 ? `${hrs}h ${String(mins).padStart(2, '0')}m` : `${mins}m`;
+        };
 
-              {/* All / Active Toggle Pills */}
-              <div className="flex items-center bg-[#0f172a] border border-slate-800 rounded-xl p-0.5 text-[11px]">
+        const enrichedTesters = unifiedTesters.map(tester => {
+          const testerKey = tester.name.toLowerCase().trim();
+          const profile = tester.performanceProfile;
+          const dayData = !profile
+            ? { completedCount: 0, totalDurationMs: 0, completedRuns: [] as NonNullable<typeof profile>['dailyStats'][string]['completedRuns'], devicesUsedOnDay: new Set<string>() }
+            : selectedQaDate === 'all'
+              ? {
+                  completedCount: profile.allTimeCompletedCount,
+                  totalDurationMs: Object.values(profile.dailyStats).reduce((acc, d) => acc + d.totalDurationMs, 0),
+                  completedRuns: Object.values(profile.dailyStats).flatMap(d => d.completedRuns),
+                  devicesUsedOnDay: profile.devicesUsed
+                }
+              : profile.dailyStats[selectedQaDate] || {
+                  completedCount: 0,
+                  totalDurationMs: 0,
+                  completedRuns: [],
+                  devicesUsedOnDay: new Set<string>()
+                };
+
+          const completedRunsList = dayData.completedRuns;
+          const avgMs = dayData.completedCount > 0 ? Math.round(dayData.totalDurationMs / dayData.completedCount) : 0;
+          const avgMins = Math.floor(avgMs / 60000);
+          const avgSecs = Math.floor((avgMs % 60000) / 1000);
+          const avgFormatted = avgMs > 0 ? `${avgMins}m ${avgSecs < 10 ? '0' : ''}${avgSecs}s` : '—';
+          const floorTimeFormatted = formatFloorDuration(dayData.totalDurationMs);
+
+          const isActive = activeTesterMap.has(testerKey);
+          const activeInfo = activeTesterMap.get(testerKey);
+
+          // Per-device run counts for this tester on selectedQaDate
+          const devCounts = new Map<string, { displayName: string; count: number }>();
+          completedRunsList.forEach(r => {
+            const devName = (r.deviceName || '').trim();
+            if (!devName) return;
+            const dKey = devName.toLowerCase();
+            const prev = devCounts.get(dKey);
+            if (prev) {
+              prev.count += 1;
+            } else {
+              devCounts.set(dKey, { displayName: devName, count: 1 });
+            }
+          });
+          if (isActive && activeInfo?.deviceName) {
+            const activeDevName = activeInfo.deviceName.trim();
+            const dKey = activeDevName.toLowerCase();
+            if (activeDevName && !devCounts.has(dKey)) {
+              devCounts.set(dKey, { displayName: activeDevName, count: 0 });
+            }
+          }
+
+          const devicePills = Array.from(devCounts.values()).map(({ displayName, count }) => {
+            const matchedDev = devices.find(d => d.name.toLowerCase().trim() === displayName.toLowerCase().trim());
+            const assignedQuota = matchedDev?.quotas?.find(q => q.targetRunsPerDay > 0) || matchedDev?.quotas?.[0];
+            if (selectedQaDate === todayStr && matchedDev && assignedQuota && assignedQuota.targetRunsPerDay > 0) {
+              const target = assignedQuota.targetRunsPerDay;
+              const doneOnDevToday = (todayRunsMap[matchedDev.id] && todayRunsMap[matchedDev.id][assignedQuota.planId]) || count;
+              const displayDone = count > 0 ? count : doneOnDevToday;
+              const isMet = doneOnDevToday >= target || count >= target;
+              return {
+                key: displayName,
+                deviceName: matchedDev.name,
+                label: `${matchedDev.name} ${displayDone}/${target}${isMet ? '✓' : ''}`,
+                isDone: isMet
+              };
+            }
+            return {
+              key: displayName,
+              deviceName: displayName,
+              label: count > 0 ? `${displayName} ×${count}` : displayName,
+              isDone: count > 0
+            };
+          });
+
+          const dayDevices = Array.from(devCounts.values()).map(d => d.displayName);
+
+          const bugCount = bugLogs.filter(b => {
+            const bTester = ((b.testerName || (b as any).reporter || '') as string).toLowerCase().trim();
+            if (bTester !== testerKey) return false;
+            if (selectedQaDate === 'all') return true;
+            return getLocalDateStr(b.timestamp) === selectedQaDate;
+          }).length;
+
+          const lastRun = completedRunsList.length > 0 ? completedRunsList[completedRunsList.length - 1] : null;
+
+          return {
+            ...tester,
+            testerKey,
+            dayData,
+            completedRunsList,
+            avgMs,
+            avgFormatted,
+            floorTimeFormatted,
+            isActive,
+            activeInfo,
+            devicePills,
+            dayDevices,
+            bugCount,
+            lastRun
+          };
+        });
+
+        // Sort by: (1) currently active, (2) completedCount descending, (3) alphabetical name
+        const sortedTesters = [...enrichedTesters].sort((a, b) => {
+          if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+          if (b.dayData.completedCount !== a.dayData.completedCount) {
+            return b.dayData.completedCount - a.dayData.completedCount;
+          }
+          return a.name.localeCompare(b.name);
+        });
+
+        const testedTesters = sortedTesters.filter(t => t.isActive || t.dayData.completedCount > 0);
+        const idleTesters = sortedTesters.filter(t => !t.isActive);
+        const offShiftTesters = sortedTesters.filter(t => !t.isActive && t.dayData.completedCount === 0);
+
+        // Shift KPI Ribbon aggregations for selectedQaDate
+        let liveNowCount = 0;
+        let awayNowCount = 0;
+        activeTesterMap.forEach(info => {
+          if (info.isAway) awayNowCount += 1;
+          else liveNowCount += 1;
+        });
+
+        const shiftTotalRuns = sortedTesters.reduce((acc, t) => acc + t.dayData.completedCount, 0);
+        const shiftActiveTestersCount = testedTesters.length;
+        const shiftTotalFloorMs = sortedTesters.reduce((acc, t) => acc + t.dayData.totalDurationMs, 0);
+        const shiftAvgPaceMs = shiftTotalRuns > 0 ? Math.round(shiftTotalFloorMs / shiftTotalRuns) : 0;
+        const shiftAvgPaceMins = Math.floor(shiftAvgPaceMs / 60000);
+        const shiftAvgPaceSecs = Math.floor((shiftAvgPaceMs % 60000) / 1000);
+        const shiftAvgPaceFormatted = shiftAvgPaceMs > 0
+          ? `${shiftAvgPaceMins}m ${shiftAvgPaceSecs < 10 ? '0' : ''}${shiftAvgPaceSecs}s`
+          : '—';
+        const shiftTotalFloorFormatted = formatFloorDuration(shiftTotalFloorMs);
+        const shiftTotalBugs = sortedTesters.reduce((acc, t) => acc + t.bugCount, 0);
+        const testersWithBugsCount = sortedTesters.filter(t => t.bugCount > 0).length;
+
+        // Filter testers by mode + search query
+        let displayed = sortedTesters;
+        if (testerViewMode === 'tested') {
+          if (testedTesters.length > 0) {
+            displayed = showOffShiftTesters ? sortedTesters : testedTesters;
+          } else {
+            displayed = sortedTesters;
+          }
+        } else if (testerViewMode === 'active') {
+          displayed = sortedTesters.filter(t => t.isActive);
+        } else if (testerViewMode === 'idle') {
+          displayed = idleTesters;
+        }
+
+        if (searchTesterQuery.trim()) {
+          const q = searchTesterQuery.toLowerCase().trim();
+          displayed = displayed.filter(t =>
+            t.name.toLowerCase().includes(q) ||
+            (t.role || '').toLowerCase().includes(q) ||
+            t.dayDevices.some(d => d.toLowerCase().includes(q)) ||
+            (t.activeInfo?.deviceName || '').toLowerCase().includes(q)
+          );
+        }
+
+        const inspectedTester =
+          displayed.find(t => t.testerKey === selectedInspectorTester.toLowerCase().trim()) ||
+          sortedTesters.find(t => t.testerKey === selectedInspectorTester.toLowerCase().trim()) ||
+          displayed[0] ||
+          sortedTesters[0] ||
+          null;
+
+        const testedLabel = selectedQaDate === todayStr ? 'Tested Today' : 'Tested';
+        const dateScopeLabel = selectedQaDate === 'all' ? 'all time' : selectedQaDate;
+
+        return (
+          <div className="space-y-3.5">
+            {/* Top Filter Pills & Inline Controls Bar */}
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <button
                   type="button"
-                  onClick={() => setTesterViewMode('all')}
-                  className={`px-2.5 py-1 rounded-lg font-semibold transition cursor-pointer ${
-                    testerViewMode === 'all'
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-slate-400 hover:text-white'
+                  onClick={() => setTesterViewMode('tested')}
+                  className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] border transition cursor-pointer ${
+                    testerViewMode === 'tested'
+                      ? 'border-blue-500 bg-[#13203a] text-white font-bold shadow-sm'
+                      : 'border-slate-800 bg-[#0f172a] text-slate-300 hover:border-slate-700 hover:text-white font-medium'
                   }`}
                 >
-                  All ({unifiedTesters.length})
+                  <span>{testedLabel} ({testedTesters.length})</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setTesterViewMode('active')}
-                  className={`px-2.5 py-1 rounded-lg font-semibold transition flex items-center gap-1 cursor-pointer ${
+                  className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] border transition cursor-pointer ${
                     testerViewMode === 'active'
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-slate-400 hover:text-white'
+                      ? 'border-blue-500 bg-[#13203a] text-white font-bold shadow-sm'
+                      : 'border-slate-800 bg-[#0f172a] text-slate-300 hover:border-slate-700 hover:text-white font-medium'
                   }`}
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                  <span>Active ({activeTesterMap.size})</span>
+                  <span>Live Now ({activeTesterMap.size})</span>
                 </button>
-              </div>
-            </div>
-
-            {/* Right: Search + Log Date + New Tester Button */}
-            <div className="flex flex-wrap items-center gap-2">
-              {/* Compact Search */}
-              <div className="relative w-36 sm:w-44">
-                <Search className="w-3 h-3 text-slate-400 absolute left-2.5 top-2 pointer-events-none" />
-                <input
-                  type="text"
-                  placeholder="Search tester..."
-                  value={searchTesterQuery}
-                  onChange={e => setSearchTesterQuery(e.target.value)}
-                  className="w-full bg-[#0f172a] border border-slate-700/80 rounded-xl pl-7 pr-6 py-1 text-[11px] text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
-                />
-                {searchTesterQuery && (
-                  <button
-                    onClick={() => setSearchTesterQuery('')}
-                    className="absolute right-2 top-1.5 text-slate-500 hover:text-white"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                )}
-              </div>
-
-              {/* Date Selector */}
-              <div className="flex items-center gap-1.5 bg-[#0f172a] border border-slate-700/80 rounded-xl px-2.5 py-1">
-                <Calendar className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
-                <span className="text-[10px] font-bold text-slate-400 uppercase">Date:</span>
-                <select
-                  value={selectedQaDate}
-                  onChange={e => setSelectedQaDate(e.target.value)}
-                  style={{ backgroundColor: '#0f172a', color: '#f1f5f9', WebkitAppearance: 'none' }}
-                  className="bg-[#0f172a] text-slate-100 border border-slate-800 rounded-lg px-2 py-0.5 text-[11px] font-semibold focus:outline-none cursor-pointer"
-                >
-                  <option value={todayStr}>Today ({todayStr})</option>
-                  {allQaDatesList.filter(d => d !== todayStr).map(dateStr => (
-                    <option key={dateStr} value={dateStr}>
-                      {dateStr}
-                    </option>
-                  ))}
-                  <option value="all">All-Time Combined</option>
-                </select>
-              </div>
-
-              {/* Add Tester Button */}
-              <button
-                type="button"
-                onClick={() => setShowCreateTesterForm(prev => !prev)}
-                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white border border-blue-500 rounded-xl text-[11px] font-semibold flex items-center gap-1 transition-all shadow-sm active:scale-95 cursor-pointer"
-              >
-                <Plus className={`w-3.5 h-3.5 transition-transform duration-200 ${showCreateTesterForm ? 'rotate-45' : ''}`} />
-                <span>{showCreateTesterForm ? 'Close' : 'New Tester'}</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Compact Collapsible Create Tester Profile Form */}
-          {showCreateTesterForm && (
-            <div className="liquid-glass-panel rounded-2xl p-4 border border-slate-700 bg-[#111827] shadow-xl space-y-3 animate-in fade-in zoom-in-95 duration-200">
-              <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-                <h3 className="text-xs font-bold text-slate-50 flex items-center gap-1.5">
-                  <User className="w-3.5 h-3.5 text-blue-400" />
-                  <span>Create New QA Tester Profile</span>
-                </h3>
                 <button
                   type="button"
-                  onClick={() => setShowCreateTesterForm(false)}
-                  className="text-slate-400 hover:text-white p-0.5 cursor-pointer"
+                  onClick={() => setTesterViewMode('idle')}
+                  className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] border transition cursor-pointer ${
+                    testerViewMode === 'idle'
+                      ? 'border-blue-500 bg-[#13203a] text-white font-bold shadow-sm'
+                      : 'border-slate-800 bg-[#0f172a] text-slate-300 hover:border-slate-700 hover:text-white font-medium'
+                  }`}
                 >
-                  <X className="w-3.5 h-3.5" />
+                  <span>Idle / Off-Shift ({idleTesters.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTesterViewMode('all')}
+                  className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] border transition cursor-pointer ${
+                    testerViewMode === 'all'
+                      ? 'border-blue-500 bg-[#13203a] text-white font-bold shadow-sm'
+                      : 'border-slate-800 bg-[#0f172a] text-slate-300 hover:border-slate-700 hover:text-white font-medium'
+                  }`}
+                >
+                  <span>All Roster ({unifiedTesters.length})</span>
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 mb-1">Full Name</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Kevin Huang..."
-                    value={newPersonName}
-                    onChange={e => setNewPersonName(e.target.value)}
-                    className="w-full bg-[#0f172a] border border-slate-700/80 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-medium"
-                  />
+              {/* Right: Date Selector + Search + New Tester Button */}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1.5 bg-[#0f172a] border border-slate-800 rounded-lg px-2.5 py-1">
+                  <Calendar className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                  <select
+                    value={selectedQaDate}
+                    onChange={e => setSelectedQaDate(e.target.value)}
+                    style={{ backgroundColor: '#0f172a', color: '#f1f5f9', WebkitAppearance: 'none' }}
+                    className="bg-[#0f172a] text-slate-200 rounded px-1 py-0.5 text-[11px] font-semibold focus:outline-none cursor-pointer"
+                  >
+                    <option value={todayStr}>Today ({todayStr})</option>
+                    {allQaDatesList.filter(d => d !== todayStr).map(dateStr => (
+                      <option key={dateStr} value={dateStr}>
+                        {dateStr}
+                      </option>
+                    ))}
+                    <option value="all">All-Time Combined</option>
+                  </select>
                 </div>
 
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 mb-1">Role / Specialization</label>
+                <div className="relative w-44 sm:w-52">
+                  <Search className="w-3 h-3 text-slate-400 absolute left-2.5 top-2 pointer-events-none" />
                   <input
                     type="text"
-                    placeholder="e.g. Lead QA / Mobile Specialist..."
-                    value={newPersonRole}
-                    onChange={e => setNewPersonRole(e.target.value)}
-                    className="w-full bg-[#0f172a] border border-slate-700/80 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-medium"
+                    placeholder="Search tester or device..."
+                    value={searchTesterQuery}
+                    onChange={e => setSearchTesterQuery(e.target.value)}
+                    className="w-full bg-[#0f172a] border border-slate-800 rounded-lg pl-7 pr-6 py-1 text-[11px] text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
                   />
+                  {searchTesterQuery && (
+                    <button
+                      onClick={() => setSearchTesterQuery('')}
+                      className="absolute right-2 top-1.5 text-slate-500 hover:text-white"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
                 </div>
 
-                <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateTesterForm(prev => !prev)}
+                  className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white border border-blue-500 rounded-lg text-[11px] font-bold flex items-center gap-1 transition-all shadow-sm active:scale-95 cursor-pointer"
+                >
+                  <Plus className={`w-3.5 h-3.5 transition-transform duration-200 ${showCreateTesterForm ? 'rotate-45' : ''}`} />
+                  <span>{showCreateTesterForm ? 'Close' : '+ New Tester'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Collapsible Create Tester Profile Form */}
+            {showCreateTesterForm && (
+              <div className="liquid-glass-panel rounded-2xl p-4 border border-slate-700 bg-[#111827] shadow-xl space-y-3 animate-in fade-in zoom-in-95 duration-200">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <h3 className="text-xs font-bold text-slate-50 flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Create New QA Tester Profile</span>
+                  </h3>
                   <button
                     type="button"
-                    onClick={() => {
-                      if (!newPersonName.trim()) return;
-                      const newTester: TesterProfile = {
-                        id: `tester-${Date.now()}`,
-                        name: newPersonName.trim(),
-                        role: newPersonRole.trim() || 'Mobile Tester'
-                      };
-                      if (onSaveTester) onSaveTester(newTester);
-                      setNewPersonName('');
-                      setShowCreateTesterForm(false);
-                    }}
-                    className="w-full sm:w-auto px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white border border-blue-500 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
+                    onClick={() => setShowCreateTesterForm(false)}
+                    className="text-slate-400 hover:text-white p-0.5 cursor-pointer"
                   >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Save Profile</span>
+                    <X className="w-3.5 h-3.5" />
                   </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 mb-1">Full Name</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Kevin Huang..."
+                      value={newPersonName}
+                      onChange={e => setNewPersonName(e.target.value)}
+                      className="w-full bg-[#0f172a] border border-slate-700/80 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-medium"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 mb-1">Role / Specialization</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Lead QA / Mobile Specialist..."
+                      value={newPersonRole}
+                      onChange={e => setNewPersonRole(e.target.value)}
+                      className="w-full bg-[#0f172a] border border-slate-700/80 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-medium"
+                    />
+                  </div>
+
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!newPersonName.trim()) return;
+                        const newTester: TesterProfile = {
+                          id: `tester-${Date.now()}`,
+                          name: newPersonName.trim(),
+                          role: newPersonRole.trim() || 'Mobile Tester'
+                        };
+                        if (onSaveTester) onSaveTester(newTester);
+                        setSelectedInspectorTester(newTester.name);
+                        setNewPersonName('');
+                        setShowCreateTesterForm(false);
+                      }}
+                      className="w-full sm:w-auto px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white border border-blue-500 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Save Profile</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Top 4 KPI Ribbon (Pure F-A: Live Floor Status, Shift Throughput, Avg Run Pace & Floor Time, Defects Discovered) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+              <div className="bg-[#0f172a] border border-slate-800 rounded-xl px-3.5 py-2.5 flex flex-col justify-between">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Live Floor Status</div>
+                <div className="text-lg font-extrabold text-white mt-0.5 flex items-baseline gap-1.5 flex-wrap">
+                  <span>{activeTesterMap.size} Active</span>
+                  <span className="text-[10.5px] font-semibold text-emerald-400">
+                    · {liveNowCount} Live, {awayNowCount} Away
+                  </span>
+                </div>
+              </div>
+
+              <div className="bg-[#0f172a] border border-slate-800 rounded-xl px-3.5 py-2.5 flex flex-col justify-between">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Shift Throughput</div>
+                <div className="text-lg font-extrabold text-white mt-0.5 flex items-baseline gap-1.5 flex-wrap">
+                  <span>{shiftTotalRuns} Runs</span>
+                  <span className="text-[10.5px] font-medium text-slate-400">
+                    across {shiftActiveTestersCount} active tester{shiftActiveTestersCount === 1 ? '' : 's'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="bg-[#0f172a] border border-slate-800 rounded-xl px-3.5 py-2.5 flex flex-col justify-between">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Avg Run Pace &amp; Floor Time</div>
+                <div className="text-lg font-extrabold text-[#93c5fd] mt-0.5 flex items-baseline gap-1.5 flex-wrap font-mono">
+                  <span>{shiftAvgPaceFormatted}</span>
+                  <span className="text-[10.5px] font-sans font-medium text-slate-400">
+                    · {shiftTotalFloorFormatted} total floor
+                  </span>
+                </div>
+              </div>
+
+              <div className="bg-[#0f172a] border border-slate-800 rounded-xl px-3.5 py-2.5 flex flex-col justify-between">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Defects Discovered</div>
+                <div className="text-lg font-extrabold text-[#fda4af] mt-0.5 flex items-baseline gap-1.5 flex-wrap">
+                  <span>{shiftTotalBugs} Bug{shiftTotalBugs === 1 ? '' : 's'}</span>
+                  <span className="text-[10.5px] font-medium text-slate-400">
+                    logged across {testersWithBugsCount} tester{testersWithBugsCount === 1 ? '' : 's'}
+                  </span>
                 </div>
               </div>
             </div>
-          )}
 
-          {/* Condensed High-Density 3-Column Testers Grid */}
-          {(() => {
-            let displayed = unifiedTesters;
-            if (testerViewMode === 'active') {
-              displayed = displayed.filter(t => activeTesterMap.has(t.name.toLowerCase().trim()));
-            }
-            if (searchTesterQuery.trim()) {
-              const q = searchTesterQuery.toLowerCase().trim();
-              displayed = displayed.filter(t => t.name.toLowerCase().includes(q) || t.role.toLowerCase().includes(q));
-            }
+            {/* 2-Pane Scorecard + Docked Shift-Log Inspector */}
+            {displayed.length === 0 ? (
+              <div className="liquid-glass-panel rounded-2xl p-8 text-center space-y-2 border border-slate-800">
+                <UserCheck className="w-6 h-6 text-slate-500 mx-auto" />
+                <h4 className="text-sm font-bold text-white">
+                  {testerViewMode === 'active' ? 'No Testers Currently Active' : 'No Testers Found'}
+                </h4>
+                <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                  {testerViewMode === 'active'
+                    ? 'No tester is actively running a walkthrough on a device right now.'
+                    : 'Try adjusting your filter or search query, or create a tester profile above.'}
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 xl:grid-cols-[1fr_390px] gap-3.5 items-start">
+                {/* Left: 5-Column Telemetry Scorecard Table */}
+                <div className="bg-[#0e1526] border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+                  <div className="hidden md:grid md:grid-cols-[200px_1fr_90px_105px_115px] items-center gap-2.5 px-3.5 py-2 bg-[#0b1220] border-b border-[#162033] text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    <div>Tester &amp; Live State</div>
+                    <div>Device Quota Attribution</div>
+                    <div>Runs Done</div>
+                    <div>Bugs Logged</div>
+                    <div className="text-right">Avg Pace / Floor</div>
+                  </div>
 
-            if (displayed.length === 0) {
-              return (
-                <div className="liquid-glass-panel rounded-2xl p-8 text-center space-y-2 border border-slate-800">
-                  <UserCheck className="w-6 h-6 text-slate-500 mx-auto" />
-                  <h4 className="text-sm font-bold text-white">
-                    {testerViewMode === 'active' ? 'No Testers Currently Active' : 'No Testers Found'}
-                  </h4>
-                  <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                    {testerViewMode === 'active'
-                      ? 'No tester is actively running a walkthrough on a device right now.'
-                      : 'Create a tester profile above to begin tracking.'}
-                  </p>
-                </div>
-              );
-            }
+                  <div className="divide-y divide-[#162033]">
+                    {displayed.map(tester => {
+                      const isSelected = inspectedTester?.testerKey === tester.testerKey;
+                      const roleLabel = tester.role && tester.role !== 'Mobile Tester' && tester.role !== 'QA Tester' ? tester.role : 'QA';
 
-            return (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-start">
-                {displayed.map(tester => {
-                  const profile = tester.performanceProfile;
-                  const dayData = !profile
-                    ? { completedCount: 0, totalDurationMs: 0, completedRuns: [] }
-                    : selectedQaDate === 'all'
-                      ? {
-                          completedCount: profile.allTimeCompletedCount,
-                          totalDurationMs: Object.values(profile.dailyStats).reduce((acc, d) => acc + d.totalDurationMs, 0),
-                          completedRuns: Object.values(profile.dailyStats).flatMap(d => d.completedRuns)
-                        }
-                      : profile.dailyStats[selectedQaDate] || {
-                          completedCount: 0,
-                          totalDurationMs: 0,
-                          completedRuns: []
-                        };
-
-                  const completedRunsList = dayData.completedRuns;
-                  const avgMs = dayData.completedCount > 0 ? Math.round(dayData.totalDurationMs / dayData.completedCount) : 0;
-                  const avgMins = Math.floor(avgMs / 60000);
-                  const avgSecs = Math.floor((avgMs % 60000) / 1000);
-                  const avgFormatted = avgMs > 0 ? `${avgMins}m ${avgSecs < 10 ? '0' : ''}${avgSecs}s` : '—';
-
-                  const dayDevices = !profile
-                    ? []
-                    : selectedQaDate === 'all'
-                      ? Array.from(profile.devicesUsed)
-                      : Array.from(('devicesUsedOnDay' in dayData && dayData.devicesUsedOnDay instanceof Set) ? dayData.devicesUsedOnDay : []);
-                  const devicesStr = dayDevices.join(', ') || '—';
-
-                  const isActive = activeTesterMap.has(tester.name.toLowerCase().trim());
-                  const activeInfo = activeTesterMap.get(tester.name.toLowerCase().trim());
-                  const isExpanded = !!expandedTesters[tester.name];
-
-                  return (
-                    <div
-                      key={tester.id || tester.name}
-                      className={`liquid-glass-panel rounded-2xl p-3.5 border transition-all duration-200 shadow-lg ${
-                        isActive
-                          ? 'border-blue-500/40 bg-[#162033] ring-1 ring-blue-500/25'
-                          : 'border-slate-800 bg-[#111827] hover:border-slate-700'
-                      }`}
-                    >
-                      {/* Compact Card Row 1: Avatar + Name/Role + Live Status Badge & Actions */}
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <div className={`w-8 h-8 rounded-xl font-bold text-xs flex items-center justify-center border flex-shrink-0 ${
-                            isActive
-                              ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
-                              : 'bg-slate-800 text-slate-200 border-slate-700'
-                          }`}>
-                            {tester.name.charAt(0).toUpperCase()}
-                          </div>
-                          <div className="truncate">
-                            <div className="flex items-center gap-1.5">
-                              <h4 className="text-xs font-bold text-slate-50 truncate">{tester.name}</h4>
-                              <span className="text-[10px] text-slate-400 font-medium truncate hidden sm:inline">• {tester.role || 'QA'}</span>
-                            </div>
-                            {/* Active or Idle Status Line */}
-                            <div className="flex items-center gap-1.5 mt-0.5">
-                              {isActive ? (
-                                activeInfo?.isAway ? (
-                                  <span className="text-[10px] font-bold text-amber-300 flex items-center gap-1">
-                                    <Clock className="w-2.5 h-2.5 text-amber-400" />
-                                    Away on {activeInfo?.deviceName || 'Device'}
-                                  </span>
+                      return (
+                        <div
+                          key={tester.id || tester.name}
+                          onClick={() => setSelectedInspectorTester(tester.name)}
+                          className={`grid grid-cols-1 md:grid-cols-[200px_1fr_90px_105px_115px] items-center gap-2.5 px-3.5 py-2.5 text-xs transition cursor-pointer ${
+                            isSelected
+                              ? 'bg-[#13203a] shadow-[inset_3px_0_0_#3b82f6]'
+                              : 'hover:bg-[#111b30]'
+                          }`}
+                        >
+                          {/* Column 1: Tester & Live State */}
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <span
+                              className={`w-7 h-7 rounded-lg text-[11.5px] font-extrabold inline-flex items-center justify-center border flex-shrink-0 ${
+                                tester.isActive
+                                  ? tester.activeInfo?.isAway
+                                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/45'
+                                    : 'bg-blue-600 text-white border-blue-400'
+                                  : 'bg-slate-800 text-slate-200 border-slate-700'
+                              }`}
+                            >
+                              {tester.name.charAt(0).toUpperCase()}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate">
+                                <b className="text-white font-bold">{tester.name}</b>{' '}
+                                <span className="text-[10.5px] text-slate-500">· {roleLabel}</span>
+                              </div>
+                              {tester.isActive && tester.activeInfo ? (
+                                tester.activeInfo.isAway ? (
+                                  <div className="text-[10.5px] text-amber-300 font-semibold truncate">
+                                    ● Away on {tester.activeInfo.deviceName || 'Device'}
+                                    {tester.activeInfo.startedAt ? ` (${formatOngoingDuration(tester.activeInfo.startedAt)})` : ''} · {tester.activeInfo.currentStepIndex}/{tester.activeInfo.totalSteps}
+                                  </div>
                                 ) : (
-                                  <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                                    Active on {activeInfo?.deviceName || 'Device'}
-                                  </span>
+                                  <div className="text-[10.5px] text-emerald-400 font-semibold truncate">
+                                    ● Active on {tester.activeInfo.deviceName || 'Device'} · Step {tester.activeInfo.currentStepIndex}/{tester.activeInfo.totalSteps} ({tester.activeInfo.progressPct || 0}%)
+                                  </div>
                                 )
+                              ) : tester.dayData.completedCount > 0 ? (
+                                <div className="text-[10.5px] text-slate-400 truncate">
+                                  Idle · Last run {tester.lastRun?.completedAtFormatted || 'today'}
+                                </div>
                               ) : (
-                                <span className="text-[10px] font-medium text-slate-500">Idle</span>
-                              )}
-                              {isActive && activeInfo?.startedAt && (
-                                <span className="text-[10px] font-mono font-bold text-blue-300 bg-blue-950/60 px-1.5 py-0.2 rounded border border-blue-500/30">
-                                  {formatOngoingDuration(activeInfo.startedAt)}
-                                </span>
+                                <div className="text-[10.5px] text-slate-500 truncate">
+                                  Idle · Off-shift (0 runs)
+                                </div>
                               )}
                             </div>
+                          </div>
+
+                          {/* Column 2: Device Quota Attribution */}
+                          <div className="flex items-center gap-1 flex-wrap">
+                            {tester.devicePills.length > 0 ? (
+                              tester.devicePills.map(pill => (
+                                <span
+                                  key={pill.key}
+                                  className={`font-mono text-[10px] font-bold px-1.5 py-0.5 rounded border inline-flex items-center gap-1 ${
+                                    pill.isDone
+                                      ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                                      : 'bg-[#152238] text-[#93c5fd] border-[#24385c]'
+                                  }`}
+                                >
+                                  {pill.label}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-[10.5px] text-slate-600 font-mono">—</span>
+                            )}
+                          </div>
+
+                          {/* Column 3: Runs Done */}
+                          <div className="font-mono">
+                            <b className="text-white text-[13.5px]">{tester.dayData.completedCount}</b>{' '}
+                            <span className="text-[10.5px] text-slate-400 font-sans">
+                              run{tester.dayData.completedCount === 1 ? '' : 's'}
+                            </span>
+                          </div>
+
+                          {/* Column 4: Bugs Logged */}
+                          <div>
+                            {tester.bugCount > 0 ? (
+                              <button
+                                type="button"
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  setActiveTab('bugs');
+                                }}
+                                className="inline-flex items-center gap-1 text-[10.5px] font-bold px-2 py-0.5 rounded-full bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-mono transition cursor-pointer"
+                                title={`View ${tester.bugCount} bug${tester.bugCount === 1 ? '' : 's'} logged by ${tester.name}`}
+                              >
+                                <span>🐛 {tester.bugCount} bug{tester.bugCount === 1 ? '' : 's'} ↗</span>
+                              </button>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-[10.5px] font-bold px-2 py-0.5 rounded-full bg-[#111827] text-slate-500 border border-slate-800 font-mono">
+                                0 bugs
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Column 5: Avg Pace / Floor */}
+                          <div className="text-right font-mono text-[10.5px]">
+                            <b className="text-[#93c5fd]">{tester.avgFormatted !== '—' ? `${tester.avgFormatted} avg` : '—'}</b>
+                            <div className="text-slate-500">{tester.floorTimeFormatted} floor</div>
                           </div>
                         </div>
+                      );
+                    })}
+                  </div>
 
-                        {/* Right Actions: Boot & Delete */}
-                        <div className="flex items-center gap-1 flex-shrink-0">
-                          {isActive && onBootTester && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (confirm(`Remote Boot: Kick "${tester.name}" off "${activeInfo?.deviceName || 'device'}" and release device? (Completed runs today will NOT be deleted)`)) {
-                                  onBootTester(activeInfo?.runId || '', activeInfo?.deviceId, tester.name, activeInfo?.deviceName);
-                                }
-                              }}
-                              className="px-2 py-1 rounded-lg text-[10px] font-bold bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 flex items-center gap-1 transition cursor-pointer"
-                              title={`Remote boot ${tester.name} off session`}
-                            >
-                              <Trash2 className="w-2.5 h-2.5 text-rose-400" />
-                              <span>Boot</span>
-                            </button>
-                          )}
+                  {/* Collapsible Off-Shift Footer */}
+                  {testerViewMode === 'tested' && testedTesters.length > 0 && offShiftTesters.length > 0 && !searchTesterQuery.trim() && (
+                    <div className="px-3.5 py-2 bg-[#0a101d] border-t border-[#162033] text-[11px] text-slate-500 flex items-center justify-between gap-2">
+                      <span>
+                        + {offShiftTesters.length} off-shift tester{offShiftTesters.length === 1 ? '' : 's'} with 0 runs on {dateScopeLabel} {showOffShiftTesters ? 'shown above' : 'are tucked away'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowOffShiftTesters(prev => !prev)}
+                        className="text-[#93c5fd] hover:text-white font-bold cursor-pointer"
+                      >
+                        {showOffShiftTesters
+                          ? 'Hide off-shift testers ▴'
+                          : `Show ${offShiftTesters.length} off-shift tester${offShiftTesters.length === 1 ? '' : 's'} ▾`}
+                      </button>
+                    </div>
+                  )}
+                </div>
 
+                {/* Right: Docked Shift-Log Inspector */}
+                {inspectedTester && (
+                  <div className="bg-[#10192d] border border-[#263859] rounded-2xl p-3.5 flex flex-col gap-2.5 shadow-xl">
+                    <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span
+                          className={`w-7 h-7 rounded-lg text-[11.5px] font-extrabold inline-flex items-center justify-center border flex-shrink-0 ${
+                            inspectedTester.isActive
+                              ? inspectedTester.activeInfo?.isAway
+                                ? 'bg-amber-500/20 text-amber-300 border-amber-500/45'
+                                : 'bg-blue-600 text-white border-blue-400'
+                              : 'bg-slate-800 text-slate-200 border-slate-700'
+                          }`}
+                        >
+                          {inspectedTester.name.charAt(0).toUpperCase()}
+                        </span>
+                        <div className="min-w-0">
+                          <div className="text-[13.5px] font-bold text-white truncate">
+                            {inspectedTester.name} · Shift Inspector
+                          </div>
+                          <div className="text-[10.5px] text-slate-400 truncate">
+                            {inspectedTester.dayData.completedCount} Completed ·{' '}
+                            {inspectedTester.isActive
+                              ? `1 Active on ${inspectedTester.activeInfo?.deviceName || 'Device'}`
+                              : 'Idle'}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        {inspectedTester.isActive && onBootTester && (
                           <button
                             type="button"
                             onClick={() => {
-                              if (confirm(`Delete tester "${tester.name}" and all associated performance data?`)) {
-                                if (tester.id && onDeleteTesterProfile) {
-                                  onDeleteTesterProfile(tester.id);
-                                }
-                                if (onDeleteTester) {
-                                  onDeleteTester(tester.name);
-                                } else if (onDeleteTestRun) {
-                                  const runsToDelete = [...testRuns, ...archivedRuns].filter(r => r.testerName === tester.name);
-                                  runsToDelete.forEach(r => onDeleteTestRun(r.id));
-                                }
+                              if (
+                                confirm(
+                                  `Remote Boot: Kick "${inspectedTester.name}" off "${inspectedTester.activeInfo?.deviceName || 'device'}" and release device? (Completed runs today will NOT be deleted)`
+                                )
+                              ) {
+                                onBootTester(
+                                  inspectedTester.activeInfo?.runId || '',
+                                  inspectedTester.activeInfo?.deviceId,
+                                  inspectedTester.name,
+                                  inspectedTester.activeInfo?.deviceName
+                                );
                               }
                             }}
-                            className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
-                            title={`Delete tester ${tester.name}`}
+                            className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/35 flex items-center gap-1 transition cursor-pointer"
+                            title={`Remote boot ${inspectedTester.name} off session`}
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Boot {inspectedTester.activeInfo?.deviceName || ''}</span>
                           </button>
-                        </div>
-                      </div>
-
-                      {/* Compact Live Active Test Walkthrough Strip (Only when actively testing) */}
-                      {isActive && activeInfo && (
-                        <div className="mt-2.5 bg-[#0f172a] border border-slate-800 rounded-xl p-2 space-y-1.5">
-                          <div className="flex items-center justify-between text-[10px] gap-2">
-                            <span className="text-blue-300 font-bold truncate flex items-center gap-1">
-                              <Layers className="w-3 h-3 text-blue-400 shrink-0" />
-                              <span className="truncate">{activeInfo.planName || 'Walkthrough'}</span>
-                            </span>
-                            <span className="font-mono font-bold text-slate-300 shrink-0">
-                              Step {activeInfo.currentStepIndex}/{activeInfo.totalSteps} ({activeInfo.progressPct || 0}%)
-                            </span>
-                          </div>
-
-                          {activeInfo.currentStepTitle && (
-                            <div className="text-[10px] text-slate-300 font-medium truncate" title={activeInfo.currentStepTitle}>
-                              ↳ {activeInfo.currentStepTitle}
-                            </div>
-                          )}
-
-                          <div className="flex items-center justify-between gap-2 pt-0.5">
-                            <div className="flex items-center gap-1 text-[9px] font-mono">
-                              <span className="text-emerald-400 bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-800/50">✓{activeInfo.greenCount || 0}</span>
-                              <span className="text-amber-400 bg-amber-950/80 px-1.5 py-0.5 rounded border border-amber-800/50">!{activeInfo.yellowCount || 0}</span>
-                              <span className="text-rose-400 bg-rose-950/80 px-1.5 py-0.5 rounded border border-rose-800/50">✗{activeInfo.redCount || 0}</span>
-                            </div>
-                            <div className="flex-1 bg-slate-900 h-1.5 rounded-full overflow-hidden">
-                              <div
-                                className="bg-blue-500 h-full transition-all duration-300"
-                                style={{ width: `${activeInfo.progressPct || 0}%` }}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Compact Inline KPI & Accordion Trigger Strip */}
-                      <div className="mt-2.5 pt-2 border-t border-slate-800 flex items-center justify-between gap-2 text-[11px]">
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          <div className="flex items-center gap-1">
-                            <span className="text-[10px] text-slate-400 font-semibold">Plans:</span>
-                            <span className="font-bold text-slate-100 font-mono">{dayData.completedCount}</span>
-                          </div>
-
-                          <div className="flex items-center gap-1">
-                            <span className="text-[10px] text-slate-400 font-semibold">Avg:</span>
-                            <span className="font-bold text-blue-300 font-mono">{avgFormatted}</span>
-                          </div>
-
-                          <div className="flex items-center gap-1 truncate min-w-0">
-                            <span className="text-[10px] text-slate-400 font-semibold">Dev:</span>
-                            <span className="font-bold text-slate-300 font-mono truncate" title={devicesStr}>{devicesStr}</span>
-                          </div>
-                        </div>
+                        )}
 
                         <button
                           type="button"
-                          onClick={() => toggleTesterExpand(tester.name)}
-                          className="px-2 py-0.5 bg-[#0f172a] hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg border border-slate-800 text-[10px] font-bold flex items-center gap-1 transition cursor-pointer shrink-0"
+                          onClick={() => {
+                            if (confirm(`Delete tester "${inspectedTester.name}" and all associated performance data?`)) {
+                              if (inspectedTester.id && onDeleteTesterProfile) {
+                                onDeleteTesterProfile(inspectedTester.id);
+                              }
+                              if (onDeleteTester) {
+                                onDeleteTester(inspectedTester.name);
+                              } else if (onDeleteTestRun) {
+                                const runsToDelete = [...testRuns, ...archivedRuns].filter(
+                                  r => r.testerName === inspectedTester.name
+                                );
+                                runsToDelete.forEach(r => onDeleteTestRun(r.id));
+                              }
+                            }
+                          }}
+                          className="p-1.5 rounded-lg border border-[#26334d] bg-[#131c31] text-slate-400 hover:text-rose-400 hover:border-rose-500/40 transition cursor-pointer"
+                          title={`Delete tester ${inspectedTester.name}`}
                         >
-                          <span>{isExpanded ? 'Hide' : `Runs (${completedRunsList.length})`}</span>
-                          <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isExpanded ? 'rotate-180 text-blue-400' : ''}`} />
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
+                    </div>
 
-                      {/* Expandable Compact Accordion: Completed Test Runs Breakdown */}
-                      <div className={`liquid-accordion-wrapper ${isExpanded ? 'expanded' : ''}`}>
-                        <div className="liquid-accordion-inner">
-                          <div className="mt-2 pt-2 border-t border-slate-800 space-y-1.5">
-                            {completedRunsList.length === 0 ? (
-                              <div className="bg-[#0f172a] py-2 px-3 rounded-lg text-center text-[11px] text-slate-500">
-                                No runs recorded for {selectedQaDate === todayStr ? 'today' : selectedQaDate}.
-                              </div>
-                            ) : (
-                              <div className="space-y-1 max-h-44 overflow-y-auto pr-1">
-                                {completedRunsList.map((runItem, idx) => (
-                                  <div key={runItem.runId + idx} className="bg-[#0f172a] px-2.5 py-1.5 rounded-lg border border-slate-800/80 flex items-center justify-between text-[11px] gap-2">
-                                    <div className="truncate flex-1">
-                                      <div className="font-bold text-slate-200 truncate">{runItem.planName}</div>
-                                      <div className="flex items-center gap-1.5 text-[10px] text-slate-400 font-mono">
-                                        <span className="text-slate-300">{runItem.deviceName}</span>
-                                        <span>•</span>
-                                        <span>{runItem.completedAtFormatted}</span>
-                                        <span>•</span>
-                                        <span className="text-blue-300">{runItem.durationFormatted}</span>
-                                      </div>
-                                    </div>
-
-                                    <div className="flex items-center gap-1.5 shrink-0">
-                                      <div className="flex items-center gap-1 text-[10px] font-mono">
-                                        <span className="text-emerald-400 font-bold">✓{runItem.greenCount}</span>
-                                        {runItem.yellowCount > 0 && <span className="text-amber-400 font-bold">!{runItem.yellowCount}</span>}
-                                        {runItem.redCount > 0 && <span className="text-rose-400 font-bold">✗{runItem.redCount}</span>}
-                                      </div>
-
-                                      {onDeleteTestRun && (
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            if (confirm(`Delete run record for "${runItem.planName}"?`)) {
-                                              onDeleteTestRun(runItem.runId);
-                                            }
-                                          }}
-                                          className="p-0.5 text-slate-500 hover:text-rose-400 rounded transition-colors cursor-pointer"
-                                          title="Delete this test run record"
-                                        >
-                                          <Trash2 className="w-3 h-3" />
-                                        </button>
-                                      )}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
+                    {/* Live Session Card */}
+                    {inspectedTester.isActive && inspectedTester.activeInfo && (
+                      <div className="bg-[#0c1629] border border-blue-500/40 rounded-xl p-2.5 text-[10.5px] space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <b className="text-[#93c5fd] truncate">
+                            ● {inspectedTester.activeInfo.isAway ? 'AWAY' : 'LIVE'} ON{' '}
+                            {inspectedTester.activeInfo.deviceName || 'DEVICE'} ·{' '}
+                            {inspectedTester.activeInfo.planName || 'Walkthrough'}
+                          </b>
+                          <span className="font-mono text-white font-bold shrink-0">
+                            Step {inspectedTester.activeInfo.currentStepIndex}/{inspectedTester.activeInfo.totalSteps} (
+                            {inspectedTester.activeInfo.progressPct || 0}%)
+                            {inspectedTester.activeInfo.startedAt
+                              ? ` · ${formatOngoingDuration(inspectedTester.activeInfo.startedAt)}`
+                              : ''}
+                          </span>
+                        </div>
+                        {inspectedTester.activeInfo.currentStepTitle && (
+                          <div className="text-slate-400 truncate" title={inspectedTester.activeInfo.currentStepTitle}>
+                            ↳ {inspectedTester.activeInfo.currentStepTitle}
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between gap-2 pt-0.5">
+                          <span className="font-mono flex items-center gap-2">
+                            <span className="text-emerald-400 font-bold">✓{inspectedTester.activeInfo.greenCount || 0}</span>
+                            <span className="text-amber-400 font-bold">!{inspectedTester.activeInfo.yellowCount || 0}</span>
+                            <span className="text-rose-400 font-bold">✗{inspectedTester.activeInfo.redCount || 0}</span>
+                          </span>
+                          <div className="flex-1 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                              style={{ width: `${inspectedTester.activeInfo.progressPct || 0}%` }}
+                            />
                           </div>
                         </div>
                       </div>
+                    )}
 
+                    {/* Completed Runs Header & List */}
+                    <div className="text-[10.5px] text-slate-500 font-bold uppercase tracking-wider mt-0.5">
+                      Completed Runs {selectedQaDate === todayStr ? 'Today' : `(${dateScopeLabel})`} (
+                      {inspectedTester.completedRunsList.length})
                     </div>
-                  );
-                })}
-              </div>
-            );
-          })()}
 
-        </div>
-      )}
+                    {inspectedTester.completedRunsList.length === 0 ? (
+                      <div className="bg-[#0c1322] border border-[#1c273d] rounded-xl p-4 text-center text-[11px] text-slate-500">
+                        No completed runs recorded for {selectedQaDate === todayStr ? 'today' : dateScopeLabel}.
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5 max-h-[420px] overflow-y-auto pr-1">
+                        {inspectedTester.completedRunsList.map((runItem, idx) => (
+                          <div
+                            key={runItem.runId + idx}
+                            className="bg-[#0c1322] border border-[#1c273d] rounded-lg px-2.5 py-2 flex items-center justify-between gap-2 text-[11px]"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="font-bold text-slate-200 truncate">{runItem.planName}</div>
+                              <div className="font-mono text-[10.5px] text-slate-400 truncate">
+                                <span className="text-slate-300">{runItem.deviceName}</span> ·{' '}
+                                <span>{runItem.completedAtFormatted}</span> ·{' '}
+                                <span className="text-[#93c5fd]">{runItem.durationFormatted}</span>
+                              </div>
+                            </div>
+
+                            <div className="font-mono text-[10.5px] flex items-center gap-1.5 shrink-0">
+                              <span className="text-emerald-400 font-bold">✓{runItem.greenCount}</span>
+                              {runItem.yellowCount > 0 && (
+                                <span className="text-amber-400 font-bold">!{runItem.yellowCount}</span>
+                              )}
+                              {runItem.redCount > 0 && (
+                                <span className="text-rose-400 font-bold">✗{runItem.redCount}</span>
+                              )}
+                              {onDeleteTestRun && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (confirm(`Delete run record for "${runItem.planName}"?`)) {
+                                      onDeleteTestRun(runItem.runId);
+                                    }
+                                  }}
+                                  className="p-0.5 text-slate-500 hover:text-rose-400 rounded transition-colors cursor-pointer ml-1"
+                                  title="Delete this test run record"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
 
       {/* Tab 1: Overview - Test Plans & Active Runs */}
