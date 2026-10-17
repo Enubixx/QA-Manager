@@ -2779,7 +2779,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           <div
                             key={dev.id}
                             onClick={() => setInspectorTarget({ type: 'device', id: dev.id })}
-                            className={`bg-[#0b1120] border rounded-xl p-3 flex flex-col gap-1.5 transition cursor-pointer ${
+                            className={`bg-[#0b1120] border rounded-xl p-3 flex flex-col gap-1.5 min-h-[115px] transition cursor-pointer ${
                               isSelected
                                 ? 'border-blue-500 ring-1 ring-blue-500/30'
                                 : 'border-[#1b2740] hover:border-slate-700'
@@ -2947,7 +2947,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         <button
                           type="button"
                           onClick={() => setIsActivateTileOpen(true)}
-                          className="bg-transparent border border-dashed border-[#1e2d4a] hover:border-slate-600 rounded-xl p-3 flex flex-col items-center justify-center gap-0.5 text-slate-500 hover:text-slate-300 transition cursor-pointer min-h-[96px]"
+                          className="bg-transparent border border-dashed border-[#1e2d4a] hover:border-slate-600 rounded-xl p-3 flex flex-col items-center justify-center gap-0.5 text-slate-500 hover:text-slate-300 transition cursor-pointer min-h-[115px]"
                         >
                           <span className="text-xs font-semibold">＋ Activate device</span>
                           <span className="text-[11px] text-slate-600 font-mono">
