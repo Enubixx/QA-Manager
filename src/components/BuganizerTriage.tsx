@@ -84,7 +84,6 @@ interface Props {
 
 type Layout = 'a' | 'b' | 'c';
 const LAYOUTS: Layout[] = ['a', 'b', 'c'];
-const LAYOUT_KEY = 'qa_buganizer_layout';
 type ItemKind = 'new' | 'repro' | 'bundle' | 'waiting' | 'filed';
 type ListFilter = 'all' | 'tofile' | 'reprod' | 'bundles' | 'waiting';
 type TabKey = 'tofile' | 'reprod' | 'bundles' | 'waiting' | 'filed';
@@ -196,17 +195,14 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
   const [editingBundle, setEditingBundle] = useState<{ id: string; keep: Set<string> } | null>(null);
   const [waitingIssue, setWaitingIssue] = useState<Record<string, string>>({});
 
-  // Layout A (one list) / B (tabs) / C (list + side panel); ?layout=a|b|c wins, else the saved choice.
-  const [layout, setLayoutState] = useState<Layout>(() => {
+  // Layout B (tabs) is the layout; ?layout=a (one list) or ?layout=c (list + side panel) are hidden fallbacks.
+  const [layout] = useState<Layout>(() => {
     try {
       const q = new URLSearchParams(window.location.search).get('layout');
-      if (q && LAYOUTS.includes(q as Layout)) return q as Layout;
-      const saved = localStorage.getItem(LAYOUT_KEY);
-      if (saved && LAYOUTS.includes(saved as Layout)) return saved as Layout;
+      if (q === 'a' || q === 'c') return q;
     } catch { /* ignore */ }
-    return 'a';
+    return 'b';
   });
-  const setLayout = (l: Layout) => { setLayoutState(l); try { localStorage.setItem(LAYOUT_KEY, l); } catch { /* ignore */ } };
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
   const [listFilter, setListFilter] = useState<ListFilter>('all');
   const [tab, setTab] = useState<TabKey>('tofile');
@@ -214,6 +210,15 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const rx95ChipRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!detailsOpen) return;
+    const close = (e: MouseEvent) => { if (rx95ChipRef.current && !rx95ChipRef.current.contains(e.target as Node)) setDetailsOpen(false); };
+    const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setDetailsOpen(false); };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', onEsc);
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', onEsc); };
+  }, [detailsOpen]);
   const [allMatches, setAllMatches] = useState<Set<string>>(new Set());
 
   // RX95 background worker heartbeat: fresh => the in-tab auto engines stay off (fallback only).
@@ -1338,6 +1343,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
     const tof = filterChip('tofile', 'tofile');
     return (
       <div className="flex flex-wrap items-center gap-2" data-testid="status-chips">
+        <div className="relative" ref={rx95ChipRef}>
         {workerFresh ? (
           <button type="button" data-testid="rx95-worker-bar" className={`${chipCls} ${chipOff}`} onClick={() => setDetailsOpen(v => !v)}
             title={`RX95 is working in the background. ${jobsInProgress} job(s) in progress · ${waitingCount} waiting for Buganizer.`}>
@@ -1349,6 +1355,8 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
             <span className="w-[7px] h-[7px] rounded-full bg-slate-500" /><b className="text-white">RX95</b> · {refineText}
           </button>
         )}
+          {renderStatusDetails()}
+        </div>
         {layout === 'c' && (
           <button type="button" data-testid="chip-tofile" className={`${chipCls} ${tof.on ? chipOn : chipOff}`} onClick={tof.click}>To file <b className="text-white">{toFileItems.length}</b></button>
         )}
@@ -1380,7 +1388,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
 
   /** Details behind the RX95 chip: the old status bars, so errors / Retry / Auto-refine stay reachable. */
   const renderStatusDetails = () => detailsOpen && (
-    <div className="rounded-2xl border border-slate-800 bg-[#0f172a] px-4 py-3 text-xs text-slate-200 space-y-2" data-testid="status-details">
+    <div className="absolute left-0 top-full mt-2 z-30 w-[min(92vw,520px)] rounded-2xl border border-slate-700 bg-[#0f172a] px-4 py-3 text-xs text-slate-200 space-y-2 shadow-2xl" data-testid="status-details">
       {workerFresh ? (
         <p><b>RX95 is working in the background.</b> New reports are cleaned up and checked as they come in. Last sync {Math.round(hbAgeSec)}s ago · {jobsInProgress} job{jobsInProgress === 1 ? '' : 's'} in progress · {waitingCount} waiting for Buganizer.</p>
       ) : (
@@ -1412,30 +1420,19 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
     </div>
   );
 
-  const renderLayoutSwitch = () => (
-    <div data-testid="layout-switch" className="inline-flex items-center rounded-full border border-slate-700 bg-[#141c2f] p-0.5 text-[11.5px]">
-      <span className="px-2 text-slate-400">Layout</span>
-      {LAYOUTS.map(l => (
-        <button key={l} type="button" data-testid={`layout-${l}`} aria-pressed={layout === l}
-          className={`px-2.5 py-0.5 rounded-full font-bold ${layout === l ? 'bg-blue-600 text-white' : 'text-slate-300 hover:text-white'}`}
-          onClick={() => setLayout(l)}>{l.toUpperCase()}</button>
-      ))}
-    </div>
-  );
-
   const searchBox = (
     <div className="relative">
       <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2" />
-      <input aria-label="Search" className={`${inputCls} pl-7 !w-44`} value={query} onChange={e => setQuery(e.target.value)} placeholder="Search…" />
+      <input aria-label="Search" className={`${inputCls} pl-7 !w-32`} value={query} onChange={e => setQuery(e.target.value)} placeholder="Search…" />
     </div>
   );
   const planSelect = (
-    <select aria-label="Plan filter" className={`${inputCls} !w-auto`} value={planId} onChange={e => setPlanId(e.target.value)}>
+    <select aria-label="Plan filter" className={`${inputCls} !w-auto max-w-[170px]`} value={planId} onChange={e => setPlanId(e.target.value)}>
       <option value="all">All plans</option>
       {planIds.map(p => <option key={p} value={p}>{planName(p)}</option>)}
     </select>
   );
-  const dayInput = <input aria-label="Day filter" type="date" className={`${inputCls} !w-auto`} value={day} onChange={e => setDay(e.target.value)} />;
+  const dayInput = <input aria-label="Day filter" type="date" className={`${inputCls} !w-[132px] [color-scheme:dark]`} value={day} onChange={e => setDay(e.target.value)} />;
 
   /** Filters ▾ popover (A and C): the full filter set. */
   const renderFiltersPopover = () => (
@@ -1562,9 +1559,7 @@ export default function BuganizerTriage({ bugs, plans, onApplyRefinements, onPat
         <div className="flex-1" />
         {layout === 'b' ? <>{planSelect}{dayInput}</> : renderFiltersPopover()}
         {searchBox}
-        {renderLayoutSwitch()}
       </div>
-      {renderStatusDetails()}
       {popupHelp}
 
       {layout === 'b' && (
