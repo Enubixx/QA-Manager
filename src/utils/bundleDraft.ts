@@ -262,7 +262,10 @@ export function shownSuggestions(sets: BundleSuggestionSet[], bugs: BugLog[], di
         .map(id => byId.get(id))
         .filter((b): b is BugLog => !!b && isBundleable(b) && (!set.planId || b.planId === set.planId) && !used.has(b.id))
         .sort(byTime);
-      const key = members[0] ? hotlistKey(members[0], planName) : '';
+      // Keep the hotlist most members go to (ties: the earliest report's)
+      const keyCount = new Map<string, number>();
+      members.forEach(m => { const k = hotlistKey(m, planName); keyCount.set(k, (keyCount.get(k) || 0) + 1); });
+      const key = members.map(m => hotlistKey(m, planName)).reduce((best, k) => ((keyCount.get(k) || 0) > (keyCount.get(best) || 0) ? k : best), members[0] ? hotlistKey(members[0], planName) : '');
       members = members.filter(m => hotlistKey(m, planName) === key);
       if (members.length < 2) continue;
       members.forEach(m => used.add(m.id));

@@ -150,6 +150,9 @@ export const fetchAllSupabaseData = async () => {
               refined: rowOwned.get(b.id)?.has('refined') ? existing.refined : existing.refined || b.refined,
               originalTimestamp: existing.originalTimestamp || b.originalTimestamp,
               status: existing.status || b.status,
+              // bug_logs has no bug_type / priority columns: the triage choices live in the run's JSON copy
+              bugType: existing.bugType || b.bugType,
+              priority: existing.priority || b.priority,
               // Worker-owned columns: when the row has the column, its value (including null = cleared) wins,
               // so e.g. a confirmed filing (file_pending set to null) isn't undone by a stale copy in the run JSON.
               filed: rowOwned.get(b.id)?.has('filed') ? existing.filed : existing.filed || b.filed,
@@ -157,7 +160,7 @@ export const fetchAllSupabaseData = async () => {
               filePending: rowOwned.get(b.id)?.has('file_pending') ? existing.filePending : existing.filePending || b.filePending,
               bundle: rowOwned.get(b.id)?.has('bundle') ? existing.bundle : existing.bundle || b.bundle,
             };
-            const keys = ['environment', 'title', 'refined', 'originalTimestamp', 'status', 'filed', 'reproMatches', 'filePending', 'bundle'] as const;
+            const keys = ['environment', 'title', 'refined', 'originalTimestamp', 'status', 'bugType', 'priority', 'filed', 'reproMatches', 'filePending', 'bundle'] as const;
             if (keys.some(k => merged[k] !== existing[k])) bugMap.set(b.id, merged);
           }
         }

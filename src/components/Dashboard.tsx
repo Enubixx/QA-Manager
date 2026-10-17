@@ -1591,6 +1591,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     if (searchBugQuery.trim()) {
       const q = searchBugQuery.toLowerCase();
       list = list.filter(b =>
+        (b.title || '').toLowerCase().includes(q) ||
         (b.note || '').toLowerCase().includes(q) ||
         (b.stepTitle || '').toLowerCase().includes(q) ||
         (b.testerName || '').toLowerCase().includes(q) ||
@@ -1628,6 +1629,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
   // ---------- RX95 same-day duplicate groups (Bugs Feed) ----------
   const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(() => loadDismissed());
   const [expandedFeedBundles, setExpandedFeedBundles] = useState<Set<string>>(new Set());
+  const [suggestionsCollapsed, setSuggestionsCollapsed] = useState(false);
+  // Bug ids being bundled right now (guards a fast double-click before React re-renders)
+  const bundlingIdsRef = useRef<Set<string>>(new Set());
   const [feedToast, setFeedToast] = useState<string | null>(null);
   const flashFeed = (msg: string) => { setFeedToast(msg); setTimeout(() => setFeedToast(null), 4000); };
   const planNameById = (id?: string) => testPlans.find(p => p.id === id)?.name;
@@ -1644,6 +1648,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rx95Suggestions, bugLogs, dismissedSuggestions, processedBugs, testPlans]);
   const processedBugById = useMemo(() => new Map<string, BugLog>(processedBugs.map(b => [b.id, b as BugLog])), [processedBugs]);
+  /** Buganizer tab gets the feed's Bug Type / Priority (this browser's choices win), so mega-bug drafts use them. */
+  const buganizerBugs = useMemo(() => bugLogs.map(b => {
+    const cat = bugCategorizations[b.id];
+    if (!cat || (!cat.bugType && !cat.priority)) return b;
+    return { ...b, bugType: cat.bugType || b.bugType, priority: cat.priority || b.priority };
+  }), [bugLogs, bugCategorizations]);
   const suggestionByBugId = useMemo(() => {
     const m = new Map<string, ShownSuggestion>();
     feedSuggestions.forEach(x => x.members.forEach(b => m.set(b.id, x)));
@@ -1651,18 +1661,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
   }, [feedSuggestions]);
 
   const jumpToSuggestion = (sugId: string) => {
-    const el = document.getElementById(`feed-sug-${sugId}`);
-    if (!el) return;
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    el.classList.add('ring-2', 'ring-violet-400');
-    setTimeout(() => el.classList.remove('ring-2', 'ring-violet-400'), 1400);
+    const go = () => {
+      const el = document.getElementById(`feed-sug-${sugId}`);
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('ring-2', 'ring-violet-400');
+      setTimeout(() => el.classList.remove('ring-2', 'ring-violet-400'), 1400);
+    };
+    if (suggestionsCollapsed) { setSuggestionsCollapsed(false); setTimeout(go, 50); } else go();
   };
 
   /** Option A: one category for every ticked report, then bundle them into one bug. */
   const handleCategorizeAndBundle = (members: BugLog[], title: string, summary: string | undefined, cat: GroupCategory) => {
     const current = members.map(m => bugById.get(m.id) || m).filter(isBundleable);
+    if (current.some(m => bundlingIdsRef.current.has(m.id))) return; // second click of a double-click
     if (current.length < 2) return flashFeed('Pick at least two unfiled reports to bundle.');
     if (!sameHotlist(current, planNameById)) return flashFeed("Can't bundle these: they're from test plans linked to different hotlists.");
+    current.forEach(m => bundlingIdsRef.current.add(m.id));
+    setTimeout(() => current.forEach(m => bundlingIdsRef.current.delete(m.id)), 3000);
     const bundle = newBundle(current.map(m => m.id), title, summary, 'rx95');
     setBugCategorizations(prev => {
       const updated = { ...prev };
@@ -1706,7 +1722,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const first = row.members[0];
     const bd = first.bundle!;
     const total = bd.memberIds?.length || row.members.length;
-    const pri = String(first.priority || 'P2');
+    // Header sums up all visible members: highest priority, most common type, Repro'd if any member is
+    const rank = (p?: string) => (p === 'P0' || p === '0' ? 0 : p === 'P1' || p === '1' ? 1 : 2);
+    const pri = ['P0', 'P1', 'P2'][Math.min(...row.members.map(m => rank(String(m.priority || 'P2'))))];
+    const typeCounts = new Map<string, number>();
+    row.members.forEach(m => { const t = m.bugType || 'Bug'; typeCounts.set(t, (typeCounts.get(t) || 0) + 1); });
+    const bugTypeLabel = Array.from(typeCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Bug';
+    const anyReprod = row.members.some(m => effectiveStatus(m.status) === REPROD);
     const testersN = new Set(row.members.map(m => (m.testerName || '').trim()).filter(Boolean)).size;
     const allFiled = row.members.every(m => effectiveFiled(bugById.get(m.id) || m));
     const waiting = !allFiled && row.members.some(m => (bugById.get(m.id) || m).filePending);
@@ -1719,8 +1741,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </button>
           <span className="text-xs px-2.5 py-1 rounded-xl border border-violet-500/50 bg-violet-500/15 text-violet-200 font-bold">🧩 Bundle · {total} reports</span>
           <span className={`font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold uppercase ${pri === 'P0' || pri === '0' ? 'bg-rose-500/20 text-rose-300 border-rose-500/40' : pri === 'P1' || pri === '1' ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' : 'bg-slate-800 text-slate-300 border-slate-700'}`}>{pri}</span>
-          <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border border-slate-700 bg-slate-800 text-slate-300">{first.bugType || 'Bug'}</span>
-          {effectiveStatus(first.status) === REPROD && <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold bg-violet-500/15 text-violet-200 border-violet-500/40">REPRO'D</span>}
+          <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border border-slate-700 bg-slate-800 text-slate-300">{bugTypeLabel}</span>
+          {anyReprod && <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold bg-violet-500/15 text-violet-200 border-violet-500/40">REPRO'D</span>}
           {allFiled && <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-black tracking-wider bg-green-500/15 text-green-300 border-green-500/40">FILED</span>}
           {waiting && <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold bg-amber-500/15 text-amber-200 border-amber-500/40">⏳ WAITING</span>}
           <span className="text-xs text-slate-400">{testersN} tester{testersN === 1 ? '' : 's'}{row.members.length < total ? ` · ${row.members.length} shown` : ''}</span>
@@ -3966,7 +3988,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
       {activeTab === 'bugs' && BUGANIZER_ENABLED && bugsView === 'buganizer' && (
-        <BuganizerTriage bugs={bugLogs} plans={testPlans} onApplyRefinements={onApplyBugRefinements} onPatchBugLog={onPatchBugLog} onPatchBugLogs={onPatchBugLogs} onApplyReproMatches={onApplyReproMatches} rx95Suggestions={rx95Suggestions} />
+        <BuganizerTriage bugs={buganizerBugs} plans={testPlans} onApplyRefinements={onApplyBugRefinements} onPatchBugLog={onPatchBugLog} onPatchBugLogs={onPatchBugLogs} onApplyReproMatches={onApplyReproMatches} rx95Suggestions={rx95Suggestions} />
       )}
 
       {/* Tab 3: Bugs Feed */}
@@ -4239,6 +4261,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
             dismissed={dismissedSuggestions}
             onDismissedChange={setDismissedSuggestions}
             onApply={handleCategorizeAndBundle}
+            collapsed={suggestionsCollapsed}
+            onCollapsedChange={setSuggestionsCollapsed}
           />
 
           <div className="space-y-3.5">
@@ -4342,8 +4366,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         })()}
                       </div>
 
-                      <div className="flex items-center gap-3 ml-auto">
-                        <div className="text-xs text-slate-300 max-w-xs md:max-w-md truncate font-medium">
+                      <div className="flex items-center gap-3 ml-auto min-w-0 max-w-full">
+                        <div className="text-xs text-slate-300 min-w-0 flex-1 max-w-xs md:max-w-md truncate font-medium">
                           {bug.title ? <span className="text-white font-semibold">{bug.title}</span> : bug.note}
                         </div>
 

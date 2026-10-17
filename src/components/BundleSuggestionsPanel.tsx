@@ -50,23 +50,30 @@ interface Props {
   onDismissedChange: (next: Set<string>) => void;
   /** Sets the category on every member and bundles them into one bug. */
   onApply: (members: BugLog[], title: string, summary: string | undefined, cat: GroupCategory) => void;
+  /** Cards hidden ("Hide suggestions"); controlled so the feed's "Review" chip can reopen them. */
+  collapsed: boolean;
+  onCollapsedChange: (collapsed: boolean) => void;
 }
+
+/** A suggestion's plan: from its reports (the set's planId can be empty). */
+const planOf = (x: ShownSuggestion) => x.members[0]?.planId || x.set.planId;
 
 /**
  * RX95 same-day duplicate groups on the Bugs Feed: tick the reports that are the same issue, pick one
  * Bug Type / Priority / Status for all of them, and bundle them into a single bug in one click.
  */
-export default function BundleSuggestionsPanel({ shown, bugsById, plans, dismissed, onDismissedChange, onApply }: Props) {
-  const [ticks, setTicks] = useState<Record<string, string[]>>({});
+export default function BundleSuggestionsPanel({ shown, bugsById, plans, dismissed, onDismissedChange, onApply, collapsed, onCollapsedChange }: Props) {
+  // Only the reports the user explicitly ticked/unticked; everything else uses the default (ticked unless "Unsure").
+  // Stored per report (not as a whole list) so filters and partial bundles never untick hidden reports.
+  const [tickOverrides, setTickOverrides] = useState<Record<string, Record<string, boolean>>>({});
   const [cats, setCats] = useState<Record<string, GroupCategory>>({});
-  const [collapsed, setCollapsed] = useState(false);
   const planName = (id?: string) => plans.find(p => p.id === id)?.name || id || 'Unknown plan';
 
   if (shown.length === 0) return null;
 
   const reports = shown.reduce((n, x) => n + x.members.length, 0);
   const days = Array.from(new Set(shown.map(x => x.set.day)));
-  const planIds = Array.from(new Set(shown.map(x => x.set.planId)));
+  const planIds = Array.from(new Set(shown.map(planOf).filter(Boolean)));
   const latest = shown.map(x => x.set.at).filter(Boolean).sort().pop();
 
   const dismiss = (id: string) => {
@@ -84,27 +91,26 @@ export default function BundleSuggestionsPanel({ shown, bugsById, plans, dismiss
           <span className="block text-violet-200/70 mt-0.5">Categorize and bundle each group once instead of setting Type / Priority / Status on every dupe.</span>
         </div>
         {latest && <span className="text-slate-400">checked {minutesAgo(latest)}</span>}
-        <button type="button" data-testid="feed-bundle-toggle" onClick={() => setCollapsed(c => !c)}
+        <button type="button" data-testid="feed-bundle-toggle" onClick={() => onCollapsedChange(!collapsed)}
           className="px-3 h-8 rounded-xl font-bold bg-violet-500/20 border border-violet-500/55 text-violet-50 hover:bg-violet-500/30">
           {collapsed ? `Review ${shown.length} group${shown.length === 1 ? '' : 's'}` : 'Hide suggestions'}
         </button>
       </div>
 
-      {!collapsed && shown.map(({ set, suggestion: sg, members: rawMembers, maybe }) => {
+      {!collapsed && shown.map(x => {
+        const { set, suggestion: sg, members: rawMembers, maybe } = x;
         const members = rawMembers.map(m => bugsById.get(m.id) || m);
-        const defaultTicked = members.filter(m => !maybe.has(m.id)).map(m => m.id);
-        const ticked = new Set(ticks[sg.id] ?? defaultTicked);
+        const overrides = tickOverrides[sg.id] || {};
+        const isTicked = (id: string) => overrides[id] ?? !maybe.has(id);
+        const ticked = new Set(members.filter(m => isTicked(m.id)).map(m => m.id));
         const tickedMembers = members.filter(m => ticked.has(m.id));
         const cat = cats[sg.id] || defaultCategory(tickedMembers.length ? tickedMembers : members);
         const setCat = (patch: Partial<GroupCategory>) => setCats(prev => ({ ...prev, [sg.id]: { ...cat, ...patch } }));
-        const setTick = (id: string, on: boolean) => setTicks(prev => {
-          const cur = new Set(prev[sg.id] ?? defaultTicked);
-          if (on) cur.add(id); else cur.delete(id);
-          return { ...prev, [sg.id]: Array.from(cur) };
-        });
+        const setTick = (id: string, on: boolean) => setTickOverrides(prev => ({ ...prev, [sg.id]: { ...(prev[sg.id] || {}), [id]: on } }));
         const testersN = new Set(members.map(m => (m.testerName || '').trim()).filter(Boolean)).size;
         const devicesN = new Set(members.map(m => (m.deviceName || '').trim()).filter(Boolean)).size;
-        const hotlist = hotlistForPlan(set.planId, planName(set.planId));
+        const pid = planOf(x);
+        const hotlist = hotlistForPlan(pid, planName(pid));
         return (
           <div key={sg.id} id={`feed-sug-${sg.id}`} data-testid="feed-bundle-suggestion" className="rounded-[20px] border border-slate-800 bg-[#111827] p-4 transition-shadow">
             <div className="flex flex-wrap items-center gap-2 text-[11px]">
@@ -112,7 +118,7 @@ export default function BundleSuggestionsPanel({ shown, bugsById, plans, dismiss
               <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">{bundleCuj(members)}</span>
               <span className={`font-extrabold rounded-full px-2 py-0.5 border ${sg.confidence >= 80 ? 'bg-green-500/15 text-green-300 border-green-500/40' : 'bg-amber-500/15 text-amber-300 border-amber-500/40'}`}>Same issue · {Math.round(sg.confidence)}%</span>
               <span className="px-2 py-0.5 rounded-full border border-sky-500/40 bg-sky-500/10 text-sky-200" data-testid="feed-bundle-hotlist">
-                {hotlist ? `Hotlist: ${hotlist.name} · ${hotlist.hotlistId}` : `No hotlist · ${planName(set.planId)} only`}
+                {hotlist ? `Hotlist: ${hotlist.name} · ${hotlist.hotlistId}` : `No hotlist · ${planName(pid)} only`}
               </span>
               <span className="text-slate-400">{members.length} reports · {testersN} tester{testersN === 1 ? '' : 's'} · {devicesN} device{devicesN === 1 ? '' : 's'}</span>
             </div>
@@ -171,7 +177,12 @@ export default function BundleSuggestionsPanel({ shown, bugsById, plans, dismiss
 
             <div className="flex flex-wrap items-center gap-2 mt-3">
               <button type="button" data-testid="feed-suggestion-bundle" disabled={tickedMembers.length < 2}
-                onClick={() => onApply(tickedMembers, sg.title, sg.summary, cat)}
+                onClick={() => {
+                  onApply(tickedMembers, sg.title, sg.summary, cat);
+                  // Forget this card's edits: if it ever comes back (unbundle), it pre-fills from the reports again
+                  setCats(prev => { const n = { ...prev }; delete n[sg.id]; return n; });
+                  setTickOverrides(prev => { const n = { ...prev }; delete n[sg.id]; return n; });
+                }}
                 className="px-3 h-8 rounded-xl text-xs font-bold bg-violet-500/25 border border-violet-500/60 text-violet-50 hover:bg-violet-500/35 disabled:opacity-40 disabled:cursor-not-allowed">
                 🧩 Categorize &amp; bundle {tickedMembers.length} reports
               </button>
