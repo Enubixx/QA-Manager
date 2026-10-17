@@ -103,7 +103,7 @@ async function main() {
   const env = {
     RX95_SUPABASE_URL: BASE, RX95_ISSUES_CLI: path.join(HERE, 'fake-issues-cli.mjs'), FAKE_ISSUES_FILE: path.join(TMP, 'issues.json'),
     RX95_WORKER_SWEEP_MS: '4000', RX95_WORKER_HEARTBEAT_MS: '3000', RX95_WORKER_CONFIRM_MS: '3000', RX95_WORKER_COALESCE_MS: '1000',
-    RX95_FAKE_DELAY_MS: '2500', RX95_DESC_CACHE_FILE: path.join(TMP, 'desc-cache.json'), RX95_ARCHIVE_CHATS: '1',
+    RX95_FAKE_DELAY_MS: '2500', RX95_BUNDLE_QUIET_MS: '4000', RX95_BUNDLE_MAX_WAIT_MS: '15000', RX95_DESC_CACHE_FILE: path.join(TMP, 'desc-cache.json'), RX95_ARCHIVE_CHATS: '1',
   };
   run('bridge', ['tools/rx95-bridge/watcher.ts', '--mode=dev-supabase', '--requests=off', ...(args.has('--real-rx95') ? [] : ['--rx95=fake'])], env);
 
@@ -150,6 +150,7 @@ async function main() {
   const hb = await waitFor('heartbeat', async () => (await rows()).rx95_bundle_suggestions.rows.find((r: any) => r.id === '_heartbeat'), 30_000).catch(() => null);
   check('heartbeat row', !!hb && Date.now() - Date.parse(hb.payload.at) < 15_000 && typeof hb.payload.queues?.refine === 'number', hb ? JSON.stringify(hb.payload.queues) : 'none');
 
+
   // worker-owned columns only
   const wlog: any[] = await api('/__admin/log');
   const ownedCols = new Set(['refined', 'repro_matches', 'filed', 'file_pending', 'bundle']);
@@ -159,6 +160,33 @@ async function main() {
   check('minimal-row inserts use ignore-duplicates and only for JSON-only bugs', inserts.every(w => /ignore-duplicates/.test(w.prefer) && w.ids.every((id: string) => [B.jsonOnly.id, B.nul.id].includes(id))), `${inserts.length} insert(s)`);
   const runWrites = wlog.filter(w => ['test_runs', 'archived_runs'].includes(w.table));
   check('run JSON never written', runWrites.length === 0);
+
+  // ---- bundle debounce + partial store (Press plan-day; quiet 4 s / max wait 15 s in this test) ----
+  const P = (n: number, title: string) => bug(`bug-17922000002${n}0-pr0${n}`, { planId: PRESS, testRunId: 'run-e2e-p', title, note: `${title} (report ${n})`, testerName: `T${n}`, deviceName: `GM0${n}` });
+  const press = [P(1, 'Chimes play over answers'), P(2, 'Chimes play over answers'), P(3, 'Chimes play over answers'), P(4, 'Keep note saved in Korean'), P(5, 'Keep note saved in Korean'), P(6, 'Unique thing')];
+  const post = (r: any) => api('/rest/v1/bug_logs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(r) });
+  const patchNote = (id: string, note: string) => api(`/rest/v1/bug_logs?id=eq.${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ note }) });
+  const judging = () => logs.filter(l => l.includes(`bundle: judging ${PRESS}`)).length;
+  const before = judging();
+  for (const b of press) await post(toRow(b));
+  // keep the plan-day changing for ~10 s (less than the 15 s max wait): no run may start meanwhile
+  for (let i = 0; i < 7; i++) { await sleep(1500); await patchNote(press[5].id, `Unique thing, edit ${i}`); }
+  const duringChurn = judging() - before;
+  check('bundle debounce: no run while the plan-day keeps changing', duringChurn === 0, `${duringChurn} run(s) during churn`);
+  // after it goes quiet, one run starts; edit 1 of its 7 reports while RX95 is "reading" (fake 2.5 s)
+  await waitFor('press bundle run', async () => judging() > before, 40_000).catch(() => null);
+  await patchNote(press[3].id, 'Keep note saved in Korean - EDITED mid-run');
+  const partial = await waitFor('partial store', async () => logs.find(l => l.includes(`bundle: ${PRESS}`) && l.includes('partial')), 30_000).catch(() => null);
+  const prow = (await rows()).rx95_bundle_suggestions.rows.find((r: any) => r.id.startsWith(PRESS));
+  const kept = prow?.payload?.suggestions || [];
+  check('bundle partial store: >=80% unchanged -> kept, suggestions touching the edited report dropped',
+    !!partial && kept.some((sg: any) => [press[0].id, press[1].id, press[2].id].every(id => sg.memberIds.includes(id))) && !kept.some((sg: any) => sg.memberIds.includes(press[3].id)),
+    partial ? partial.replace(/^.*bundle: /, '').slice(0, 120) : 'no partial log');
+  await sleep(15_000);
+  const totalRuns = judging() - before;
+  check('bundle debounce: few runs overall (quiet re-run only)', totalRuns >= 1 && totalRuns <= 3, `${totalRuns} run(s)`);
+  const hb2 = (await rows()).rx95_bundle_suggestions.rows.find((r: any) => r.id === '_heartbeat');
+  check('heartbeat queues are job counts (+ reportsPending)', !!hb2 && hb2.payload.queues.bundle <= 2 && typeof hb2.payload.queues.reportsPending?.bundle === 'number', JSON.stringify(hb2?.payload?.queues));
 
   // load: a burst of 50 step taps (run results change, bug JSON doesn't) must not trigger reloads
   await sleep(3000);
@@ -172,7 +200,7 @@ async function main() {
   const gets = Object.entries(st).filter(([k]) => k.startsWith('GET '));
   const getReq = gets.reduce((n, [, v]) => n + v.requests, 0);
   const getBytes = gets.reduce((n, [, v]) => n + v.bytesOut, 0);
-  check('50 step taps: coalesced, no full reload (<=3 GETs, <20 KB read)', getReq <= 3 && getBytes < 20_000 && !st['GET bug_logs'], `${getReq} GET(s), ${getBytes} bytes: ${JSON.stringify(Object.fromEntries(gets))}`);
+  check('50 step taps: coalesced, no full reload (<=3 GETs, all by id, <20 KB read)', getReq <= 3 && getBytes < 20_000 && gets.every(([k]) => k.endsWith('(by id)')), `${getReq} GET(s), ${getBytes} bytes: ${JSON.stringify(Object.fromEntries(gets))}`);
 
   // degradation: drop file_pending + the suggestions table; worker must keep refining and not crash
   await api('/__admin/schema', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ table: 'bug_logs', drop: ['file_pending'] }) });

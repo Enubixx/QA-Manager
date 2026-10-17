@@ -143,7 +143,8 @@ const server = http.createServer((req, res) => {
   if (req.method === 'OPTIONS') return ok(res, 204);
   const url = new URL(req.url || '/', `http://127.0.0.1:${PORT}`);
   if (!url.pathname.startsWith('/__')) {
-    const key = `${req.method} ${url.pathname.replace('/rest/v1/', '')}`;
+    const byId = /(^|&)id=(eq|in)\./.test(url.search.slice(1));
+    const key = `${req.method} ${url.pathname.replace('/rest/v1/', '')}${byId ? ' (by id)' : ''}`;
     const end = res.end.bind(res) as (...a: any[]) => http.ServerResponse;
     (res as any).end = (chunk?: any, ...rest: any[]) => {
       const st = stats.get(key) || { requests: 0, bytesOut: 0 };
