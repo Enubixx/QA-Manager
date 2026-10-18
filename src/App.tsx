@@ -1038,7 +1038,9 @@ export function App() {
     }
   };
 
-  const handleDeleteTestRun = (runId: string) => {
+  // keepBugs: used when an in_progress run is superseded (tester switched device/plan).
+  // The run row is still removed so nothing stays stuck active, but its bugs are preserved.
+  const handleDeleteTestRun = (runId: string, options?: { keepBugs?: boolean }) => {
     markUserMutation();
     lastDeviceEditTimeRef.current = Date.now();
     const deletedRun = [...testRunsRef.current, ...archivedRunsRef.current].find(r => r.id === runId);
@@ -1058,13 +1060,15 @@ export function App() {
       } catch (e) {}
     }
 
-    // Cascade delete associated bug logs from state and Supabase
-    const embeddedBugIds = new Set((deletedRun?.bugLogs || []).map(b => b.id).filter(Boolean));
-    setBugLogs(prev => {
-      const toDelete = prev.filter(b => b.testRunId === runId || embeddedBugIds.has(b.id));
-      toDelete.forEach(b => deleteBugLogFromSupabase(b.id));
-      return prev.filter(b => b.testRunId !== runId && !embeddedBugIds.has(b.id));
-    });
+    // Cascade delete associated bug logs from state and Supabase (explicit deletes only)
+    if (!options?.keepBugs) {
+      const embeddedBugIds = new Set((deletedRun?.bugLogs || []).map(b => b.id).filter(Boolean));
+      setBugLogs(prev => {
+        const toDelete = prev.filter(b => b.testRunId === runId || embeddedBugIds.has(b.id));
+        toDelete.forEach(b => deleteBugLogFromSupabase(b.id));
+        return prev.filter(b => b.testRunId !== runId && !embeddedBugIds.has(b.id));
+      });
+    }
 
     // Release device if locked by this deleted run
     setDevices(prev => {

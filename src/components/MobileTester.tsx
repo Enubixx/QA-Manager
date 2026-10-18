@@ -34,7 +34,7 @@ interface MobileTesterProps {
   onAddPopulatedDevice: (device: string) => void;
   onSelectPlan: (planId: string) => void;
   onUpdateRun: (updatedRun: TestRun) => void;
-  onDeleteRun?: (runId: string) => void;
+  onDeleteRun?: (runId: string, options?: { keepBugs?: boolean }) => void;
   onLogBug: (bug: BugLog) => void;
   onDeleteBug: (bugId: string) => void;
   onRestartRun: (planId: string, ownRunId?: string) => void;
@@ -914,7 +914,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           if (oldRun.planId) localStorage.removeItem(`qa_in_progress_run_${oldRun.planId}`);
         } catch {}
         if (onDeleteRun) {
-          onDeleteRun(oldRun.id);
+          // Superseding (device/plan switch) must never delete the tester's logged bugs.
+          onDeleteRun(oldRun.id, { keepBugs: true });
         }
       });
 
