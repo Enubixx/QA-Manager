@@ -236,7 +236,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   if (localSavedRunJson) {
     try {
       localSavedRun = JSON.parse(localSavedRunJson);
-      const localAutoReason = localSavedRun ? getAutoReleaseReason(localSavedRun) : null;
+      const localAutoReason = localSavedRun ? getAutoReleaseReason(localSavedRun, Date.now(), undefined, bugLogs) : null;
       if (
         localSavedRun &&
         ((localSavedRun.status as any) !== 'in_progress' ||
@@ -307,7 +307,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     r.planId === currentPlan?.id && 
     r.status !== 'completed' &&
     (r.status as any) !== 'terminated' &&
-    getAutoReleaseReason(r) === null &&
+    getAutoReleaseReason(r, Date.now(), undefined, bugLogs) === null &&
     !archivedIdSet.has(r.id) &&
     !isTestRunDeleted(r.id) &&
     (!r.startedAt || getLocalDateStr(r.startedAt) === todayStr) &&
@@ -463,7 +463,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     activeRun &&
     activeRun.status === 'in_progress' &&
     getEffectiveRunStatus(activeRun, testPlans) === 'in_progress' &&
-    getAutoReleaseReason(activeRun) === null &&
+    getAutoReleaseReason(activeRun, Date.now(), undefined, bugLogs) === null &&
     !archivedIdSet.has(activeRun.id) &&
     !isTestRunDeleted(activeRun.id) &&
     activeRun.testerName?.trim() &&

@@ -291,6 +291,7 @@ export function App() {
   if (!initialSweepRef.current) {
     let rawRuns: TestRun[] = [];
     let rawDevices: DeviceProfile[] = [];
+    let rawBugs: BugLog[] = [];
     try {
       const savedRuns = localStorage.getItem('qa_test_runs');
       if (savedRuns) rawRuns = normalizeRuns(JSON.parse(savedRuns));
@@ -299,8 +300,12 @@ export function App() {
       const savedDevices = localStorage.getItem('qa_devices_list');
       if (savedDevices) rawDevices = normalizeDevices(JSON.parse(savedDevices));
     } catch {}
+    try {
+      const savedBugs = localStorage.getItem('qa_bug_logs');
+      if (savedBugs) rawBugs = normalizeBugs(JSON.parse(savedBugs));
+    } catch {}
     const combinedRuns = mergeLocalInProgressRuns(rawRuns);
-    const sweep = autoReleaseStuckSessions(combinedRuns, rawDevices, Date.now(), AUTO_RELEASE_IDLE_MINUTES);
+    const sweep = autoReleaseStuckSessions(combinedRuns, rawDevices, Date.now(), AUTO_RELEASE_IDLE_MINUTES, rawBugs);
     if (sweep.releasedRuns.length > 0 || sweep.releasedDevices.length > 0) {
       clearInProgressCacheForReleasedRuns(sweep.releasedRuns);
       safeSetStorageItem('qa_test_runs', JSON.stringify(sweep.testRuns));
@@ -552,7 +557,8 @@ export function App() {
   const runLocalAutoReleaseSweep = () => {
     const now = Date.now();
     const mergedRuns = mergeLocalInProgressRuns(testRunsRef.current);
-    const sweep = autoReleaseStuckSessions(mergedRuns, devicesRef.current, now, AUTO_RELEASE_IDLE_MINUTES);
+    const currentBugs = bugLogsRef.current;
+    const sweep = autoReleaseStuckSessions(mergedRuns, devicesRef.current, now, AUTO_RELEASE_IDLE_MINUTES, currentBugs);
     if (sweep.releasedRuns.length === 0 && sweep.releasedDevices.length === 0) return;
 
     const actuallyReleased: { run: TestRun; reason: 'previous-day' | 'idle' }[] = [];
@@ -561,7 +567,7 @@ export function App() {
       let changed = false;
       const next = mergedPrev.map(r => {
         if (!r || r.status !== 'in_progress') return r;
-        const reason = getAutoReleaseReason(r, now, AUTO_RELEASE_IDLE_MINUTES);
+        const reason = getAutoReleaseReason(r, now, AUTO_RELEASE_IDLE_MINUTES, currentBugs);
         if (!reason) return r;
         changed = true;
         const terminated = markRunAutoReleased(r, reason, now);
@@ -582,7 +588,7 @@ export function App() {
 
     if (sweep.releasedDevices.length > 0) {
       setDevices(prev => {
-        const devSweep = autoReleaseStuckSessions(testRunsRef.current, prev, now, AUTO_RELEASE_IDLE_MINUTES);
+        const devSweep = autoReleaseStuckSessions(testRunsRef.current, prev, now, AUTO_RELEASE_IDLE_MINUTES, currentBugs);
         if (devSweep.releasedDevices.length === 0) return prev;
         devicesRef.current = devSweep.devices;
         safeSetStorageItem('qa_devices_list', JSON.stringify(devSweep.devices));
@@ -634,12 +640,16 @@ export function App() {
       const localRunsById = new Map<string, TestRun>(
         mergeLocalInProgressRuns(testRunsRef.current).map(r => [r.id, r])
       );
+      const combinedBugsForSweep = [
+        ...(bugLogsRef.current || []),
+        ...normalizeBugs(cloudData.bugLogs || []),
+      ];
       const rawCloudRuns = normalizeRuns(cloudData.testRuns || []).map(cr => {
         if (cr.status !== 'in_progress') return cr;
         const localCopy = localRunsById.get(cr.id);
         if (localCopy && localCopy.status === 'in_progress') {
-          const localLast = getRunLastActivityMs(localCopy);
-          const cloudLast = getRunLastActivityMs(cr);
+          const localLast = getRunLastActivityMs(localCopy, combinedBugsForSweep);
+          const cloudLast = getRunLastActivityMs(cr, combinedBugsForSweep);
           if (Number.isFinite(localLast) && (!Number.isFinite(cloudLast) || localLast > cloudLast)) {
             return {
               ...cr,
@@ -650,7 +660,7 @@ export function App() {
         }
         return cr;
       });
-      const cloudSweep = autoReleaseStuckSessions(rawCloudRuns, devicesRef.current, nowMs, AUTO_RELEASE_IDLE_MINUTES);
+      const cloudSweep = autoReleaseStuckSessions(rawCloudRuns, devicesRef.current, nowMs, AUTO_RELEASE_IDLE_MINUTES, combinedBugsForSweep);
       if (cloudSweep.releasedRuns.length > 0) {
         clearInProgressCacheForReleasedRuns(cloudSweep.releasedRuns);
         cloudSweep.releasedRuns.forEach(({ run }) => safeSyncTestRun(run));

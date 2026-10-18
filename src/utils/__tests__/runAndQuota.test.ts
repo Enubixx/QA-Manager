@@ -391,6 +391,48 @@ describe('auto-release stuck sessions (M3)', () => {
     };
     expect(getRunLastActivityMs(recentlyActiveRun)).toBe(recentStepMs);
     expect(getAutoReleaseReason(recentlyActiveRun, nowMs)).toBeNull();
+
+    // Started 180 minutes ago today, no new step, but logged a bug 10 minutes ago -> kept alive
+    const recentBugMs = nowMs - 10 * 60 * 1000;
+    const recentBugObj = {
+      id: 'bug-recent-10m',
+      testRunId: 'run-recent-bug',
+      planId: 'plan-core',
+      stepId: 's1',
+      stepTitle: 'Step 1',
+      testerName: 'Alice',
+      deviceName: 'WP01',
+      severity: 'medium' as const,
+      note: 'Logged 10 minutes ago',
+      timestamp: new Date(recentBugMs).toISOString(),
+      formattedTime: '2:50 PM',
+    };
+    const runWithEmbeddedBug: TestRun = {
+      ...atBoundaryRun,
+      id: 'run-recent-bug',
+      startedAt: new Date(threeHoursAgoMs).toISOString(),
+      bugLogs: [recentBugObj],
+    };
+    expect(getRunLastActivityMs(runWithEmbeddedBug)).toBe(recentBugMs);
+    expect(getAutoReleaseReason(runWithEmbeddedBug, nowMs)).toBeNull();
+
+    // Also works when bug only lives in global bugLogs state with testRunId === run.id
+    const runWithoutEmbeddedBug: TestRun = {
+      ...atBoundaryRun,
+      id: 'run-recent-bug',
+      startedAt: new Date(threeHoursAgoMs).toISOString(),
+      bugLogs: [],
+    };
+    expect(getRunLastActivityMs(runWithoutEmbeddedBug, [recentBugObj])).toBe(recentBugMs);
+    expect(getAutoReleaseReason(runWithoutEmbeddedBug, nowMs, AUTO_RELEASE_IDLE_MINUTES, [recentBugObj])).toBeNull();
+    const sweepWithGlobalBug = autoReleaseStuckSessions(
+      [runWithoutEmbeddedBug],
+      [sampleDevice],
+      nowMs,
+      AUTO_RELEASE_IDLE_MINUTES,
+      [recentBugObj]
+    );
+    expect(sweepWithGlobalBug.releasedRuns).toHaveLength(0);
   });
 
   it('leaves completed, terminated, and not_started runs untouched, releases device locks, is idempotent, and does not count toward quota', () => {

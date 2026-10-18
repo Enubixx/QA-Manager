@@ -309,7 +309,10 @@ export const filterBugsAfterRunDelete = (
  * (excluding `_meta`), `updatedAt`, `lastActivityTimestamp`, and `startedAt`.
  * Returns `NaN` if no valid timestamp exists.
  */
-export const getRunLastActivityMs = (run: TestRun | null | undefined): number => {
+export const getRunLastActivityMs = (
+  run: TestRun | null | undefined,
+  globalBugs?: BugLog[]
+): number => {
   if (!run) return NaN;
   let latest = NaN;
   const consider = (ms: number) => {
@@ -321,6 +324,20 @@ export const getRunLastActivityMs = (run: TestRun | null | undefined): number =>
     Object.entries(run.results).forEach(([stepId, res]) => {
       if (stepId === '_meta' || !res || typeof res !== 'object') return;
       consider(toEpochMs((res as { timestamp?: unknown }).timestamp));
+    });
+  }
+  if (Array.isArray(run.bugLogs)) {
+    run.bugLogs.forEach(bug => {
+      if (!bug || typeof bug !== 'object') return;
+      consider(toEpochMs(bug.timestamp));
+      consider(toEpochMs(bug.originalTimestamp));
+    });
+  }
+  if (Array.isArray(globalBugs) && run.id) {
+    globalBugs.forEach(bug => {
+      if (!bug || typeof bug !== 'object' || bug.testRunId !== run.id) return;
+      consider(toEpochMs(bug.timestamp));
+      consider(toEpochMs(bug.originalTimestamp));
     });
   }
   consider(toEpochMs((run as { updatedAt?: unknown }).updatedAt));
@@ -376,7 +393,8 @@ export const getAutoReleaseMessage = (reason: 'previous-day' | 'idle'): string =
 export const getAutoReleaseReason = (
   run: TestRun | null | undefined,
   now: number | Date = Date.now(),
-  idleMinutes: number = AUTO_RELEASE_IDLE_MINUTES
+  idleMinutes: number = AUTO_RELEASE_IDLE_MINUTES,
+  globalBugs?: BugLog[]
 ): 'previous-day' | 'idle' | null => {
   if (!run || run.status !== 'in_progress') return null;
   const nowDate = typeof now === 'number' ? new Date(now) : now;
@@ -391,7 +409,7 @@ export const getAutoReleaseReason = (
     }
   }
 
-  const lastActivityMs = getRunLastActivityMs(run);
+  const lastActivityMs = getRunLastActivityMs(run, globalBugs);
   if (Number.isFinite(lastActivityMs) && nowMs - lastActivityMs > idleMinutes * 60 * 1000) {
     return 'idle';
   }
@@ -450,12 +468,13 @@ export const autoReleaseStuckSessions = (
   testRuns: TestRun[],
   devices: DeviceProfile[],
   now: number | Date = Date.now(),
-  idleMinutes: number = AUTO_RELEASE_IDLE_MINUTES
+  idleMinutes: number = AUTO_RELEASE_IDLE_MINUTES,
+  globalBugs?: BugLog[]
 ): AutoReleaseSweepResult => {
   const releasedRuns: { run: TestRun; reason: 'previous-day' | 'idle' }[] = [];
   const nextRuns = (testRuns || []).map(r => {
     if (!r || r.status !== 'in_progress') return r;
-    const reason = getAutoReleaseReason(r, now, idleMinutes);
+    const reason = getAutoReleaseReason(r, now, idleMinutes, globalBugs);
     if (!reason) return r;
     const terminated = markRunAutoReleased(r, reason, now);
     releasedRuns.push({ run: terminated, reason });
@@ -471,7 +490,7 @@ export const autoReleaseStuckSessions = (
       r &&
       r.status === 'in_progress' &&
       (!r.startedAt || getLocalDateStr(r.startedAt) === todayStr) &&
-      getAutoReleaseReason(r, now, idleMinutes) === null
+      getAutoReleaseReason(r, now, idleMinutes, globalBugs) === null
   );
 
   // Any run that is now auto-released (either in this pass or a prior pass)
