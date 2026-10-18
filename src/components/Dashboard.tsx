@@ -7,7 +7,7 @@ import { exportAllQADataToJSON } from '../utils/exportUtils';
 import { TabBar, Rx95LiveChip, TAG_STYLE, chipCls, chipOff, chipOn, expandedCls, inputCls, labelCls, listBoxCls, priTagCls, rowActionCls, rowCls, rowOpenCls, smallBtnCls, tagCls } from './triageUi';
 import { isReviewed, isStronglyReviewed, reviewedNow } from '../utils/bugReview';
 import { currentRefinement } from '../utils/bugRefine';
-import { isRunFullyCompleted, buildStepFirstSeenIndex } from '../utils/runUtils';
+import { isRunFullyCompleted, buildStepFirstSeenIndex, computeLiveInProgressRuns, computeTodayRunsMap, computeFleetProgress } from '../utils/runUtils';
 import { toLocalHHMM, withBugTime } from '../utils/bugTime';
 import { APP_VERSION_OPTIONS } from '../constants';
 import { ALL_PLANS, ALL_DATES, mergeRunsById, getKnownCujNames, computeCujReport, listReportDates, buildTimelinePoints, getPlanPickerOptions, buildCujReportText, buildReportScopeKey, formatReportDateLabel } from '../utils/cujReportUtils';
@@ -233,18 +233,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const mergedRuns = useMemo(() => mergeRunsById(archivedRuns, testRuns), [archivedRuns, testRuns]);
   const stepFirstSeen = useMemo(() => buildStepFirstSeenIndex(mergedRuns), [mergedRuns]);
   const archivedIdSet = useMemo(() => new Set(archivedRuns.map(r => r.id)), [archivedRuns]);
-  const liveInProgressRuns = useMemo(() => {
-    const currentTodayStr = getLocalDateStr(new Date());
-    return testRuns.filter(
-      r =>
-        r &&
-        r.id &&
-        !archivedIdSet.has(r.id) &&
-        r.status === 'in_progress' &&
-        getEffectiveRunStatus(r) === 'in_progress' &&
-        (!r.startedAt || getLocalDateStr(r.startedAt) === currentTodayStr)
-    );
-  }, [testRuns, archivedIdSet]);
+  const liveInProgressRuns = useMemo(
+    () => computeLiveInProgressRuns(testRuns, archivedIdSet, testPlans),
+    [testRuns, archivedIdSet, testPlans]
+  );
 
   // Determine active testers currently running a test session on a device (with live step and status metrics)
   const activeTesterMap = useMemo(() => {
@@ -342,48 +334,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
   }, [devices, liveInProgressRuns, testPlans]);
 
   // Calculate completed runs today per device ID and plan ID (deduplicated by run.id using mergeRunsById)
-  const todayRunsMap = useMemo(() => {
-    const todayStr = getLocalDateStr(new Date());
-    const map: Record<string, Record<string, number>> = {};
-    
-    mergedRuns.forEach(run => {
-      // Only runs that recorded every step that existed when they finished count toward quota
-      if (!run.completedAt || !isRunFullyCompleted(run, testPlans, stepFirstSeen)) return;
+  const todayRunsMap = useMemo(
+    () => computeTodayRunsMap(mergedRuns, devices, testPlans, stepFirstSeen),
+    [mergedRuns, devices, testPlans, stepFirstSeen]
+  );
 
-      const runDate = getLocalDateStr(run.completedAt);
-      if (runDate !== todayStr) return;
-      
-      const targetDev = devices.find(d => 
-        (run.deviceId && d.id.toLowerCase().trim() === run.deviceId.toLowerCase().trim()) ||
-        (run.deviceName && d.name && d.name.toLowerCase().trim() === run.deviceName.toLowerCase().trim())
-      );
-      if (targetDev) {
-        if (!map[targetDev.id]) map[targetDev.id] = {};
-        map[targetDev.id][run.planId] = (map[targetDev.id][run.planId] || 0) + 1;
-      }
-    });
-    return map;
-  }, [mergedRuns, devices, testPlans, stepFirstSeen]);
-
-  const fleetProgress = useMemo(() => {
-    const validPlanIds = new Set(testPlans.map(p => p.id));
-    let totalTarget = 0;
-    let totalCompleted = 0;
-    devices.forEach(dev => {
-      const seenPlans = new Set<string>();
-      (dev.quotas || []).forEach(q => {
-        if (!q || !q.planId || !validPlanIds.has(q.planId) || seenPlans.has(q.planId)) return;
-        const target = Math.max(0, Number(q.targetRunsPerDay) || 0);
-        if (target <= 0) return;
-        seenPlans.add(q.planId);
-        totalTarget += target;
-        const doneToday = (todayRunsMap[dev.id] && todayRunsMap[dev.id][q.planId]) || 0;
-        totalCompleted += Math.min(doneToday, target);
-      });
-    });
-    const pct = totalTarget > 0 ? Math.round((totalCompleted / totalTarget) * 100) : 0;
-    return { totalCompleted, totalTarget, pct };
-  }, [devices, todayRunsMap, testPlans]);
+  const fleetProgress = useMemo(
+    () => computeFleetProgress(devices, todayRunsMap, testPlans),
+    [devices, todayRunsMap, testPlans]
+  );
 
   const toggleTesterExpand = (testerName: string) => {
     setExpandedTesters(prev => ({

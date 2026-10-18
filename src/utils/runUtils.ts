@@ -1,4 +1,5 @@
-import { TestPlan, TestRun } from '../types';
+import { TestPlan, TestRun, DeviceProfile, BugLog } from '../types';
+import { getLocalDateStr } from './dateUtils';
 
 // ONE-TIME EXCEPTION (2026-09-30): these runs were cut short by the pre-v2.2.0
 // "Test Again" bug, which archived other testers' in-progress runs as 'completed'.
@@ -151,4 +152,153 @@ export const getEffectiveRunStatus = (run: TestRun, plans?: TestPlan[]) => {
     return 'not_started';
   }
   return 'in_progress';
+};
+
+/**
+ * Filter active testRuns down to only genuinely live, same-day in-progress runs
+ * that are not already archived.
+ */
+export const computeLiveInProgressRuns = (
+  testRuns: TestRun[],
+  archivedIdSet: Set<string>,
+  testPlans: TestPlan[],
+  todayStr: string = getLocalDateStr(new Date())
+): TestRun[] => {
+  return (testRuns || []).filter(
+    r =>
+      r &&
+      r.id &&
+      !archivedIdSet.has(r.id) &&
+      r.status === 'in_progress' &&
+      getEffectiveRunStatus(r, testPlans) === 'in_progress' &&
+      (!r.startedAt || getLocalDateStr(r.startedAt) === todayStr)
+  );
+};
+
+/**
+ * Calculate completed runs today per device ID and plan ID (expects deduplicated runs from mergeRunsById).
+ */
+export const computeTodayRunsMap = (
+  mergedRuns: TestRun[],
+  devices: DeviceProfile[],
+  testPlans: TestPlan[],
+  stepFirstSeen?: StepFirstSeenIndex,
+  todayStr: string = getLocalDateStr(new Date())
+): Record<string, Record<string, number>> => {
+  const map: Record<string, Record<string, number>> = {};
+
+  (mergedRuns || []).forEach(run => {
+    if (!run?.completedAt || !isRunFullyCompleted(run, testPlans, stepFirstSeen)) return;
+
+    const runDate = getLocalDateStr(run.completedAt);
+    if (runDate !== todayStr) return;
+
+    const targetDev = (devices || []).find(
+      d =>
+        (run.deviceId && d.id.toLowerCase().trim() === run.deviceId.toLowerCase().trim()) ||
+        (run.deviceName && d.name && d.name.toLowerCase().trim() === run.deviceName.toLowerCase().trim())
+    );
+    if (targetDev) {
+      if (!map[targetDev.id]) map[targetDev.id] = {};
+      map[targetDev.id][run.planId] = (map[targetDev.id][run.planId] || 0) + 1;
+    }
+  });
+  return map;
+};
+
+/**
+ * Aggregate daily fleet quota progress across all devices and active test plans.
+ */
+export const computeFleetProgress = (
+  devices: DeviceProfile[],
+  todayRunsMap: Record<string, Record<string, number>>,
+  testPlans: TestPlan[]
+): { totalCompleted: number; totalTarget: number; pct: number } => {
+  const validPlanIds = new Set((testPlans || []).map(p => p.id));
+  let totalTarget = 0;
+  let totalCompleted = 0;
+  (devices || []).forEach(dev => {
+    const seenPlans = new Set<string>();
+    (dev.quotas || []).forEach(q => {
+      if (!q || !q.planId || !validPlanIds.has(q.planId) || seenPlans.has(q.planId)) return;
+      const target = Math.max(0, Number(q.targetRunsPerDay) || 0);
+      if (target <= 0) return;
+      seenPlans.add(q.planId);
+      totalTarget += target;
+      const doneToday = (todayRunsMap[dev.id] && todayRunsMap[dev.id][q.planId]) || 0;
+      totalCompleted += Math.min(doneToday, target);
+    });
+  });
+  const pct = totalTarget > 0 ? Math.round((totalCompleted / totalTarget) * 100) : 0;
+  return { totalCompleted, totalTarget, pct };
+};
+
+/**
+ * Filter cloud archived runs on poll: only drops runs tombstoned in archived_runs
+ * (never test_runs tombstones, which are set when a run completes and moves to archived_runs),
+ * and requires at least one recorded step or bug.
+ */
+export const filterCloudArchivedRuns = (
+  runs: TestRun[],
+  isArchivedDeleted: (runId: string) => boolean
+): TestRun[] => {
+  return (runs || []).filter(r => {
+    if (!r || !r.id || isArchivedDeleted(r.id)) return false;
+    const stepEntries = Object.entries(r.results || {}).filter(
+      ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
+    );
+    const hasBugs = Boolean(r.bugLogs && r.bugLogs.length > 0);
+    return stepEntries.length > 0 || hasBugs;
+  });
+};
+
+/**
+ * Filter cloud active testRuns on poll: drops runs tombstoned in either test_runs or archived_runs,
+ * already-archived or completed runs, prior-day orphaned in_progress runs, and empty ghost runs.
+ */
+export const filterCloudTestRuns = (
+  runs: TestRun[],
+  archivedIdSet: Set<string>,
+  isTestDeleted: (runId: string) => boolean,
+  isArchivedDeleted: (runId: string) => boolean,
+  onRetireStaleRun?: (runId: string) => void,
+  todayStr: string = getLocalDateStr(new Date())
+): TestRun[] => {
+  return (runs || []).filter(r => {
+    if (!r || !r.id || isTestDeleted(r.id) || isArchivedDeleted(r.id)) return false;
+    if (archivedIdSet.has(r.id) || r.status === 'completed') {
+      onRetireStaleRun?.(r.id);
+      return false;
+    }
+    if (r.status === 'in_progress' && r.startedAt && getLocalDateStr(r.startedAt) !== todayStr) {
+      onRetireStaleRun?.(r.id);
+      return false;
+    }
+    const stepEntries = Object.entries(r.results || {}).filter(
+      ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
+    );
+    return Boolean(
+      r.testerName || r.status !== 'not_started' || stepEntries.length > 0 || (r.bugLogs && r.bugLogs.length > 0)
+    );
+  });
+};
+
+/**
+ * Determine which bugs remain vs. get cascade-deleted when a test run is deleted.
+ * When `options.keepBugs` is true (e.g. an in_progress run superseded by switching device/plan),
+ * all bugs are preserved; on explicit delete, bugs tied to the run are removed.
+ */
+export const filterBugsAfterRunDelete = (
+  bugLogs: BugLog[],
+  runId: string,
+  deletedRun?: TestRun,
+  options?: { keepBugs?: boolean }
+): { remaining: BugLog[]; toDelete: BugLog[] } => {
+  if (options?.keepBugs) {
+    return { remaining: [...(bugLogs || [])], toDelete: [] };
+  }
+  const embeddedBugIds = new Set((deletedRun?.bugLogs || []).map(b => b.id).filter(Boolean));
+  const toDelete = (bugLogs || []).filter(b => b.testRunId === runId || embeddedBugIds.has(b.id));
+  const remaining = (bugLogs || []).filter(b => b.testRunId !== runId && !embeddedBugIds.has(b.id));
+  return { remaining, toDelete };
 };

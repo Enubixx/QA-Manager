@@ -12,7 +12,7 @@
 ### 1. Web App Deployment (Vercel — Automatic & CLI)
 - **Vercel Project:** `qa-manager` (`prj_mpDNSmRULgSnMyuvfl9qE92mXY9p`, Org: `team_sLy749bTMCrXCrYNVKgeSPAz`)
 - **Automatic Deploy (Preferred):**
-  1. Run type-check and build verification:
+  1. Run unit tests, type-check, and build verification (`npm run build` runs `vitest run && tsc && vite build`; run `npm run test:e2e` for the offline browser smoke test):
      ```bash
      npm run build
      ```

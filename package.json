@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "test": "vitest run",
+    "test:e2e": "node scripts/e2e-smoke.mjs",
+    "build": "vitest run && tsc && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -29,8 +31,10 @@
     "@vitejs/plugin-react": "^4.2.1",
     "autoprefixer": "^10.4.18",
     "postcss": "^8.4.35",
+    "puppeteer": "^25.14.0",
     "tailwindcss": "^3.4.1",
     "typescript": "^5.2.2",
-    "vite": "^5.1.6"
+    "vite": "^5.1.6",
+    "vitest": "^2.1.9"
   }
 }

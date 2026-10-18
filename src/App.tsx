@@ -36,7 +36,14 @@ import {
 } from './services/supabaseService';
 import { isSupabaseConfigured } from './lib/supabase';
 import { getLocalDateStr } from './utils/dateUtils';
-import { isRunFullyCompleted, buildStepFirstSeenIndex, getEffectiveRunStatus } from './utils/runUtils';
+import {
+  isRunFullyCompleted,
+  buildStepFirstSeenIndex,
+  getEffectiveRunStatus,
+  filterCloudArchivedRuns,
+  filterCloudTestRuns,
+  filterBugsAfterRunDelete,
+} from './utils/runUtils';
 import { mergeRunsById } from './utils/cujReportUtils';
 import {
   drainOfflineQueue,
@@ -403,14 +410,10 @@ export function App() {
         }
       }
       const todayStr = getLocalDateStr();
-      const validArchivedRuns = normalizeRuns(cloudData.archivedRuns || []).filter(r => {
-        if (!r || !r.id || isArchivedRunDeleted(r.id)) return false;
-        const stepEntries = Object.entries(r.results || {}).filter(
-          ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
-        );
-        const hasBugs = r.bugLogs && r.bugLogs.length > 0;
-        return stepEntries.length > 0 || hasBugs;
-      });
+      const validArchivedRuns = filterCloudArchivedRuns(
+        normalizeRuns(cloudData.archivedRuns || []),
+        isArchivedRunDeleted
+      );
       if (cloudData.archivedRuns && JSON.stringify(validArchivedRuns) !== JSON.stringify(archivedRunsRef.current)) {
         setArchivedRuns(validArchivedRuns);
       }
@@ -421,21 +424,14 @@ export function App() {
       ]);
 
       // Filter out empty ghost runs, already-archived runs, tombstoned runs, and prior-day orphaned in_progress runs
-      const validTestRuns = normalizeRuns(cloudData.testRuns || []).filter(r => {
-        if (!r || !r.id || isTestRunDeleted(r.id) || isArchivedRunDeleted(r.id)) return false;
-        if (archivedIdSet.has(r.id) || r.status === 'completed') {
-          safeDeleteTestRun(r.id);
-          return false;
-        }
-        if (r.status === 'in_progress' && r.startedAt && getLocalDateStr(r.startedAt) !== todayStr) {
-          safeDeleteTestRun(r.id);
-          return false;
-        }
-        const stepEntries = Object.entries(r.results || {}).filter(
-          ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
-        );
-        return r.testerName || r.status !== 'not_started' || stepEntries.length > 0 || (r.bugLogs && r.bugLogs.length > 0);
-      });
+      const validTestRuns = filterCloudTestRuns(
+        normalizeRuns(cloudData.testRuns || []),
+        archivedIdSet,
+        isTestRunDeleted,
+        isArchivedRunDeleted,
+        safeDeleteTestRun,
+        todayStr
+      );
       if (cloudData.testRuns && JSON.stringify(validTestRuns) !== JSON.stringify(testRunsRef.current)) {
         setTestRuns(validTestRuns);
       }
@@ -1110,11 +1106,10 @@ export function App() {
 
     // Cascade delete associated bug logs from state and Supabase (explicit deletes only)
     if (!options?.keepBugs) {
-      const embeddedBugIds = new Set((deletedRun?.bugLogs || []).map(b => b.id).filter(Boolean));
       setBugLogs(prev => {
-        const toDelete = prev.filter(b => b.testRunId === runId || embeddedBugIds.has(b.id));
+        const { remaining, toDelete } = filterBugsAfterRunDelete(prev, runId, deletedRun, options);
         toDelete.forEach(b => deleteBugLogFromSupabase(b.id));
-        return prev.filter(b => b.testRunId !== runId && !embeddedBugIds.has(b.id));
+        return remaining;
       });
     }
 
