@@ -265,7 +265,7 @@ describe('offlineSyncQueue.isPermanentSyncError, bugReview, limitNotable, export
     expect(cleaned).toContain('The audio also dropped.');
 
     expect(Object.keys(exportUtils)).toEqual(['exportAllQADataToJSON']);
-    expect(APK_DOWNLOAD_URL.startsWith('https://drive.google.com/file/d/15qrnpJExF8siPcuTBy6wTIBk33racp3_')).toBe(true);
+    expect(APK_DOWNLOAD_URL.startsWith('https://drive.google.com/corp/drive/u/0/folders/1KupUr6_pOPcTWrC5AW_3f_PelKaCrisx')).toBe(true);
   });
 
   it('computes honest navbar sync badge states (U1 #2)', () => {
