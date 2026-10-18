@@ -74,11 +74,24 @@ export function defaultComponentFor(cujName?: string): string {
   return hit ? hit[1] : FALLBACK_COMPONENT_ID;
 }
 
+/** Replace lone UTF-16 surrogates (e.g. half an emoji) with U+FFFD so encodeURIComponent can never throw. */
+export function toWellFormedText(s: string): string {
+  return (s || '').replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD');
+}
+
+/** encodeURIComponent that never throws `URIError: URI malformed` on lone surrogates. */
+export const safeEncodeURIComponent = (s: string): string => encodeURIComponent(toWellFormedText(s));
+
+/** Slice by code points so emoji / surrogate pairs are never split in half. */
+export function sliceCodePoints(s: string, start: number, end?: number): string {
+  return Array.from(s || '').slice(start, end).join('');
+}
+
 /** First sentence of the tester note, tidied for a bug title. */
 export function titleFromNote(note: string, max = 110): string {
   const clean = (note || '').replace(/\s+/g, ' ').trim();
   const first = clean.split(/(?<=[.!?])\s+/)[0] || clean;
-  const t = first.length > max ? `${first.slice(0, max - 1).trimEnd()}…` : first;
+  const t = Array.from(first).length > max ? `${sliceCodePoints(first, 0, max - 1).trimEnd()}…` : first;
   return t ? t.charAt(0).toUpperCase() + t.slice(1) : 'Untitled bug';
 }
 
@@ -220,9 +233,9 @@ export function buildBuganizerUrl(d: BuganizerDraft): string {
   const cc = usernames(d.cc).map(u => `${u}@google.com`);
   if (cc.length) add('cc', cc.join(','));
   d.hotlistIds.filter(h => /^\d{1,12}$/.test(h)).forEach(h => add('hotlistIds', h));
-  const foundIn = (d.foundIn || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 200);
+  const foundIn = sliceCodePoints((d.foundIn || '').replace(/[\r\n]+/g, ' ').trim(), 0, 200);
   if (foundIn) add('foundIn', foundIn);
-  const query = params.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+  const query = params.map(([k, v]) => `${k}=${safeEncodeURIComponent(v)}`).join('&');
   return `${BUGANIZER_NEW_ISSUE_URL}?${query}`;
 }
 

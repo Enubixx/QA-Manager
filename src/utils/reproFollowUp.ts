@@ -1,6 +1,6 @@
 import type { BugFiled, BugLog, RefinedBugText, ReproMatches } from '../types';
 import { bugTextSig } from './bugRefine';
-import { MAX_SAFE_URL_LENGTH, titleFromNote } from './buganizerDraft';
+import { MAX_SAFE_URL_LENGTH, safeEncodeURIComponent, titleFromNote } from './buganizerDraft';
 import { bugTimeLabel } from './bugTime';
 
 /**
@@ -128,14 +128,14 @@ export const issueUrl = (id: string) => `https://b.corp.google.com/issues/${enco
  */
 export function followUpUrl(id: string, comment: string): { url: string; truncated: boolean } {
   const base = `${issueUrl(id)}?comment=`;
-  const full = base + encodeURIComponent(comment);
+  const full = base + safeEncodeURIComponent(comment);
   if (full.length <= MAX_SAFE_URL_LENGTH) return { url: full, truncated: false };
   const note = '\n\n(Comment shortened - the full text is on your clipboard; paste it here.)';
   let lo = 0;
   let hi = comment.length;
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2);
-    if ((base + encodeURIComponent(comment.slice(0, mid) + '…' + note)).length <= MAX_SAFE_URL_LENGTH) lo = mid; else hi = mid - 1;
+    if ((base + safeEncodeURIComponent(comment.slice(0, mid) + '…' + note)).length <= MAX_SAFE_URL_LENGTH) lo = mid; else hi = mid - 1;
   }
-  return { url: base + encodeURIComponent(comment.slice(0, lo).trimEnd() + '…' + note), truncated: true };
+  return { url: base + safeEncodeURIComponent(comment.slice(0, lo).trimEnd() + '…' + note), truncated: true };
 }
