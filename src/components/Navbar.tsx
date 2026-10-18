@@ -6,9 +6,22 @@ import { isSupabaseConfigured } from '../lib/supabase';
 import { APK_DOWNLOAD_URL, APP_VERSION_NAME } from '../constants';
 import { RecentlyDeletedEntry } from '../utils/undoDeleteStore';
 
+export type DashboardTabKey = 'overview' | 'devices' | 'testers' | 'features' | 'bugs';
+
+export interface NavbarTabCounts {
+  plans: number;
+  floor: number;
+  cujs: number;
+  golden: number;
+  bugs: number;
+}
+
 interface NavbarProps {
   currentView: 'dashboard' | 'mobile' | 'plan-builder';
   onNavigate: (view: 'dashboard' | 'mobile' | 'plan-builder') => void;
+  activeDashboardTab?: DashboardTabKey;
+  onSelectDashboardTab?: (tab: DashboardTabKey) => void;
+  tabCounts?: NavbarTabCounts;
   activePlanName?: string;
   onExportBackup?: () => void;
   onImportBackup?: (data: any) => void;
@@ -19,7 +32,11 @@ interface NavbarProps {
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
+  currentView,
   onNavigate,
+  activeDashboardTab = 'overview',
+  onSelectDashboardTab,
+  tabCounts,
   onExportBackup,
   onImportBackup,
   onClearAllData,
@@ -102,26 +119,100 @@ export const Navbar: React.FC<NavbarProps> = ({
   return (
     <header className="bg-[#0b0f19]/90 backdrop-blur-xl border-b border-slate-800/80 sticky top-0 z-50" data-testid="app-navbar">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-12 flex items-center justify-between gap-3">
-        {/* Brand & Live Sync Indicator */}
-        <div
-          role="button"
-          tabIndex={0}
-          aria-label="Go to QA Manager Dashboard"
-          onClick={() => onNavigate('dashboard')}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
+        {/* Left side: Brand & Top-bar Navigation Tabs */}
+        <div className="flex items-center gap-4 min-w-0">
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label="Go to QA Manager Dashboard"
+            onClick={() => {
               onNavigate('dashboard');
-            }
-          }}
-          className="flex items-center gap-2.5 cursor-pointer group focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-xl"
-        >
-          <div className="p-1.5 bg-blue-600 rounded-xl text-white shadow-sm border border-blue-500/40 transition-transform duration-200 group-hover:scale-105">
-            <ShieldCheck className="w-4 h-4" />
+              onSelectDashboardTab?.('overview');
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onNavigate('dashboard');
+                onSelectDashboardTab?.('overview');
+              }
+            }}
+            className="flex items-center gap-2 cursor-pointer group focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-xl shrink-0"
+          >
+            <div className="p-1.5 bg-blue-600 rounded-xl text-white shadow-sm border border-blue-500/40 transition-transform duration-200 group-hover:scale-105">
+              <ShieldCheck className="w-4 h-4" />
+            </div>
+            <h1 className="font-bold text-sm text-slate-50 tracking-tight whitespace-nowrap">QA Manager</h1>
           </div>
-          <div className="flex items-center gap-2.5">
-            <h1 className="font-bold text-sm text-slate-50 tracking-tight">QA Manager</h1>
-          </div>
+
+          {onSelectDashboardTab && (
+            <nav
+              aria-label="Main navigation"
+              data-testid="navbar-tabs"
+              className="flex items-center gap-1 overflow-x-auto no-scrollbar"
+            >
+              {([
+                {
+                  key: 'overview' as const,
+                  testid: 'nav-tab-overview',
+                  label: 'Test Plans',
+                  active: currentView === 'dashboard' && activeDashboardTab === 'overview',
+                  badge: tabCounts ? String(tabCounts.plans) : undefined,
+                },
+                {
+                  key: 'devices' as const,
+                  testid: 'nav-tab-floor',
+                  label: 'Floor',
+                  active:
+                    currentView === 'dashboard' &&
+                    (activeDashboardTab === 'devices' || activeDashboardTab === 'testers'),
+                  badge: tabCounts ? String(tabCounts.floor) : undefined,
+                },
+                {
+                  key: 'features' as const,
+                  testid: 'nav-tab-features',
+                  label: 'CUJ Report',
+                  active: currentView === 'dashboard' && activeDashboardTab === 'features',
+                  badge: tabCounts ? `${tabCounts.cujs} · ${tabCounts.golden}★` : undefined,
+                },
+                {
+                  key: 'bugs' as const,
+                  testid: 'nav-tab-bugs',
+                  label: 'Bugs',
+                  active: currentView === 'dashboard' && activeDashboardTab === 'bugs',
+                  badge: tabCounts ? String(tabCounts.bugs) : undefined,
+                },
+              ]).map(tab => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  data-testid={tab.testid}
+                  aria-current={tab.active ? 'page' : undefined}
+                  onClick={() => {
+                    if (currentView !== 'dashboard') onNavigate('dashboard');
+                    onSelectDashboardTab(tab.key);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition whitespace-nowrap cursor-pointer border ${
+                    tab.active
+                      ? 'bg-[#162038] text-white border-blue-500/50 shadow-sm'
+                      : 'bg-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border-transparent'
+                  }`}
+                >
+                  <span>{tab.label}</span>
+                  {tab.badge !== undefined && (
+                    <span
+                      className={`text-[10.5px] font-mono px-1.5 py-0.2 rounded-full ${
+                        tab.active
+                          ? 'bg-blue-500/20 text-blue-200'
+                          : 'bg-slate-800/90 text-slate-400'
+                      }`}
+                    >
+                      {tab.badge}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </nav>
+          )}
         </div>
 
         {/* Right side: Sync badge, APK download & Data menu */}

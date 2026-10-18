@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Dashboard } from './components/Dashboard';
 import { PlanBuilder } from './components/PlanBuilder';
 import { MobileTester } from './components/MobileTester';
-import { Navbar } from './components/Navbar';
+import { Navbar, type DashboardTabKey, type NavbarTabCounts } from './components/Navbar';
 import { SAMPLE_PLANS, SAMPLE_RUNS, SAMPLE_BUG_LOGS } from './data/mockData';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, RefinedBugText, ReproMatches } from './types';
 import { bugTextSig } from './utils/bugRefine';
@@ -185,6 +185,8 @@ export function App() {
       return '';
     }
   });
+  const [activeDashboardTab, setActiveDashboardTab] = useState<DashboardTabKey>('overview');
+  const [navTabCounts, setNavTabCounts] = useState<NavbarTabCounts | undefined>(undefined);
 
   // Merge any local `qa_in_progress_run_*` entries into the runs array so step activity is up-to-date
   // and stuck local-only in-progress runs are also swept and preserved.
@@ -2979,6 +2981,9 @@ export function App() {
         <Navbar
           currentView={currentView}
           onNavigate={setCurrentView}
+          activeDashboardTab={activeDashboardTab}
+          onSelectDashboardTab={setActiveDashboardTab}
+          tabCounts={navTabCounts}
           onExportBackup={() =>
             exportAllQADataToJSON(testPlans, testRuns, bugLogs, {
               archivedRuns,
@@ -3008,6 +3013,9 @@ export function App() {
             populatedFeatures={populatedFeatures.filter(f => typeof f === 'string' && f.trim() !== '' && !f.startsWith('__'))}
             devices={devices}
             testers={testers}
+            activeTab={activeDashboardTab}
+            onActiveTabChange={setActiveDashboardTab}
+            onTabCountsChange={setNavTabCounts}
             onSelectPlanToBuild={handleCreatePlanClick}
             onOpenMobileView={handleOpenMobileView}
             onDeletePlan={handleDeletePlan}

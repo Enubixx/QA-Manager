@@ -46,6 +46,8 @@ export interface DashboardControllerInput {
   rx95Suggestions?: Rx95SuggestionsData;
   onImportJSONData: (data: { testPlans?: TestPlan[]; testRuns?: TestRun[]; bugLogs?: BugLog[]; archivedRuns?: TestRun[] }) => void;
   onAddFeature?: (featureName: string) => void;
+  activeTabProp?: 'overview' | 'devices' | 'testers' | 'features' | 'bugs';
+  onActiveTabChange?: (tab: 'overview' | 'devices' | 'testers' | 'features' | 'bugs') => void;
 }
 
 export function useDashboardController({
@@ -61,10 +63,18 @@ export function useDashboardController({
   onPatchBugLogs,
   rx95Suggestions,
   onImportJSONData,
-  onAddFeature
+  onAddFeature,
+  activeTabProp,
+  onActiveTabChange
 }: DashboardControllerInput) {
   const defaultTodayStr = getLocalDateStr(new Date());
-  const [activeTab, setActiveTab] = useState<'overview' | 'devices' | 'testers' | 'features' | 'bugs'>('overview');
+  const [internalActiveTab, setInternalActiveTab] = useState<'overview' | 'devices' | 'testers' | 'features' | 'bugs'>('overview');
+  const activeTab = activeTabProp ?? internalActiveTab;
+  const setActiveTab: React.Dispatch<React.SetStateAction<'overview' | 'devices' | 'testers' | 'features' | 'bugs'>> = (val) => {
+    const next = typeof val === 'function' ? val(activeTab) : val;
+    setInternalActiveTab(next);
+    onActiveTabChange?.(next);
+  };
   const [bugsView, setBugsView] = useState<'feed' | 'buganizer'>('feed');
   const [selectedQaDate, setSelectedQaDate] = useState<string>(defaultTodayStr);
   const [expandedTesters, setExpandedTesters] = useState<Record<string, boolean>>({});

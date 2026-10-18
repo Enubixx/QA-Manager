@@ -29,9 +29,31 @@ async function waitForServer(url, timeoutMs = 45000) {
 
 async function clickCardByTitle(page, title) {
   await page.evaluate(t => {
+    const map = {
+      'Test Plans': 'nav-tab-overview',
+      'Devices & Testers': 'nav-tab-floor',
+      'Floor': 'nav-tab-floor',
+      'CUJ Report': 'nav-tab-features',
+      'Bugs Feed': 'nav-tab-bugs',
+      'Bugs': 'nav-tab-bugs',
+    };
+    const testId = map[t];
+    if (testId) {
+      const btn = document.querySelector(`[data-testid="${testId}"]`);
+      if (btn) {
+        btn.click();
+        return;
+      }
+    }
+    const navButtons = Array.from(document.querySelectorAll('[data-testid="navbar-tabs"] button'));
+    const navBtn = navButtons.find(b => b.textContent && b.textContent.includes(t));
+    if (navBtn) {
+      navBtn.click();
+      return;
+    }
     const cards = Array.from(document.querySelectorAll('.liquid-glass-card'));
     const card = cards.find(c => c.textContent && c.textContent.includes(t));
-    if (!card) throw new Error(`Top navigation card "${t}" not found`);
+    if (!card) throw new Error(`Top navigation tab "${t}" not found`);
     card.click();
   }, title);
   await new Promise(r => setTimeout(r, 250));
@@ -191,10 +213,12 @@ async function runE2ESmoke() {
     await clickCardByTitle(page, 'Test Plans');
 
     await page.evaluate(() => {
-      const btn = Array.from(document.querySelectorAll('button')).find(b =>
-        b.textContent?.includes('Test on Phone App')
-      );
-      if (!btn) throw new Error('Test on Phone App button not found');
+      const btn =
+        document.querySelector('[data-testid="run-on-phone-button"]') ||
+        Array.from(document.querySelectorAll('button')).find(
+          b => b.textContent?.includes('Run on phone') || b.textContent?.includes('Test on Phone App')
+        );
+      if (!btn) throw new Error('Run on phone button not found');
       btn.click();
     });
     await new Promise(r => setTimeout(r, 300));
@@ -363,10 +387,17 @@ async function runE2ESmoke() {
       'Buganizer tab must render the logged bug'
     );
 
-    // 8. Verify M4 Undo Delete toast (delete plan -> hidden + toast -> Undo -> restored in place)
+    // 8. Verify M4 Undo Delete toast (delete plan via ⋯ menu -> hidden + toast -> Undo -> restored in place)
     await clickCardByTitle(page, 'Test Plans');
+    const planMenuBtn = await page.$('[data-testid="test-plan-menu-button"]');
+    if (planMenuBtn) {
+      await planMenuBtn.click();
+      await new Promise(r => setTimeout(r, 100));
+    }
     await page.evaluate(() => {
-      const delBtn = document.querySelector('button[title="Delete Test Plan"]');
+      const delBtn =
+        document.querySelector('[data-testid="plan-menu-delete"]') ||
+        document.querySelector('button[title="Delete Test Plan"]');
       if (!delBtn) throw new Error('Delete Test Plan button not found');
       delBtn.click();
     });

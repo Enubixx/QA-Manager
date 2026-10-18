@@ -1,5 +1,6 @@
-import React from 'react';
-import { ListChecks, Bug, Smartphone, Activity, Sparkles, X } from 'lucide-react';
+import React, { useEffect } from 'react';
+import { Sparkles, X } from 'lucide-react';
+import type { DashboardTabKey, NavbarTabCounts } from './Navbar';
 import {
   TestPlan,
   TestRun,
@@ -77,6 +78,9 @@ interface DashboardProps {
   onRunSubagentTest?: (planId?: string) => void;
   minAppVersion?: number;
   onUpdateMinAppVersion?: (versionCode: number) => void;
+  activeTab?: DashboardTabKey;
+  onActiveTabChange?: (tab: DashboardTabKey) => void;
+  onTabCountsChange?: (counts: NavbarTabCounts) => void;
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({
@@ -115,7 +119,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onDeleteTesterProfile,
   onRunSubagentTest,
   minAppVersion,
-  onUpdateMinAppVersion
+  onUpdateMinAppVersion,
+  activeTab: activeTabProp,
+  onActiveTabChange,
+  onTabCountsChange
 }) => {
   const c = useDashboardController({
     testPlans,
@@ -130,11 +137,33 @@ export const Dashboard: React.FC<DashboardProps> = ({
     onPatchBugLogs,
     rx95Suggestions,
     onImportJSONData,
-    onAddFeature
+    onAddFeature,
+    activeTabProp,
+    onActiveTabChange
   });
 
+  const floorBadgeCount =
+    c.activeOrTestedTodayCount > 0 ? c.activeOrTestedTodayCount : devices.length;
+
+  useEffect(() => {
+    onTabCountsChange?.({
+      plans: c.totalPlans,
+      floor: floorBadgeCount,
+      cujs: c.featureMetricsList.length,
+      golden: c.goldenRunsAnalysis.goldenCount,
+      bugs: c.totalBugs,
+    });
+  }, [
+    onTabCountsChange,
+    c.totalPlans,
+    floorBadgeCount,
+    c.featureMetricsList.length,
+    c.goldenRunsAnalysis.goldenCount,
+    c.totalBugs,
+  ]);
+
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 space-y-5">
       {/* Hidden File Input for JSON Backup Import */}
       <input
         type="file"
@@ -159,154 +188,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </button>
         </div>
       )}
-
-      {/* Unified Top Navigation KPI Cards Row (4 Cards) */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {/* Card 1: Overview / Test Plans */}
-        <div
-          onClick={() => c.setActiveTab('overview')}
-          className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-200 ${
-            c.activeTab === 'overview'
-              ? '!bg-[#162033] !border-blue-500 ring-1 ring-blue-500/30 shadow-md'
-              : 'hover:border-slate-700'
-          }`}
-          title="Click to view Configured Test Plans & Active Runs"
-        >
-          <div>
-            <div
-              className={`text-xs font-semibold ${
-                c.activeTab === 'overview' ? 'text-slate-200' : 'text-slate-400'
-              } flex items-center gap-1.5`}
-            >
-              <span>Test Plans</span>
-              {c.activeTab === 'overview' && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
-            </div>
-            <div className="text-xl font-bold text-slate-50 mt-1 font-mono tracking-tight">
-              {c.totalPlans}
-            </div>
-          </div>
-          <div
-            className={`p-2.5 rounded-2xl border transition-all ${
-              c.activeTab === 'overview'
-                ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
-                : 'bg-slate-800/90 text-slate-400 border-slate-700/80'
-            }`}
-          >
-            <ListChecks className="w-4 h-4" />
-          </div>
-        </div>
-
-        {/* Card 2: Unified Devices & Testers */}
-        <div
-          onClick={() => c.setActiveTab('devices')}
-          className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-200 ${
-            c.activeTab === 'devices' || c.activeTab === 'testers'
-              ? '!bg-[#162033] !border-blue-500 ring-1 ring-blue-500/30 shadow-md'
-              : 'hover:border-slate-700'
-          }`}
-          title="Click to manage Active Devices, Daily Quotas & QA Testers"
-        >
-          <div>
-            <div
-              className={`text-xs font-semibold ${
-                c.activeTab === 'devices' || c.activeTab === 'testers'
-                  ? 'text-slate-200'
-                  : 'text-slate-400'
-              } flex items-center gap-1.5`}
-            >
-              <span>Devices &amp; Testers</span>
-              {(c.activeTab === 'devices' || c.activeTab === 'testers') && (
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-              )}
-            </div>
-            <div className="text-xl font-bold text-slate-50 mt-1 font-mono tracking-tight">
-              {`${c.activeOrTestedTodayCount} Tester${c.activeOrTestedTodayCount === 1 ? '' : 's'}`}
-            </div>
-          </div>
-          <div
-            className={`p-2.5 rounded-2xl border transition-all ${
-              c.activeTab === 'devices' || c.activeTab === 'testers'
-                ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
-                : 'bg-slate-800/90 text-slate-400 border-slate-700/80'
-            }`}
-          >
-            <Smartphone className="w-4 h-4" />
-          </div>
-        </div>
-
-        {/* Card 3: CUJ Quality Report */}
-        <div
-          onClick={() => c.setActiveTab('features')}
-          className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-200 ${
-            c.activeTab === 'features'
-              ? '!bg-[#162033] !border-blue-500 ring-1 ring-blue-500/30 shadow-md'
-              : 'hover:border-slate-700'
-          }`}
-          title="Click to view CUJ Quality Report"
-        >
-          <div>
-            <div
-              className={`text-xs font-semibold ${
-                c.activeTab === 'features' ? 'text-slate-200' : 'text-slate-400'
-              } flex items-center gap-1.5`}
-            >
-              <span>CUJ Report</span>
-              {c.activeTab === 'features' && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
-            </div>
-            <div className="text-xl font-bold text-slate-50 mt-1 font-mono tracking-tight">
-              {c.featureMetricsList.length} CUJs
-            </div>
-            {c.goldenRunsAnalysis.totalCount > 0 && (
-              <div className="text-[11px] text-slate-400 font-mono font-medium mt-0.5">
-                {c.goldenRunsAnalysis.goldenCount} Golden
-              </div>
-            )}
-          </div>
-          <div
-            className={`p-2.5 rounded-2xl border transition-all ${
-              c.activeTab === 'features'
-                ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
-                : 'bg-slate-800/90 text-slate-400 border-slate-700/80'
-            }`}
-          >
-            <Activity className="w-4 h-4" />
-          </div>
-        </div>
-
-        {/* Card 4: Bugs Feed */}
-        <div
-          onClick={() => c.setActiveTab('bugs')}
-          className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-200 ${
-            c.activeTab === 'bugs'
-              ? '!bg-[#162033] !border-blue-500 ring-1 ring-blue-500/30 shadow-md'
-              : 'hover:border-slate-700'
-          }`}
-          title="Click to view Reported Bugs"
-        >
-          <div>
-            <div
-              className={`text-xs font-semibold ${
-                c.activeTab === 'bugs' ? 'text-slate-200' : 'text-slate-400'
-              } flex items-center gap-1.5`}
-            >
-              <span>Bugs Feed</span>
-              {c.activeTab === 'bugs' && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
-            </div>
-            <div className="text-xl font-bold text-slate-50 mt-1 font-mono tracking-tight">
-              {c.totalBugs} Bugs
-            </div>
-          </div>
-          <div
-            className={`p-2.5 rounded-2xl border transition-all ${
-              c.activeTab === 'bugs'
-                ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
-                : 'bg-slate-800/90 text-slate-400 border-slate-700/80'
-            }`}
-          >
-            <Bug className="w-4 h-4" />
-          </div>
-        </div>
-      </div>
 
       {/* Unified Tab: Single-Screen Devices & Testers */}
       {(c.activeTab === 'devices' || c.activeTab === 'testers') && (
