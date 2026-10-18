@@ -740,17 +740,17 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
       >
         <div
           data-testid="inline-suggestion-header"
-          className="px-3.5 py-2 flex flex-wrap items-center gap-2 text-xs"
+          className="px-3.5 py-2 flex flex-wrap items-center justify-between gap-2 text-xs"
         >
-          <span className="font-semibold text-violet-200 flex items-center gap-1.5 min-w-0 flex-1">
+          <span className="font-semibold text-violet-200 flex flex-wrap items-center gap-1.5 min-w-0 flex-1">
             <span>🧩</span>
-            <span className="font-bold text-violet-100">
+            <span className="font-bold text-violet-100 whitespace-nowrap">
               {members.length} similar reports
             </span>
             <span className="text-violet-300/80">·</span>
-            <span className="text-violet-200 truncate">{cuj}</span>
+            <span className="text-violet-200 whitespace-nowrap">{cuj}</span>
             <span className="text-violet-300/80">·</span>
-            <span className="text-white font-semibold truncate" title={sg.reason || sg.title}>
+            <span className="text-white font-semibold" title={sg.reason || sg.title}>
               &ldquo;{sg.title}&rdquo;
             </span>
             <span className="text-violet-300/70 hidden sm:inline whitespace-nowrap">
@@ -758,53 +758,7 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
             </span>
           </span>
 
-          {/* Quick inline category selectors before Bundle & review */}
-          <div className="flex flex-wrap items-center gap-1.5">
-            <select
-              aria-label="Suggestion bug type"
-              data-testid="suggestion-bug-type"
-              value={cat.bugType}
-              onClick={e => e.stopPropagation()}
-              onChange={e => setCat({ bugType: e.target.value as BugTypeValue })}
-              className="bg-[#0f172a] border border-violet-500/40 rounded-lg px-2 py-1 text-[11px] text-slate-200 font-semibold focus:outline-none focus:border-violet-400 cursor-pointer"
-            >
-              {(['Bug', 'Setup Issue', 'Known Issue', 'Feature Request', 'Misc Issue'] as const).map(
-                o => (
-                  <option key={o} value={o} className="bg-slate-900">
-                    {o}
-                  </option>
-                )
-              )}
-            </select>
-            <select
-              aria-label="Suggestion priority"
-              data-testid="suggestion-priority"
-              value={cat.priority}
-              onClick={e => e.stopPropagation()}
-              onChange={e => setCat({ priority: e.target.value as PriorityValue })}
-              className="bg-[#0f172a] border border-violet-500/40 rounded-lg px-2 py-1 text-[11px] text-slate-200 font-semibold focus:outline-none focus:border-violet-400 cursor-pointer"
-            >
-              {(['P0', 'P1', 'P2'] as const).map(o => (
-                <option key={o} value={o} className="bg-slate-900">
-                  {o}
-                </option>
-              ))}
-            </select>
-            <select
-              aria-label="Suggestion status"
-              data-testid="suggestion-status"
-              value={cat.status}
-              onClick={e => e.stopPropagation()}
-              onChange={e => setCat({ status: e.target.value as StatusValue })}
-              className="bg-[#0f172a] border border-violet-500/40 rounded-lg px-2 py-1 text-[11px] text-slate-200 font-semibold focus:outline-none focus:border-violet-400 cursor-pointer"
-            >
-              {(['New', "Repro'd Issue"] as const).map(o => (
-                <option key={o} value={o} className="bg-slate-900">
-                  {o}
-                </option>
-              ))}
-            </select>
-
+          <div className="flex items-center gap-1.5 shrink-0">
             <button
               type="button"
               data-testid="suggestion-bundle"
@@ -858,7 +812,57 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
         </div>
 
         {!collapsed && (
-          <div className="divide-y divide-slate-800/60">
+          <>
+            <div className="px-6 py-1.5 bg-violet-500/[0.03] border-t border-b border-slate-800/60 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+              <span className="text-violet-200/80 font-medium">
+                Categorize {tickedMembers.length} ticked as:
+              </span>
+              <select
+                aria-label="Suggestion bug type"
+                data-testid="suggestion-bug-type"
+                value={cat.bugType}
+                onClick={e => e.stopPropagation()}
+                onChange={e => setCat({ bugType: e.target.value as BugTypeValue })}
+                className="bg-[#0f172a] border border-violet-500/40 rounded-lg px-2 py-0.5 text-[11px] text-slate-200 font-semibold focus:outline-none focus:border-violet-400 cursor-pointer"
+              >
+                {(
+                  ['Bug', 'Setup Issue', 'Known Issue', 'Feature Request', 'Misc Issue'] as const
+                ).map(o => (
+                  <option key={o} value={o} className="bg-slate-900">
+                    {o}
+                  </option>
+                ))}
+              </select>
+              <select
+                aria-label="Suggestion priority"
+                data-testid="suggestion-priority"
+                value={cat.priority}
+                onClick={e => e.stopPropagation()}
+                onChange={e => setCat({ priority: e.target.value as PriorityValue })}
+                className="bg-[#0f172a] border border-violet-500/40 rounded-lg px-2 py-0.5 text-[11px] text-slate-200 font-semibold focus:outline-none focus:border-violet-400 cursor-pointer"
+              >
+                {(['P0', 'P1', 'P2'] as const).map(o => (
+                  <option key={o} value={o} className="bg-slate-900">
+                    {o}
+                  </option>
+                ))}
+              </select>
+              <select
+                aria-label="Suggestion status"
+                data-testid="suggestion-status"
+                value={cat.status}
+                onClick={e => e.stopPropagation()}
+                onChange={e => setCat({ status: e.target.value as StatusValue })}
+                className="bg-[#0f172a] border border-violet-500/40 rounded-lg px-2 py-0.5 text-[11px] text-slate-200 font-semibold focus:outline-none focus:border-violet-400 cursor-pointer"
+              >
+                {(['New', "Repro'd Issue"] as const).map(o => (
+                  <option key={o} value={o} className="bg-slate-900">
+                    {o}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="divide-y divide-slate-800/60">
             {members.map(m => {
               const on = ticked.has(m.id);
               const isBugExpanded = !!expandedBugIds[m.id];
@@ -923,7 +927,8 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
                 </div>
               );
             })}
-          </div>
+            </div>
+          </>
         )}
       </div>
     );
