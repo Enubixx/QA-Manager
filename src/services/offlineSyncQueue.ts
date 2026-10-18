@@ -158,10 +158,12 @@ export const enqueueOfflineMutation = (type: OfflineMutationType, payload: any) 
  * column (42703 / PGRST204) stays retryable: the sync functions drop that column and the retry succeeds.
  */
 export function isPermanentSyncError(err: any): boolean {
+  const code = String(err?.code || '').toUpperCase();
+  // Checked before the 4xx rule: PostgREST reports a missing column as HTTP 400, but the sync functions
+  // drop that column (optionalBugColumns) so the retry succeeds. MAX_RETRY_COUNT still bounds it.
+  if (code === '42703' || code === 'PGRST204') return false;
   const status = Number(err?.status || err?.statusCode || 0);
   if (status >= 400 && status < 500 && status !== 408 && status !== 429) return true;
-  const code = String(err?.code || '').toUpperCase();
-  if (code === '42703' || code === 'PGRST204') return false;
   return /^(22|23|42)[0-9A-Z]{3}$/.test(code);
 }
 
