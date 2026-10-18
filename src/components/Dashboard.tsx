@@ -2065,14 +2065,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
             if (selectedQaDate === todayStr && matchedDev && assignedQuota && assignedQuota.targetRunsPerDay > 0) {
               const target = assignedQuota.targetRunsPerDay;
               const doneOnDevToday = (todayRunsMap[matchedDev.id] && todayRunsMap[matchedDev.id][assignedQuota.planId]) || count;
-              const displayDone = count > 0 ? count : doneOnDevToday;
-              const isMet = displayDone >= target;
+              const displayDone = count;
+              const isMet = count >= target;
               return {
                 key: displayName,
                 deviceId: matchedDev.id,
                 deviceName: matchedDev.name,
                 label: `${matchedDev.name} ${displayDone}/${target}${isMet ? '✓' : ''}`,
-                isDone: isMet
+                isDone: isMet,
+                tooltip: `Inspect ${matchedDev.name} (${count} by ${tester.name}, ${doneOnDevToday}/${target} device total today)`
               };
             }
             return {
@@ -2080,7 +2081,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
               deviceId: matchedDev?.id,
               deviceName: displayName,
               label: count > 0 ? `${displayName} ×${count}` : displayName,
-              isDone: count > 0
+              isDone: count > 0,
+              tooltip: `Inspect ${displayName}`
             };
           });
 
@@ -3080,7 +3082,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                           ? 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25'
                                           : 'bg-[#131d31] text-slate-300 hover:bg-[#1a2742]'
                                       }`}
-                                      title={`Inspect ${pill.deviceName}`}
+                                      title={pill.tooltip || `Inspect ${pill.deviceName}`}
                                     >
                                       {pill.label}
                                     </span>

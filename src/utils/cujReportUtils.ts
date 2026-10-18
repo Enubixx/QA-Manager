@@ -734,15 +734,15 @@ export function computeCujReport(input: {
       return matchesDate(bDate, scope.date);
     });
     const unattachedBugs = runBugs.filter(b => !b.stepId);
-    if (unattachedBugs.length > 0 && greenCount > 0) {
-      const critCount = unattachedBugs.filter(isCriticalBug).length;
-      const toDowngrade = Math.min(greenCount, unattachedBugs.length);
-      const newRed = Math.min(toDowngrade, critCount);
-      const newYellow = toDowngrade - newRed;
-      greenCount -= toDowngrade;
-      redCount += newRed;
-      yellowCount += newYellow;
-    }
+    unattachedBugs.forEach(b => {
+      if (isCriticalBug(b)) {
+        if (greenCount > 0) greenCount -= 1;
+        redCount += 1;
+      } else {
+        if (greenCount > 0) greenCount -= 1;
+        yellowCount += 1;
+      }
+    });
     const totalSteps = recorded.length;
     return {
       run,
@@ -750,7 +750,6 @@ export function computeCujReport(input: {
       isGolden:
         redCount === 0 &&
         yellowCount <= 1 &&
-        runBugs.length === 0 &&
         hasAllLiveStepsRecorded(run, ctx.plans, ctx.firstSeen),
       greenCount,
       yellowCount,
