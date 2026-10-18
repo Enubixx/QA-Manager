@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Trash2, Search, Filter } from 'lucide-react';
 import { TestPlan, BugLog, RefinedBugText, ReproMatches } from '../../types';
 import {
@@ -140,6 +140,15 @@ export interface BugsFeedTabProps {
   setSortByDevice: React.Dispatch<
     React.SetStateAction<'newest' | 'oldest' | 'device-asc' | 'device-desc' | 'priority' | 'severity' | 'tester-asc' | 'tester-most'>
   >;
+  feedGroupBy: 'time' | 'tester' | 'device' | 'cuj';
+  setFeedGroupBy: React.Dispatch<React.SetStateAction<'time' | 'tester' | 'device' | 'cuj'>>;
+  selectedTesterFilters: string[];
+  setSelectedTesterFilters: React.Dispatch<React.SetStateAction<string[]>>;
+  isTesterFilterOpen: boolean;
+  setIsTesterFilterOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  focusedBugId: string | null;
+  setFocusedBugId: React.Dispatch<React.SetStateAction<string | null>>;
+  bugTesterOptions: { name: string; count: number; devices: string[]; p0Count: number; p1Count: number }[];
 }
 
 export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
@@ -219,8 +228,316 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
   setSelectedDeviceFilter,
   uniqueDevices,
   sortByDevice,
-  setSortByDevice
+  setSortByDevice,
+  feedGroupBy,
+  setFeedGroupBy,
+  selectedTesterFilters,
+  setSelectedTesterFilters,
+  isTesterFilterOpen,
+  setIsTesterFilterOpen,
+  focusedBugId,
+  setFocusedBugId,
+  bugTesterOptions
 }) => {
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [isGroupByOpen, setIsGroupByOpen] = useState(false);
+  const groupByRef = useRef<HTMLDivElement | null>(null);
+  const testerFilterRef = useRef<HTMLDivElement | null>(null);
+
+  const fmtT = (iso?: string) => {
+    const d = new Date(iso || '');
+    return Number.isNaN(d.getTime())
+      ? ''
+      : d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  };
+
+  // Compute grouped sections for feedRows based on feedGroupBy ('time' | 'tester' | 'device' | 'cuj')
+  const groupedSections = useMemo(() => {
+    const rowLeadBug = (r: FeedRow): BugLog => (r.kind === 'bundle' ? r.members[0] : r.bug);
+    const rowBugCount = (r: FeedRow): number => (r.kind === 'bundle' ? r.members.length : 1);
+
+    const yesterdayDate = new Date();
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterdayStr = getLocalDateStr(yesterdayDate);
+
+    // Reference time for "LAST HOUR": latest timestamp in feedRows (or feedNow if recent)
+    let maxRowMs = 0;
+    feedRows.forEach(r => {
+      const ms = new Date(rowLeadBug(r).timestamp || '').getTime();
+      if (!isNaN(ms) && ms > maxRowMs) maxRowMs = ms;
+    });
+    const refNowMs = maxRowMs > 0 ? Math.max(feedNow, maxRowMs) : feedNow;
+
+    if (feedGroupBy === 'time') {
+      const map = new Map<string, { key: string; label: string; count: number; rightMeta?: string; rows: FeedRow[] }>();
+      feedRows.forEach(r => {
+        const b = rowLeadBug(r);
+        const d = new Date(b.timestamp || '');
+        const ms = d.getTime();
+        const dayStr = !isNaN(ms) ? getLocalDateStr(d) : '';
+        let key = 'older';
+        let label = 'OLDER';
+        if (dayStr === todayStr) {
+          if (!isNaN(ms) && refNowMs - ms <= 60 * 60 * 1000) {
+            key = 'last-hour';
+            label = 'LAST HOUR';
+          } else {
+            key = 'earlier-today';
+            label = 'EARLIER TODAY';
+          }
+        } else if (dayStr === yesterdayStr) {
+          key = 'yesterday';
+          label = 'YESTERDAY';
+        } else if (dayStr) {
+          key = `day-${dayStr}`;
+          label = d
+            .toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+            .toUpperCase();
+        }
+        let sec = map.get(key);
+        if (!sec) {
+          sec = { key, label, count: 0, rows: [] };
+          map.set(key, sec);
+        }
+        sec.count += rowBugCount(r);
+        sec.rows.push(r);
+      });
+      return Array.from(map.values());
+    }
+
+    if (feedGroupBy === 'tester') {
+      const map = new Map<
+        string,
+        {
+          key: string;
+          label: string;
+          count: number;
+          devices: Set<string>;
+          latestIso?: string;
+          latestMs: number;
+          rows: FeedRow[];
+        }
+      >();
+      feedRows.forEach(r => {
+        const b = rowLeadBug(r);
+        const rawTester = (b.testerName || (b as any).reporter || '').trim() || 'Unknown';
+        const k = rawTester.toLowerCase();
+        let sec = map.get(k);
+        if (!sec) {
+          sec = {
+            key: `tester-${k}`,
+            label: rawTester.toUpperCase(),
+            count: 0,
+            devices: new Set<string>(),
+            latestIso: undefined,
+            latestMs: 0,
+            rows: [],
+          };
+          map.set(k, sec);
+        }
+        sec.count += rowBugCount(r);
+        if (b.deviceName && b.deviceName.trim()) sec.devices.add(b.deviceName.trim());
+        const ms = new Date(b.timestamp || '').getTime();
+        if (!isNaN(ms) && ms > sec.latestMs) {
+          sec.latestMs = ms;
+          sec.latestIso = b.timestamp;
+        }
+        sec.rows.push(r);
+      });
+      const list = Array.from(map.values());
+      if (sortByDevice === 'tester-most') {
+        list.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+      } else {
+        list.sort((a, b) => a.label.localeCompare(b.label));
+      }
+      return list.map(s => {
+        const devStr = Array.from(s.devices).join(', ');
+        const latestStr = s.latestIso ? `latest ${fmtT(s.latestIso)}` : '';
+        const rightMeta = [devStr, latestStr].filter(Boolean).join(' · ');
+        return {
+          key: s.key,
+          label: s.label,
+          count: s.count,
+          rightMeta,
+          rows: s.rows,
+        };
+      });
+    }
+
+    if (feedGroupBy === 'device') {
+      const map = new Map<
+        string,
+        { key: string; label: string; count: number; latestIso?: string; latestMs: number; rows: FeedRow[] }
+      >();
+      feedRows.forEach(r => {
+        const b = rowLeadBug(r);
+        const rawDev = (b.deviceName || '').trim() || 'Unspecified';
+        const k = rawDev.toLowerCase();
+        let sec = map.get(k);
+        if (!sec) {
+          sec = {
+            key: `device-${k}`,
+            label: rawDev.toUpperCase(),
+            count: 0,
+            latestIso: undefined,
+            latestMs: 0,
+            rows: [],
+          };
+          map.set(k, sec);
+        }
+        sec.count += rowBugCount(r);
+        const ms = new Date(b.timestamp || '').getTime();
+        if (!isNaN(ms) && ms > sec.latestMs) {
+          sec.latestMs = ms;
+          sec.latestIso = b.timestamp;
+        }
+        sec.rows.push(r);
+      });
+      return Array.from(map.values())
+        .sort((a, b) => a.label.localeCompare(b.label))
+        .map(s => ({
+          key: s.key,
+          label: s.label,
+          count: s.count,
+          rightMeta: s.latestIso ? `latest ${fmtT(s.latestIso)}` : undefined,
+          rows: s.rows,
+        }));
+    }
+
+    // feedGroupBy === 'cuj'
+    const map = new Map<
+      string,
+      { key: string; label: string; count: number; latestIso?: string; latestMs: number; rows: FeedRow[] }
+    >();
+    feedRows.forEach(r => {
+      const b = rowLeadBug(r);
+      const rawCuj = (b.feature || '').trim() || 'General';
+      const k = rawCuj.toLowerCase();
+      let sec = map.get(k);
+      if (!sec) {
+        sec = {
+          key: `cuj-${k}`,
+          label: rawCuj.toUpperCase(),
+          count: 0,
+          latestIso: undefined,
+          latestMs: 0,
+          rows: [],
+        };
+        map.set(k, sec);
+      }
+      sec.count += rowBugCount(r);
+      const ms = new Date(b.timestamp || '').getTime();
+      if (!isNaN(ms) && ms > sec.latestMs) {
+        sec.latestMs = ms;
+        sec.latestIso = b.timestamp;
+      }
+      sec.rows.push(r);
+    });
+    return Array.from(map.values())
+      .sort((a, b) => a.label.localeCompare(b.label))
+      .map(s => ({
+        key: s.key,
+        label: s.label,
+        count: s.count,
+        rightMeta: s.latestIso ? `latest ${fmtT(s.latestIso)}` : undefined,
+        rows: s.rows,
+      }));
+  }, [feedRows, feedGroupBy, todayStr, feedNow, sortByDevice, getLocalDateStr]);
+
+  // Visible bug IDs in rendered order for J/K/Enter/R/1/2/3 keyboard navigation
+  const visibleFeedBugIds = useMemo(() => {
+    const ids: string[] = [];
+    groupedSections.forEach(sec => {
+      const isLongCollapsible = feedGroupBy !== 'time' && sec.rows.length > 3 && !expandedGroups[sec.key];
+      const shownRows = isLongCollapsible ? sec.rows.slice(0, 3) : sec.rows;
+      shownRows.forEach(r => {
+        if (r.kind === 'bug') ids.push(r.bug.id);
+        else r.members.forEach(m => ids.push(m.id));
+      });
+    });
+    return ids;
+  }, [groupedSections, feedGroupBy, expandedGroups]);
+
+  // Keyboard shortcuts on Bugs Feed: J/K move focus, Enter expand, R mark reviewed, 1/2/3 set P0/P1/P2
+  useEffect(() => {
+    if (buganizerEnabled && bugsView !== 'feed') return;
+    if (feedTab === 'suggestions') return;
+
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target && target.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (visibleFeedBugIds.length === 0) return;
+
+      const key = e.key;
+      if (key === 'j' || key === 'J' || key === 'k' || key === 'K') {
+        e.preventDefault();
+        const curIdx = focusedBugId ? visibleFeedBugIds.indexOf(focusedBugId) : -1;
+        const nextIdx =
+          key === 'j' || key === 'J'
+            ? curIdx < 0
+              ? 0
+              : Math.min(visibleFeedBugIds.length - 1, curIdx + 1)
+            : curIdx <= 0
+            ? 0
+            : curIdx - 1;
+        const nextId = visibleFeedBugIds[nextIdx];
+        if (nextId) {
+          setFocusedBugId(nextId);
+          document.getElementById(`feed-row-${nextId}`)?.scrollIntoView({ block: 'nearest' });
+        }
+        return;
+      }
+
+      const activeId =
+        focusedBugId && visibleFeedBugIds.includes(focusedBugId)
+          ? focusedBugId
+          : visibleFeedBugIds[0];
+      if (!activeId) return;
+
+      if (key === 'Enter') {
+        // Avoid double-toggling if focus is already directly on the feed-row element (which has its own onKeyDown Enter)
+        if (target && target.getAttribute('data-testid') === 'feed-row') return;
+        e.preventDefault();
+        setFocusedBugId(activeId);
+        toggleBugExpand(activeId);
+        return;
+      }
+
+      if (key === 'r' || key === 'R') {
+        e.preventDefault();
+        setFocusedBugId(activeId);
+        markReviewed(activeId);
+        flashFeed('Marked reviewed (R).');
+        return;
+      }
+
+      if (key === '1' || key === '2' || key === '3') {
+        e.preventDefault();
+        const prio = key === '1' ? 'P0' : key === '2' ? 'P1' : 'P2';
+        setFocusedBugId(activeId);
+        if (feedTab === 'new') {
+          setStickyNewBugIds(prev => new Set(prev).add(activeId));
+        }
+        handleUpdateBugCategorization(activeId, 'priority', prio);
+        flashFeed(`Set priority to ${prio}.`);
+      }
+    };
+
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [
+    buganizerEnabled,
+    bugsView,
+    feedTab,
+    visibleFeedBugIds,
+    focusedBugId,
+    setFocusedBugId,
+    toggleBugExpand,
+    markReviewed,
+    handleUpdateBugCategorization,
+    flashFeed,
+  ]);
   const renderFeedBundle = (
     row: { id: string; members: BugLog[] },
     renderBug: (b: BugLog) => React.ReactNode
@@ -379,6 +696,7 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
           };
           const renderFeedBug = (bug: BugLog) => {
             const isBugExpanded = !!expandedBugIds[bug.id];
+            const isFocused = focusedBugId === bug.id;
             const raw = (bugById.get(bug.id) || bug) as BugLog;
             const filed = effectiveFiled(raw);
             const pending = !filed && raw.filePending;
@@ -398,19 +716,32 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
                 <div
                   data-testid="feed-row"
                   data-bug-id={bug.id}
+                  data-focused={isFocused ? 'true' : undefined}
                   role="button"
                   tabIndex={0}
-                  onClick={() => toggleBugExpand(bug.id)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') toggleBugExpand(bug.id);
+                  onClick={() => {
+                    setFocusedBugId(bug.id);
+                    toggleBugExpand(bug.id);
                   }}
-                  className={`${rowCls} ${isBugExpanded ? rowOpenCls : ''}`}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      setFocusedBugId(bug.id);
+                      toggleBugExpand(bug.id);
+                    }
+                  }}
+                  className={`${rowCls} ${isBugExpanded ? rowOpenCls : ''} ${
+                    isFocused ? 'bg-blue-500/[0.08] shadow-[inset_3px_0_0_#3b82f6]' : ''
+                  }`}
                 >
-                  <span className="text-[10.5px] text-slate-400 w-[58px] whitespace-nowrap">
+                  <span className="text-[10.5px] text-slate-400 w-[58px] whitespace-nowrap font-mono">
                     {fmtT(bug.timestamp)}
                   </span>
                   <span className="hidden md:inline text-[11.5px] text-slate-400 truncate max-w-[150px]">
-                    {bug.testerName || 'Unknown'} · {bug.deviceName || '?'}
+                    {feedGroupBy === 'tester'
+                      ? bug.deviceName || '?'
+                      : feedGroupBy === 'device'
+                      ? bug.testerName || 'Unknown'
+                      : `${bug.testerName || 'Unknown'} · ${bug.deviceName || '?'}`}
                   </span>
                   <span className="flex-1 min-w-0 truncate text-slate-100" title={bug.note}>
                     {rowTitle}
@@ -980,6 +1311,164 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
                   </button>
                 </div>
                 <div className="flex-1" />
+
+                {/* Group by dropdown (`Group by: Time ▾`) */}
+                <div className="relative" ref={groupByRef}>
+                  <button
+                    type="button"
+                    data-testid="feed-group-by"
+                    onClick={() => setIsGroupByOpen(v => !v)}
+                    className={`${chipCls} ${feedGroupBy !== 'time' || isGroupByOpen ? chipOn : chipOff}`}
+                  >
+                    <span>
+                      Group by:{' '}
+                      <b className="text-white">
+                        {feedGroupBy === 'time'
+                          ? 'Time'
+                          : feedGroupBy === 'tester'
+                          ? 'Tester'
+                          : feedGroupBy === 'device'
+                          ? 'Device'
+                          : 'CUJ'}
+                      </b>{' '}
+                      ▾
+                    </span>
+                  </button>
+                  {isGroupByOpen && (
+                    <div
+                      data-testid="feed-group-by-popover"
+                      className="absolute right-0 z-30 mt-1.5 w-44 rounded-xl border border-slate-700 bg-[#0f172a] p-1.5 shadow-2xl text-xs space-y-0.5"
+                    >
+                      {(
+                        [
+                          { key: 'time', label: 'Time (default)' },
+                          { key: 'tester', label: 'Tester' },
+                          { key: 'device', label: 'Device' },
+                          { key: 'cuj', label: 'CUJ' },
+                        ] as const
+                      ).map(opt => (
+                        <button
+                          key={opt.key}
+                          type="button"
+                          data-testid={`group-by-${opt.key}`}
+                          onClick={() => {
+                            setFeedGroupBy(opt.key);
+                            setIsGroupByOpen(false);
+                          }}
+                          className={`w-full px-2.5 py-1.5 rounded-lg text-left flex items-center gap-2 cursor-pointer ${
+                            feedGroupBy === opt.key
+                              ? 'bg-blue-600/20 text-white font-semibold'
+                              : 'text-slate-300 hover:bg-slate-800/80'
+                          }`}
+                        >
+                          <span className="text-[10px]">
+                            {feedGroupBy === opt.key ? '●' : '○'}
+                          </span>
+                          <span>{opt.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Tester multi-select filter (`Tester: All (N) ▾`) */}
+                <div className="relative" ref={testerFilterRef}>
+                  <button
+                    type="button"
+                    data-testid="feed-tester-filter"
+                    onClick={() => setIsTesterFilterOpen(v => !v)}
+                    className={`${chipCls} ${
+                      selectedTesterFilters.length > 0 || isTesterFilterOpen ? chipOn : chipOff
+                    }`}
+                  >
+                    <span>
+                      Tester:{' '}
+                      <b className="text-white">
+                        {selectedTesterFilters.length === 0
+                          ? `All (${bugTesterOptions.length})`
+                          : selectedTesterFilters.length === 1
+                          ? selectedTesterFilters[0]
+                          : `${selectedTesterFilters.length} selected`}
+                      </b>{' '}
+                      ▾
+                    </span>
+                  </button>
+                  {isTesterFilterOpen && (
+                    <div
+                      data-testid="feed-tester-popover"
+                      className="absolute right-0 z-30 mt-1.5 w-56 rounded-xl border border-slate-700 bg-[#0f172a] p-2 shadow-2xl text-xs space-y-1 max-h-72 overflow-y-auto"
+                    >
+                      <button
+                        type="button"
+                        data-testid="tester-filter-all"
+                        onClick={() => setSelectedTesterFilters([])}
+                        className={`w-full px-2.5 py-1.5 rounded-lg text-left flex items-center justify-between cursor-pointer ${
+                          selectedTesterFilters.length === 0
+                            ? 'bg-blue-600/20 text-white font-semibold'
+                            : 'text-slate-300 hover:bg-slate-800/80'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            readOnly
+                            checked={selectedTesterFilters.length === 0}
+                            className="accent-blue-500 pointer-events-none"
+                          />
+                          <span>All testers</span>
+                        </span>
+                        <span className="font-mono text-[11px] text-slate-400">
+                          {bugLogs.length}
+                        </span>
+                      </button>
+                      {bugTesterOptions.map(opt => {
+                        const checked = selectedTesterFilters.some(
+                          t => t.toLowerCase() === opt.name.toLowerCase()
+                        );
+                        return (
+                          <button
+                            key={opt.name}
+                            type="button"
+                            data-testid="tester-filter-option"
+                            data-tester-name={opt.name}
+                            onClick={() => {
+                              setSelectedTesterFilters(prev => {
+                                const exists = prev.some(
+                                  t => t.toLowerCase() === opt.name.toLowerCase()
+                                );
+                                if (exists) {
+                                  return prev.filter(
+                                    t => t.toLowerCase() !== opt.name.toLowerCase()
+                                  );
+                                }
+                                return [...prev, opt.name];
+                              });
+                            }}
+                            className={`w-full px-2.5 py-1.5 rounded-lg text-left flex items-center justify-between cursor-pointer ${
+                              checked
+                                ? 'bg-blue-600/20 text-white font-semibold'
+                                : 'text-slate-300 hover:bg-slate-800/80'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2 truncate">
+                              <input
+                                type="checkbox"
+                                readOnly
+                                checked={checked}
+                                className="accent-blue-500 pointer-events-none"
+                              />
+                              <span className="truncate">{opt.name}</span>
+                            </span>
+                            <span className="font-mono text-[11px] text-slate-400">
+                              {opt.count}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
                 <select
                   aria-label="Plan filter"
                   data-testid="feed-plan"
@@ -1099,6 +1588,8 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
                           <option value="newest">Newest first</option>
                           <option value="oldest">Oldest first</option>
                           <option value="priority">Priority (P0 first)</option>
+                          <option value="tester-asc">Tester (A → Z)</option>
+                          <option value="tester-most">Tester (most bugs)</option>
                           <option value="device-asc">Device (A → Z)</option>
                           <option value="device-desc">Device (Z → A)</option>
                         </select>
@@ -1112,6 +1603,8 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
                             setSelectedFeatureFilter('all');
                             setSelectedDeviceFilter('all');
                             setSelectedPlanFilter('all');
+                            setSelectedTesterFilters([]);
+                            setFeedGroupBy('time');
                             setSortByDevice('newest');
                             setCustomDateInput('');
                           }}
@@ -1161,23 +1654,90 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
                   />
                 )
               ) : (
-                <div className={listBoxCls} data-testid="feed-list">
-                  {feedRows.length === 0 ? (
-                    <div className="p-8 text-center text-sm text-slate-400">
-                      {feedTab === 'new'
-                        ? processedBugs.length
-                          ? 'Nothing new - every report here has been reviewed.'
-                          : 'No matching bugs for these filters.'
-                        : 'No reviewed reports for these filters yet.'}
-                    </div>
-                  ) : (
-                    feedRows.map(row =>
-                      row.kind === 'bundle'
-                        ? renderFeedBundle(row, renderFeedBug)
-                        : renderFeedBug(row.bug)
-                    )
+                <>
+                  <div className={listBoxCls} data-testid="feed-list">
+                    {feedRows.length === 0 ? (
+                      <div className="p-8 text-center text-sm text-slate-400">
+                        {feedTab === 'new'
+                          ? processedBugs.length
+                            ? 'Nothing new - every report here has been reviewed.'
+                            : 'No matching bugs for these filters.'
+                          : 'No reviewed reports for these filters yet.'}
+                      </div>
+                    ) : (
+                      groupedSections.map(sec => {
+                        const isLongGroup = feedGroupBy !== 'time' && sec.rows.length > 3;
+                        const isGroupExpanded = !!expandedGroups[sec.key];
+                        const shownRows = isLongGroup && !isGroupExpanded ? sec.rows.slice(0, 3) : sec.rows;
+                        const hiddenCount = sec.rows.length - shownRows.length;
+                        return (
+                          <div key={sec.key} data-testid="feed-group" data-group-key={sec.key}>
+                            <div
+                              data-testid="feed-group-header"
+                              className="px-3.5 py-2 bg-[#0b1120] border-b border-slate-800/80 flex items-center justify-between text-[10.5px] font-bold tracking-wider uppercase text-slate-400"
+                            >
+                              <span>
+                                <span className="text-slate-200">{sec.label}</span>{' '}
+                                <span className="text-slate-500">· {sec.count}</span>
+                              </span>
+                              {sec.rightMeta && (
+                                <span className="font-normal normal-case tracking-normal text-[11px] text-slate-400">
+                                  {sec.rightMeta}
+                                </span>
+                              )}
+                            </div>
+                            {shownRows.map(row =>
+                              row.kind === 'bundle'
+                                ? renderFeedBundle(row, renderFeedBug)
+                                : renderFeedBug(row.bug)
+                            )}
+                            {isLongGroup && (
+                              <div className="px-3.5 py-2 bg-[#0b1120]/60 border-b border-slate-800/80 text-[11px] text-slate-400">
+                                {hiddenCount > 0 ? (
+                                  <>
+                                    <span>+{hiddenCount} more · </span>
+                                    <button
+                                      type="button"
+                                      data-testid="feed-group-show-all"
+                                      onClick={() =>
+                                        setExpandedGroups(prev => ({ ...prev, [sec.key]: true }))
+                                      }
+                                      className="text-blue-400 hover:text-blue-300 font-semibold cursor-pointer"
+                                    >
+                                      show all
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    data-testid="feed-group-collapse"
+                                    onClick={() =>
+                                      setExpandedGroups(prev => ({ ...prev, [sec.key]: false }))
+                                    }
+                                    className="text-slate-400 hover:text-slate-200 font-semibold cursor-pointer"
+                                  >
+                                    show less
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                  {feedRows.length > 0 && (
+                    <p
+                      data-testid="feed-keyboard-hint"
+                      className="text-[11px] text-slate-500 px-1"
+                    >
+                      Keyboard: <b className="text-slate-400">J/K</b> next/previous ·{' '}
+                      <b className="text-slate-400">Enter</b> expand ·{' '}
+                      <b className="text-slate-400">R</b> mark reviewed ·{' '}
+                      <b className="text-slate-400">1/2/3</b> set P0/P1/P2
+                    </p>
                   )}
-                </div>
+                </>
               )}
             </div>
           );

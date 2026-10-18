@@ -427,6 +427,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
           uniqueDevices={c.uniqueDevices}
           sortByDevice={c.sortByDevice}
           setSortByDevice={c.setSortByDevice}
+          feedGroupBy={c.feedGroupBy}
+          setFeedGroupBy={c.setFeedGroupBy}
+          selectedTesterFilters={c.selectedTesterFilters}
+          setSelectedTesterFilters={c.setSelectedTesterFilters}
+          isTesterFilterOpen={c.isTesterFilterOpen}
+          setIsTesterFilterOpen={c.setIsTesterFilterOpen}
+          focusedBugId={c.focusedBugId}
+          setFocusedBugId={c.setFocusedBugId}
+          bugTesterOptions={c.bugTesterOptions}
         />
       )}
 

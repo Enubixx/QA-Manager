@@ -1567,11 +1567,15 @@ export function useDashboardController({
     [processedBugs, bugById, bugCategorizations]);
   const feedRows = useMemo<FeedRow[]>(() => {
     if (feedTab === 'reviewed') return buildFeedRows(reviewedFeedBugs);
-    const visibleNew = processedBugs.filter(b => !reviewedOf(b) || (stickyNewBugIds.has(b.id) && !!expandedBugIds[b.id]));
+    const visibleNew = processedBugs.filter(
+      b =>
+        !reviewedOf(b) ||
+        (stickyNewBugIds.has(b.id) && (!!expandedBugIds[b.id] || focusedBugId === b.id))
+    );
     return buildFeedRows(visibleNew);
   },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [feedTab, newFeedBugs, reviewedFeedBugs, processedBugs, stickyNewBugIds, expandedBugIds]);
+    [feedTab, newFeedBugs, reviewedFeedBugs, processedBugs, stickyNewBugIds, expandedBugIds, focusedBugId]);
 
   /** Opens a report on the Bugs Feed (from the Buganizer tab): its tab, expanded, scrolled into view. */
   const openInFeed = (bugId?: string) => {

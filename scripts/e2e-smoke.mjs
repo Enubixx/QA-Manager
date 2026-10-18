@@ -158,9 +158,27 @@ async function runE2ESmoke() {
       { timeout: 60000 }
     );
 
-    // 2. Verify Test Plans tab renders & honest offline sync badge in sandbox
+    // 2. Verify Test Plans tab renders, columns align, & honest offline sync badge in sandbox
     const bodyTextPlans = await page.evaluate(() => document.body.innerText);
     assert.ok(bodyTextPlans.includes('E2E Core Plan'), 'Test Plans tab must render E2E Core Plan');
+
+    const colAlignment = await page.evaluate(() => {
+      const pairs = [
+        ['[data-testid="plans-col-header-plan"]', '[data-testid="test-plan-name-cell"]'],
+        ['[data-testid="plans-col-header-steps"]', '[data-testid="test-plan-steps"]'],
+        ['[data-testid="plans-col-header-lastrun"]', '[data-testid="test-plan-last-run"]'],
+        ['[data-testid="plans-col-header-today"]', '[data-testid="test-plan-today"]'],
+        ['[data-testid="plans-col-header-bugs"]', '[data-testid="test-plan-bugs"]'],
+      ];
+      return pairs.map(([hSel, rSel]) => {
+        const h = document.querySelector(hSel)?.getBoundingClientRect();
+        const r = document.querySelector(rSel)?.getBoundingClientRect();
+        return { hSel, diff: h && r ? Math.abs(h.left - r.left) : 999 };
+      });
+    });
+    for (const c of colAlignment) {
+      assert.ok(c.diff <= 2, `Expected column ${c.hSel} to align with row cell within 2px, got diff=${c.diff}px`);
+    }
 
     const syncBadge = await page.evaluate(() => {
       const el = document.querySelector('[data-testid="navbar-sync-status"]');
@@ -378,6 +396,64 @@ async function runE2ESmoke() {
     assert.equal(feedRowCheck.hasPriChip, false, 'Default P2 priority chip must be hidden on collapsed row');
     assert.equal(feedRowCheck.hasOpenBtn, false, 'Collapsed bug row must not have Open button');
     assert.equal(feedRowCheck.hasRx95Offline, false, 'Offline RX95 chip must be hidden when no error');
+
+    // Verify U3: Time group header, keyboard hint, J/1/3 shortcuts, Group by Tester, Tester filter
+    const u3InitialCheck = await page.evaluate(() => {
+      const grpHeader = document.querySelector('[data-testid="feed-group-header"]')?.textContent?.trim() || '';
+      const kbHint = document.querySelector('[data-testid="feed-keyboard-hint"]')?.textContent?.trim() || '';
+      return { grpHeader, kbHint };
+    });
+    assert.ok(u3InitialCheck.grpHeader.includes('LAST HOUR'), `Expected LAST HOUR group header, got: ${u3InitialCheck.grpHeader}`);
+    assert.ok(u3InitialCheck.kbHint.includes('Keyboard:'), `Expected keyboard hint line, got: ${u3InitialCheck.kbHint}`);
+
+    // Press J to focus row, then 1 to set P0, then 3 to reset to P2
+    await page.keyboard.press('j');
+    await new Promise(r => setTimeout(r, 100));
+    await page.keyboard.press('1');
+    await new Promise(r => setTimeout(r, 150));
+    const hasP0AfterKey = await page.evaluate(() => {
+      const chip = document.querySelector('[data-testid="feed-row"] [data-testid="feed-priority-chip"]');
+      return chip ? chip.textContent?.trim() : '';
+    });
+    assert.equal(hasP0AfterKey, 'P0', 'Pressing 1 on focused bug row must set priority to P0');
+    await page.keyboard.press('3');
+    await new Promise(r => setTimeout(r, 150));
+
+    // Switch Group by -> Tester
+    const groupByBtn = await page.$('[data-testid="feed-group-by"]');
+    assert.ok(groupByBtn, 'Group by button must exist');
+    await groupByBtn.click();
+    await new Promise(r => setTimeout(r, 100));
+    const groupByTesterOpt = await page.$('[data-testid="group-by-tester"]');
+    assert.ok(groupByTesterOpt, 'Group by Tester option must exist');
+    await groupByTesterOpt.click();
+    await new Promise(r => setTimeout(r, 150));
+    const testerGrpText = await page.evaluate(
+      () => document.querySelector('[data-testid="feed-group-header"]')?.textContent?.trim() || ''
+    );
+    assert.ok(testerGrpText.includes('ALICE E2E'), `Expected ALICE E2E tester group header, got: ${testerGrpText}`);
+
+    // Switch back to Group by -> Time
+    await groupByBtn.click();
+    await new Promise(r => setTimeout(r, 100));
+    const groupByTimeOpt = await page.$('[data-testid="group-by-time"]');
+    await groupByTimeOpt.click();
+    await new Promise(r => setTimeout(r, 100));
+
+    // Open Tester filter popover
+    const testerFilterBtn = await page.$('[data-testid="feed-tester-filter"]');
+    assert.ok(testerFilterBtn, 'Tester filter button must exist');
+    await testerFilterBtn.click();
+    await new Promise(r => setTimeout(r, 100));
+    const testerPopoverText = await page.evaluate(
+      () => document.querySelector('[data-testid="feed-tester-popover"]')?.textContent || ''
+    );
+    assert.ok(
+      testerPopoverText.includes('All testers') && testerPopoverText.includes('Alice E2E'),
+      `Expected All testers and Alice E2E in tester filter popover, got: ${testerPopoverText}`
+    );
+    await testerFilterBtn.click();
+    await new Promise(r => setTimeout(r, 100));
 
     const buganizerTabBtn = await page.$('[data-testid="buganizer-tab"]');
     assert.ok(buganizerTabBtn, 'Buganizer sub-tab [data-testid="buganizer-tab"] must exist');
