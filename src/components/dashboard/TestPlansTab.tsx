@@ -232,14 +232,14 @@ export const TestPlansTab: React.FC<TestPlansTabProps> = ({
               {/* Column Headers: PLAN · STEPS · LAST RUN · TODAY · BUGS */}
               <div
                 data-testid="test-plans-table-header"
-                className="px-4 py-2.5 grid grid-cols-[minmax(0,1.6fr)_60px_110px_64px_56px_auto] items-center gap-3 text-[10px] font-bold uppercase tracking-wider text-slate-400"
+                className="px-4 py-2.5 grid grid-cols-[minmax(0,1fr)_52px_48px_auto] sm:grid-cols-[minmax(0,1.4fr)_56px_100px_56px_52px_208px] items-center gap-3 text-[10px] font-bold uppercase tracking-wider text-slate-400"
               >
-                <span>Plan</span>
-                <span>Steps</span>
-                <span className="hidden sm:inline">Last run</span>
-                <span className="hidden sm:inline">Today</span>
-                <span>Bugs</span>
-                <span className="sr-only">Actions</span>
+                <span data-testid="plans-col-header-plan">Plan</span>
+                <span data-testid="plans-col-header-steps">Steps</span>
+                <span data-testid="plans-col-header-lastrun" className="hidden sm:inline">Last run</span>
+                <span data-testid="plans-col-header-today" className="hidden sm:inline">Today</span>
+                <span data-testid="plans-col-header-bugs">Bugs</span>
+                <span data-testid="plans-col-header-actions" aria-hidden="true" />
               </div>
 
               {filteredPlans.map(plan => {
@@ -260,9 +260,9 @@ export const TestPlansTab: React.FC<TestPlansTabProps> = ({
                     data-plan-id={plan.id}
                     className="transition-colors hover:bg-slate-900/40"
                   >
-                    <div className="px-4 py-3 grid grid-cols-[minmax(0,1.6fr)_60px_110px_64px_56px_auto] items-center gap-3">
+                    <div className="px-4 py-3 grid grid-cols-[minmax(0,1fr)_52px_48px_auto] sm:grid-cols-[minmax(0,1.4fr)_56px_100px_56px_52px_208px] items-center gap-3">
                       {/* Col 1: Plan Name (click to expand steps) */}
-                      <div className="flex items-center gap-2 min-w-0">
+                      <div data-testid="test-plan-name-cell" className="flex items-center gap-2 min-w-0">
                         <button
                           type="button"
                           data-testid="test-plan-expand"
@@ -293,6 +293,7 @@ export const TestPlansTab: React.FC<TestPlansTabProps> = ({
                       {/* Col 2: Steps */}
                       <button
                         type="button"
+                        data-testid="test-plan-steps"
                         onClick={() =>
                           setExpandedPlanSteps(prev => ({ ...prev, [plan.id]: !prev[plan.id] }))
                         }
@@ -329,7 +330,7 @@ export const TestPlansTab: React.FC<TestPlansTabProps> = ({
                       </span>
 
                       {/* Col 6: Actions: [▶ Test on phone] [✎ Edit visible] [⋯ = Clone · Simulate a run · Delete] */}
-                      <div className="flex items-center justify-end gap-1.5 shrink-0">
+                      <div data-testid="test-plan-actions" className="flex items-center justify-end gap-1.5 shrink-0">
                         <button
                           type="button"
                           data-testid="run-on-phone-button"
