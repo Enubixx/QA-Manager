@@ -2,6 +2,8 @@ import React from 'react';
 import { RefreshCw, Layers, X, Trash2 } from 'lucide-react';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota } from '../../types';
 import { APP_VERSION_OPTIONS } from '../../constants';
+import { getRunAutoReleasedMeta } from '../../utils/runUtils';
+import { getLocalDateStr as getLocalDateStrUtil } from '../../utils/dateUtils';
 
 export interface ActiveTesterMetrics {
   deviceName: string;
@@ -518,6 +520,62 @@ export const InspectorSlideOver: React.FC<InspectorSlideOverProps> = ({
   onDeleteTestRun,
   onBootTester
 }) => {
+  const planTitleMap = new Map(testPlans.map(p => [p.id, p.name]));
+  const autoReleasedRunsForScope = (() => {
+    const byId = new Map<string, TestRun>();
+    [...(archivedRuns || []), ...(testRuns || [])].forEach(r => {
+      if (!r || !r.id || r.status !== 'terminated') return;
+      const meta = getRunAutoReleasedMeta(r);
+      if (!meta) return;
+      if (selectedQaDate !== 'all') {
+        const startDay = r.startedAt ? getLocalDateStrUtil(r.startedAt) : '';
+        const completedDay = r.completedAt ? getLocalDateStrUtil(r.completedAt) : '';
+        const releasedDay = meta.at ? getLocalDateStrUtil(meta.at) : '';
+        if (
+          startDay !== selectedQaDate &&
+          completedDay !== selectedQaDate &&
+          releasedDay !== selectedQaDate
+        ) {
+          return;
+        }
+      }
+      byId.set(r.id, r);
+    });
+    return Array.from(byId.values()).map(r => {
+      const meta = getRunAutoReleasedMeta(r)!;
+      const stepEntries = Object.entries(r.results || {}).filter(
+        ([k, v]) =>
+          k !== '_meta' &&
+          v &&
+          typeof v === 'object' &&
+          'status' in (v as any) &&
+          (v as any).status !== 'pending'
+      );
+      const resultsArray = stepEntries.map(([_, v]) => v as any);
+      const greenCount = resultsArray.filter(x => x.status === 'green').length;
+      const yellowCount = resultsArray.filter(x => x.status === 'yellow').length;
+      const redCount = resultsArray.filter(x => x.status === 'red').length;
+      const ts = meta.at || r.completedAt || r.startedAt;
+      const d = ts ? new Date(ts) : null;
+      const timeFormatted =
+        d && !isNaN(d.getTime())
+          ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : '';
+      return {
+        runId: r.id,
+        testerName: r.testerName || 'Unassigned Tester',
+        deviceName: r.deviceName || 'Mobile Device',
+        deviceId: r.deviceId,
+        planName: planTitleMap.get(r.planId) || r.planName || 'Test Plan',
+        reason: meta.reason,
+        timeFormatted,
+        greenCount,
+        yellowCount,
+        redCount,
+      };
+    });
+  })();
+
   return (
     <>
       {/* Light backdrop */}
@@ -542,6 +600,12 @@ export const InspectorSlideOver: React.FC<InspectorSlideOverProps> = ({
                     dev.name.toLowerCase().trim()
                 )
                 .map(r => ({ ...r, testerName: t.name }))
+            );
+            const deviceAutoReleasedRuns = autoReleasedRunsForScope.filter(
+              r =>
+                (r.deviceId &&
+                  r.deviceId.toLowerCase().trim() === dev.id.toLowerCase().trim()) ||
+                r.deviceName.toLowerCase().trim() === dev.name.toLowerCase().trim()
             );
 
             const statusLabel = dev.isInUse
@@ -841,6 +905,61 @@ export const InspectorSlideOver: React.FC<InspectorSlideOverProps> = ({
                       </div>
                     </div>
                   ))}
+                  {deviceAutoReleasedRuns.map((runItem, idx) => (
+                    <div
+                      key={runItem.runId + '-auto-' + idx}
+                      className="bg-[#0b1120] border border-[#1a2540] rounded-lg px-2.5 py-2 flex items-center justify-between gap-2 text-xs"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 truncate">
+                          <span
+                            onClick={() =>
+                              setInspectorTarget({
+                                type: 'tester',
+                                id: runItem.testerName
+                              })
+                            }
+                            className="font-semibold text-slate-200 hover:text-blue-300 cursor-pointer truncate"
+                          >
+                            {runItem.testerName}
+                          </span>
+                          <span
+                            data-testid="auto-released-chip"
+                            className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px] font-medium shrink-0"
+                          >
+                            auto-released
+                          </span>
+                        </div>
+                        <div className="font-mono text-[11px] text-slate-500 truncate">
+                          {runItem.planName}
+                          {runItem.timeFormatted ? ` · ${runItem.timeFormatted}` : ''} ·{' '}
+                          <span className="text-slate-400">
+                            {runItem.reason === 'previous-day' ? 'previous day' : 'idle 2h+'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="font-mono text-[11px] flex items-center gap-1.5 shrink-0">
+                        <span className="text-emerald-400">✓{runItem.greenCount}</span>
+                        {runItem.yellowCount > 0 && (
+                          <span className="text-amber-400">!{runItem.yellowCount}</span>
+                        )}
+                        {runItem.redCount > 0 && (
+                          <span className="text-rose-400">✗{runItem.redCount}</span>
+                        )}
+                        {onDeleteTestRun && (
+                          <button
+                            type="button"
+                            onClick={() => onDeleteTestRun(runItem.runId)}
+                            className="p-0.5 text-slate-500 hover:text-rose-400 rounded transition-colors cursor-pointer ml-1"
+                            title="Delete run"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </>
             );
@@ -848,6 +967,9 @@ export const InspectorSlideOver: React.FC<InspectorSlideOverProps> = ({
         ) : (
           (() => {
             const inspectedTester = resolvedInspector.tester;
+            const testerAutoReleasedRuns = autoReleasedRunsForScope.filter(
+              r => r.testerName.toLowerCase().trim() === inspectedTester.testerKey
+            );
             return (
               <>
                 {/* Tester view header with trash + ✕ */}
@@ -1043,6 +1165,63 @@ export const InspectorSlideOver: React.FC<InspectorSlideOverProps> = ({
                                 onDeleteTestRun(runItem.runId);
                               }
                             }}
+                            className="p-0.5 text-slate-500 hover:text-rose-400 rounded transition-colors cursor-pointer ml-1"
+                            title="Delete run"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {testerAutoReleasedRuns.map((runItem, idx) => (
+                    <div
+                      key={runItem.runId + '-auto-' + idx}
+                      className="bg-[#0b1120] border border-[#1a2540] rounded-lg px-2.5 py-2 flex items-center justify-between gap-2 text-xs"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 truncate">
+                          <span className="font-semibold text-slate-200 truncate">
+                            {runItem.planName}
+                          </span>
+                          <span
+                            data-testid="auto-released-chip"
+                            className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px] font-medium shrink-0"
+                          >
+                            auto-released
+                          </span>
+                        </div>
+                        <div className="font-mono text-[11px] text-slate-500 truncate">
+                          <span
+                            onClick={() =>
+                              setInspectorTarget({
+                                type: 'device',
+                                id: runItem.deviceId || runItem.deviceName
+                              })
+                            }
+                            className="text-slate-300 hover:text-blue-300 cursor-pointer"
+                          >
+                            {runItem.deviceName}
+                          </span>
+                          {runItem.timeFormatted ? ` · ${runItem.timeFormatted}` : ''} ·{' '}
+                          <span className="text-slate-400">
+                            {runItem.reason === 'previous-day' ? 'previous day' : 'idle 2h+'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="font-mono text-[11px] flex items-center gap-1.5 shrink-0">
+                        <span className="text-emerald-400">✓{runItem.greenCount}</span>
+                        {runItem.yellowCount > 0 && (
+                          <span className="text-amber-400">!{runItem.yellowCount}</span>
+                        )}
+                        {runItem.redCount > 0 && (
+                          <span className="text-rose-400">✗{runItem.redCount}</span>
+                        )}
+                        {onDeleteTestRun && (
+                          <button
+                            type="button"
+                            onClick={() => onDeleteTestRun(runItem.runId)}
                             className="p-0.5 text-slate-500 hover:text-rose-400 rounded transition-colors cursor-pointer ml-1"
                             title="Delete run"
                           >

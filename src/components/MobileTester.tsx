@@ -7,7 +7,14 @@ import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile } from '../types';
 import { CheckCircle2, Clock, Bug, Smartphone, RefreshCw, Send, Check, Layers, ChevronDown, AlertTriangle, XCircle, ArrowRight, ArrowLeft, ChevronLeft, ChevronRight, Undo2, Sparkles, User, Download, Edit3, Trash2, Tag, Image, X, Mic, WifiOff } from 'lucide-react';
 import { triggerHaptic } from '../utils/haptics';
-import { isRunFullyCompleted, buildStepFirstSeenIndex, getEffectiveRunStatus } from '../utils/runUtils';
+import {
+  isRunFullyCompleted,
+  buildStepFirstSeenIndex,
+  getEffectiveRunStatus,
+  getAutoReleaseReason,
+  getRunAutoReleasedMeta,
+  getAutoReleaseMessage,
+} from '../utils/runUtils';
 import { mergeRunsById } from '../utils/cujReportUtils';
 import { getLocalDateStr } from '../utils/dateUtils';
 import { APP_VERSION_CODE, APP_VERSION_NAME, APK_DOWNLOAD_URL, formatAppVersionName } from '../constants';
@@ -196,6 +203,29 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   }, [currentPlan?.id, selectedPlanId, onSelectPlan]);
 
   // Check localStorage for any persistent in-progress run for this plan
+  const getAckAutoReleasedIds = (): Set<string> => {
+    try {
+      const raw = localStorage.getItem('qa_ack_auto_released_runs');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return new Set(parsed.filter(x => typeof x === 'string'));
+      }
+    } catch {}
+    return new Set();
+  };
+
+  const recordPendingAutoReleaseNotice = (runId: string, reason: 'previous-day' | 'idle') => {
+    if (!runId) return;
+    try {
+      const ack = getAckAutoReleasedIds();
+      if (ack.has(runId)) return;
+      localStorage.setItem(
+        'qa_last_auto_released_run',
+        JSON.stringify({ runId, reason, at: new Date().toISOString() })
+      );
+    } catch {}
+  };
+
   let localSavedRunJson: string | null = null;
   let lastSessionSetupDate: string | null = null;
   try {
@@ -206,6 +236,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   if (localSavedRunJson) {
     try {
       localSavedRun = JSON.parse(localSavedRunJson);
+      const localAutoReason = localSavedRun ? getAutoReleaseReason(localSavedRun) : null;
       if (
         localSavedRun &&
         ((localSavedRun.status as any) !== 'in_progress' ||
@@ -213,8 +244,17 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           isTestRunDeleted(localSavedRun.id) ||
           !localSavedRun.startedAt ||
           getLocalDateStr(localSavedRun.startedAt) !== todayStr ||
+          localAutoReason !== null ||
           (lastSessionSetupDate && lastSessionSetupDate !== todayStr))
       ) {
+        if (localSavedRun.id && localSavedRun.status === 'in_progress') {
+          const reason =
+            localAutoReason ||
+            (localSavedRun.startedAt && getLocalDateStr(localSavedRun.startedAt) !== todayStr
+              ? 'previous-day'
+              : null);
+          if (reason) recordPendingAutoReleaseNotice(localSavedRun.id, reason);
+        }
         try {
           if (currentPlan?.id) localStorage.removeItem(`qa_in_progress_run_${currentPlan.id}`);
         } catch (e) {}
@@ -228,6 +268,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   // If this local run was terminated, completed, or reset in cloud, or belongs to a different selected device, purge it
   if (localSavedRun) {
     const cloudCopy = testRuns.find(r => r.id === localSavedRun?.id);
+    const cloudAutoMeta = getRunAutoReleasedMeta(cloudCopy);
+    if (cloudAutoMeta && localSavedRun.id) {
+      recordPendingAutoReleaseNotice(localSavedRun.id, cloudAutoMeta.reason);
+    }
     const localStepCount = Object.keys(localSavedRun.results || {}).filter(k => k !== '_meta').length;
     const cloudResetToEmpty = Boolean(
       cloudCopy &&
@@ -263,6 +307,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     r.planId === currentPlan?.id && 
     r.status !== 'completed' &&
     (r.status as any) !== 'terminated' &&
+    getAutoReleaseReason(r) === null &&
     !archivedIdSet.has(r.id) &&
     !isTestRunDeleted(r.id) &&
     (!r.startedAt || getLocalDateStr(r.startedAt) === todayStr) &&
@@ -418,6 +463,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     activeRun &&
     activeRun.status === 'in_progress' &&
     getEffectiveRunStatus(activeRun, testPlans) === 'in_progress' &&
+    getAutoReleaseReason(activeRun) === null &&
     !archivedIdSet.has(activeRun.id) &&
     !isTestRunDeleted(activeRun.id) &&
     activeRun.testerName?.trim() &&
@@ -439,14 +485,24 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         if (!k.startsWith('qa_in_progress_run_')) return;
         try {
           const parsed = JSON.parse(localStorage.getItem(k) || 'null');
+          const parsedReason = parsed ? getAutoReleaseReason(parsed) : null;
           if (
             !parsed ||
             parsed.status !== 'in_progress' ||
             !parsed.startedAt ||
             getLocalDateStr(parsed.startedAt) !== todayStr ||
+            parsedReason !== null ||
             (lastSetupDate && lastSetupDate !== todayStr) ||
             (lastSetupDate !== todayStr && !hasValidLiveRun)
           ) {
+            if (parsed && parsed.id && parsed.status === 'in_progress') {
+              const r =
+                parsedReason ||
+                (parsed.startedAt && getLocalDateStr(parsed.startedAt) !== todayStr
+                  ? 'previous-day'
+                  : null);
+              if (r) recordPendingAutoReleaseNotice(parsed.id, r);
+            }
             localStorage.removeItem(k);
           }
         } catch {
@@ -1436,12 +1492,89 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     }
   }, [currentDevice?.isReady, currentDevice?.activeTesterName, showSetupModal, activeRun?.status, inputReporterName]);
 
-  // Channel 5: Test Run Status Terminated
+  // Channel 5: Test Run Status Terminated (manual admin boot OR auto-released stuck session)
   useEffect(() => {
-    if (showSetupModal || !activeRun || activeRun.status !== 'in_progress') return;
+    const ackRun = (runId: string) => {
+      if (!runId) return;
+      try {
+        const ack = getAckAutoReleasedIds();
+        ack.add(runId);
+        localStorage.setItem('qa_ack_auto_released_runs', JSON.stringify(Array.from(ack)));
+        localStorage.removeItem('qa_last_auto_released_run');
+      } catch {}
+    };
+
+    // 1. Check if a pending auto-release notice was recorded when clearing localStorage
+    try {
+      const pendingRaw = localStorage.getItem('qa_last_auto_released_run');
+      if (pendingRaw) {
+        const pending = JSON.parse(pendingRaw);
+        const ack = getAckAutoReleasedIds();
+        if (
+          pending &&
+          pending.runId &&
+          !ack.has(pending.runId) &&
+          (pending.reason === 'previous-day' || pending.reason === 'idle')
+        ) {
+          ackRun(pending.runId);
+          terminateSession(getAutoReleaseMessage(pending.reason));
+          return;
+        }
+      }
+    } catch {}
+
+    // 2. Check if an auto-released run in testRuns/archivedRuns belongs to this tester/phone and is unacknowledged
+    if (!hasValidLiveRun) {
+      const ack = getAckAutoReleasedIds();
+      const storedTester = (getStoredTesterName() || inputReporterName || '').toLowerCase().trim();
+      const storedDev = (getStoredDeviceName() || inputDeviceName || '').toLowerCase().trim();
+      const allRuns = [...testRuns, ...archivedRuns];
+      const matchingAutoReleased = allRuns.find(r => {
+        if (!r || !r.id || r.status !== 'terminated' || ack.has(r.id)) return false;
+        const meta = getRunAutoReleasedMeta(r);
+        if (!meta) return false;
+        if (activeRunIdRef.current && r.id === activeRunIdRef.current) return true;
+        const rTester = (r.testerName || '').toLowerCase().trim();
+        const rDevName = (r.deviceName || '').toLowerCase().trim();
+        const rDevId = (r.deviceId || '').toLowerCase().trim();
+        const matchesTester = Boolean(storedTester && rTester && rTester === storedTester);
+        const matchesDev = Boolean(
+          (storedDev && ((rDevName && rDevName === storedDev) || (rDevId && rDevId === storedDev))) ||
+          (deviceId && rDevId === deviceId.toLowerCase().trim())
+        );
+        if (!matchesTester && !matchesDev) return false;
+        if (storedTester && rTester && rTester !== storedTester) return false;
+        if (storedDev && rDevName && rDevName !== storedDev && rDevId !== storedDev) return false;
+
+        // Ensure no newer completed or live in-progress run supersedes this auto-released run
+        const rStartMs = r.startedAt ? new Date(r.startedAt).getTime() : 0;
+        const hasNewerRun = allRuns.some(other => {
+          if (!other || other.id === r.id) return false;
+          if (other.status !== 'completed' && other.status !== 'in_progress') return false;
+          const oTester = (other.testerName || '').toLowerCase().trim();
+          const oDev = (other.deviceName || '').toLowerCase().trim();
+          if (oTester !== rTester && oDev !== rDevName) return false;
+          const oStartMs = other.startedAt ? new Date(other.startedAt).getTime() : 0;
+          return oStartMs > rStartMs;
+        });
+        return !hasNewerRun;
+      });
+
+      if (matchingAutoReleased) {
+        const meta = getRunAutoReleasedMeta(matchingAutoReleased)!;
+        ackRun(matchingAutoReleased.id);
+        terminateSession(getAutoReleaseMessage(meta.reason));
+        return;
+      }
+    }
+
+    // 3. Active session terminated while running (admin kick or live auto-release)
+    const wasRunning = Boolean(activeRunIdRef.current) || (!showSetupModal && activeRun && activeRun.status === 'in_progress');
+    if (!wasRunning) return;
 
     const terminatedRun = testRuns.find(r => {
       if ((r.status as any) !== 'terminated') return false;
+      if (activeRunIdRef.current && r.id === activeRunIdRef.current) return true;
       const termTimestamp = r.completedAt ? new Date(r.completedAt).getTime() : (r.startedAt ? new Date(r.startedAt).getTime() : undefined);
       return checkSignalMatchesThisPhone({
         runId: r.id,
@@ -1453,9 +1586,15 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     });
 
     if (terminatedRun) {
-      terminateSession('Session Terminated: You have been remotely kicked from this device by the administrator. Device has been released.');
+      const autoMeta = getRunAutoReleasedMeta(terminatedRun);
+      if (autoMeta) {
+        ackRun(terminatedRun.id);
+        terminateSession(getAutoReleaseMessage(autoMeta.reason));
+      } else {
+        terminateSession('Session Terminated: You have been remotely kicked from this device by the administrator. Device has been released.');
+      }
     }
-  }, [testRuns, showSetupModal, activeRun?.status, inputReporterName, currentDevice?.id, currentDevice?.name]);
+  }, [testRuns, archivedRuns, hasValidLiveRun, showSetupModal, activeRun?.status, inputReporterName, inputDeviceName, currentDevice?.id, currentDevice?.name, deviceId]);
 
   // Continuous active monitor while session is in progress (checks every 1s)
   useEffect(() => {

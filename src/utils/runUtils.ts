@@ -1,5 +1,6 @@
-import { TestPlan, TestRun, DeviceProfile, BugLog } from '../types';
+import { TestPlan, TestRun, DeviceProfile, BugLog, AutoReleaseMeta } from '../types';
 import { getLocalDateStr } from './dateUtils';
+import { AUTO_RELEASE_IDLE_MINUTES } from '../constants';
 
 // ONE-TIME EXCEPTION (2026-09-30): these runs were cut short by the pre-v2.2.0
 // "Test Again" bug, which archived other testers' in-progress runs as 'completed'.
@@ -302,3 +303,221 @@ export const filterBugsAfterRunDelete = (
   const remaining = (bugLogs || []).filter(b => b.testRunId !== runId && !embeddedBugIds.has(b.id));
   return { remaining, toDelete };
 };
+
+/**
+ * Latest activity timestamp (epoch ms) on a run: checks recorded step timestamps in `results`
+ * (excluding `_meta`), `updatedAt`, `lastActivityTimestamp`, and `startedAt`.
+ * Returns `NaN` if no valid timestamp exists.
+ */
+export const getRunLastActivityMs = (run: TestRun | null | undefined): number => {
+  if (!run) return NaN;
+  let latest = NaN;
+  const consider = (ms: number) => {
+    if (Number.isFinite(ms) && (Number.isNaN(latest) || ms > latest)) {
+      latest = ms;
+    }
+  };
+  if (run.results && typeof run.results === 'object') {
+    Object.entries(run.results).forEach(([stepId, res]) => {
+      if (stepId === '_meta' || !res || typeof res !== 'object') return;
+      consider(toEpochMs((res as { timestamp?: unknown }).timestamp));
+    });
+  }
+  consider(toEpochMs((run as { updatedAt?: unknown }).updatedAt));
+  if (typeof run.lastActivityTimestamp === 'number' && Number.isFinite(run.lastActivityTimestamp)) {
+    consider(run.lastActivityTimestamp);
+  } else {
+    consider(toEpochMs(run.lastActivityTimestamp));
+  }
+  consider(toEpochMs(run.startedAt));
+  return latest;
+};
+
+/**
+ * Extract `_meta.autoReleased` from a run (supports both `run.results._meta.autoReleased` and `run._meta.autoReleased`).
+ */
+export const getRunAutoReleasedMeta = (run: TestRun | null | undefined): AutoReleaseMeta | null => {
+  if (!run) return null;
+  const fromResults = (run.results as any)?._meta?.autoReleased;
+  if (
+    fromResults &&
+    typeof fromResults === 'object' &&
+    (fromResults.reason === 'previous-day' || fromResults.reason === 'idle')
+  ) {
+    return { at: String(fromResults.at || ''), reason: fromResults.reason };
+  }
+  const fromTop = (run as any)?._meta?.autoReleased;
+  if (
+    fromTop &&
+    typeof fromTop === 'object' &&
+    (fromTop.reason === 'previous-day' || fromTop.reason === 'idle')
+  ) {
+    return { at: String(fromTop.at || ''), reason: fromTop.reason };
+  }
+  return null;
+};
+
+/**
+ * Human-readable mobile modal message for an auto-released session.
+ */
+export const getAutoReleaseMessage = (reason: 'previous-day' | 'idle'): string => {
+  if (reason === 'previous-day') {
+    return 'Your session from a previous day was automatically released.';
+  }
+  return 'Your session was released after 2 hours with no activity.';
+};
+
+/**
+ * Decide whether a run should be auto-released:
+ * 1. Only `in_progress` runs are eligible (`completed`, `terminated`, `not_started` return `null`).
+ * 2. If `startedAt` is on a previous local day -> `'previous-day'`.
+ * 3. If same-day `in_progress` run has had no activity for strictly more than `idleMinutes` -> `'idle'`.
+ */
+export const getAutoReleaseReason = (
+  run: TestRun | null | undefined,
+  now: number | Date = Date.now(),
+  idleMinutes: number = AUTO_RELEASE_IDLE_MINUTES
+): 'previous-day' | 'idle' | null => {
+  if (!run || run.status !== 'in_progress') return null;
+  const nowDate = typeof now === 'number' ? new Date(now) : now;
+  const nowMs = nowDate.getTime();
+  if (!Number.isFinite(nowMs)) return null;
+
+  const todayStr = getLocalDateStr(nowDate);
+  if (run.startedAt) {
+    const startDay = getLocalDateStr(run.startedAt);
+    if (startDay && startDay !== todayStr) {
+      return 'previous-day';
+    }
+  }
+
+  const lastActivityMs = getRunLastActivityMs(run);
+  if (Number.isFinite(lastActivityMs) && nowMs - lastActivityMs > idleMinutes * 60 * 1000) {
+    return 'idle';
+  }
+  return null;
+};
+
+/**
+ * Mark an `in_progress` run as auto-released (`status: 'terminated'`, preserving all steps and bugs,
+ * and recording `_meta.autoReleased = { at, reason }` in `results._meta` and `_meta`).
+ */
+export const markRunAutoReleased = (
+  run: TestRun,
+  reason: 'previous-day' | 'idle',
+  now: number | Date = Date.now()
+): TestRun => {
+  const nowDate = typeof now === 'number' ? new Date(now) : now;
+  const nowIso = nowDate.toISOString();
+  const prevResultsMeta =
+    run.results && typeof (run.results as any)._meta === 'object' && (run.results as any)._meta
+      ? (run.results as any)._meta
+      : {};
+  const prevTopMeta =
+    typeof (run as any)._meta === 'object' && (run as any)._meta ? (run as any)._meta : {};
+  const autoReleased: AutoReleaseMeta = { at: nowIso, reason };
+
+  return {
+    ...run,
+    status: 'terminated',
+    completedAt: run.completedAt || nowIso,
+    results: {
+      ...(run.results || {}),
+      _meta: {
+        ...prevResultsMeta,
+        autoReleased,
+      } as any,
+    },
+    _meta: {
+      ...prevTopMeta,
+      autoReleased,
+    },
+  };
+};
+
+export interface AutoReleaseSweepResult {
+  testRuns: TestRun[];
+  devices: DeviceProfile[];
+  releasedRuns: { run: TestRun; reason: 'previous-day' | 'idle' }[];
+  releasedDevices: DeviceProfile[];
+}
+
+/**
+ * Idempotent pass over `testRuns` and `devices` that auto-releases any stuck `in_progress` runs
+ * (previous-day or idle > `idleMinutes`) and unlocks their devices unless locked by another live run.
+ */
+export const autoReleaseStuckSessions = (
+  testRuns: TestRun[],
+  devices: DeviceProfile[],
+  now: number | Date = Date.now(),
+  idleMinutes: number = AUTO_RELEASE_IDLE_MINUTES
+): AutoReleaseSweepResult => {
+  const releasedRuns: { run: TestRun; reason: 'previous-day' | 'idle' }[] = [];
+  const nextRuns = (testRuns || []).map(r => {
+    if (!r || r.status !== 'in_progress') return r;
+    const reason = getAutoReleaseReason(r, now, idleMinutes);
+    if (!reason) return r;
+    const terminated = markRunAutoReleased(r, reason, now);
+    releasedRuns.push({ run: terminated, reason });
+    return terminated;
+  });
+
+  const nowDate = typeof now === 'number' ? new Date(now) : now;
+  const todayStr = getLocalDateStr(nowDate);
+
+  // Remaining genuinely live in-progress runs
+  const remainingLiveRuns = nextRuns.filter(
+    r =>
+      r &&
+      r.status === 'in_progress' &&
+      (!r.startedAt || getLocalDateStr(r.startedAt) === todayStr) &&
+      getAutoReleaseReason(r, now, idleMinutes) === null
+  );
+
+  // Any run that is now auto-released (either in this pass or a prior pass)
+  const autoReleasedRuns = nextRuns.filter(r => r && r.status === 'terminated' && getRunAutoReleasedMeta(r) !== null);
+
+  const releasedDevices: DeviceProfile[] = [];
+  const nextDevices = (devices || []).map(d => {
+    if (!d || (!d.activeRunId && !d.activeTesterName)) return d;
+
+    // Keep lock if there is still a genuinely live in-progress run on this device
+    const hasLiveRun = remainingLiveRuns.some(
+      r =>
+        (d.activeRunId && r.id === d.activeRunId) ||
+        (r.deviceId && d.id && r.deviceId.toLowerCase().trim() === d.id.toLowerCase().trim()) ||
+        (r.deviceName && d.name && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim())
+    );
+    if (hasLiveRun) return d;
+
+    const matchesAutoReleased = autoReleasedRuns.some(
+      r =>
+        (d.activeRunId && r.id === d.activeRunId) ||
+        (r.deviceId && d.id && r.deviceId.toLowerCase().trim() === d.id.toLowerCase().trim()) ||
+        (r.deviceName && d.name && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim()) ||
+        (r.testerName &&
+          d.activeTesterName &&
+          r.testerName.toLowerCase().trim() === d.activeTesterName.toLowerCase().trim())
+    );
+
+    if (matchesAutoReleased) {
+      const unlocked: DeviceProfile = {
+        ...d,
+        activeRunId: undefined,
+        activeTesterName: undefined,
+      };
+      releasedDevices.push(unlocked);
+      return unlocked;
+    }
+
+    return d;
+  });
+
+  return {
+    testRuns: nextRuns,
+    devices: nextDevices,
+    releasedRuns,
+    releasedDevices,
+  };
+};
+

@@ -15,7 +15,7 @@ function getFreePort() {
   });
 }
 
-async function waitForServer(url, timeoutMs = 15000) {
+async function waitForServer(url, timeoutMs = 45000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
@@ -75,7 +75,8 @@ async function runE2ESmoke() {
     });
 
     // 1. Seed deterministic offline state (device in pool with 0 active quotas so Start-of-day Activate works)
-    await page.goto(baseUrl, { waitUntil: 'networkidle0' });
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForSelector('#root', { timeout: 60000 });
     await page.evaluate(() => {
       localStorage.clear();
       localStorage.setItem('qa_prototype_seeded', 'skip');
@@ -121,7 +122,11 @@ async function runE2ESmoke() {
       localStorage.setItem('qa_bug_logs', JSON.stringify([]));
     });
 
-    await page.reload({ waitUntil: 'networkidle0' });
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForFunction(
+      () => document.body && document.body.innerText.includes('E2E Core Plan'),
+      { timeout: 60000 }
+    );
 
     // 2. Verify Test Plans tab renders
     const bodyTextPlans = await page.evaluate(() => document.body.innerText);

@@ -11,7 +11,14 @@ import {
   filterCloudArchivedRuns,
   filterCloudTestRuns,
   filterBugsAfterRunDelete,
+  getRunLastActivityMs,
+  getAutoReleaseReason,
+  getRunAutoReleasedMeta,
+  getAutoReleaseMessage,
+  markRunAutoReleased,
+  autoReleaseStuckSessions,
 } from '../runUtils';
+import { AUTO_RELEASE_IDLE_MINUTES } from '../../constants';
 import { mergeRunsById } from '../cujReportUtils';
 import {
   isTestRunDeleted,
@@ -286,3 +293,174 @@ describe('runUtils & quota / active-session logic', () => {
     expect(cascaded.toDelete.map(b => b.id)).toEqual(['bug-sup-1']);
   });
 });
+
+describe('auto-release stuck sessions (M3)', () => {
+  const nowDate = new Date(2026, 9, 18, 15, 0, 0, 0); // Oct 18, 2026 3:00 PM local
+  const nowMs = nowDate.getTime();
+  const yesterdayDate = new Date(2026, 9, 17, 22, 30, 0, 0);
+
+  it('auto-releases in_progress runs that started on a previous local day and preserves steps and bugs', () => {
+    expect(AUTO_RELEASE_IDLE_MINUTES).toBe(120);
+    const prevDayRun: TestRun = {
+      id: 'run-prev-day',
+      planId: 'plan-core',
+      planName: 'Core Sanity',
+      testerName: 'Alice',
+      deviceId: 'dev-1',
+      deviceName: 'WP01',
+      status: 'in_progress',
+      currentStepIndex: 1,
+      startedAt: yesterdayDate.toISOString(),
+      results: {
+        s1: { stepId: 's1', status: 'green', timestamp: yesterdayDate.toISOString() },
+      },
+      bugLogs: [
+        {
+          id: 'bug-prev-1',
+          testRunId: 'run-prev-day',
+          planId: 'plan-core',
+          stepId: 's1',
+          stepTitle: 'Step 1',
+          testerName: 'Alice',
+          deviceName: 'WP01',
+          severity: 'high',
+          note: 'Audio crackle',
+          timestamp: yesterdayDate.toISOString(),
+          formattedTime: '10:30 PM',
+        },
+      ],
+    };
+
+    expect(getAutoReleaseReason(prevDayRun, nowDate)).toBe('previous-day');
+    const released = markRunAutoReleased(prevDayRun, 'previous-day', nowDate);
+    expect(released.status).toBe('terminated');
+    expect(getRunAutoReleasedMeta(released)).toEqual({
+      at: nowDate.toISOString(),
+      reason: 'previous-day',
+    });
+    expect((released.results as any)._meta.autoReleased).toEqual({
+      at: nowDate.toISOString(),
+      reason: 'previous-day',
+    });
+    expect(released.results.s1?.status).toBe('green');
+    expect(released.bugLogs).toHaveLength(1);
+    expect(getAutoReleaseMessage('previous-day')).toBe(
+      'Your session from a previous day was automatically released.'
+    );
+  });
+
+  it('respects the exact AUTO_RELEASE_IDLE_MINUTES (120m) boundary and keeps runs with recent activity', () => {
+    const exactBoundaryMs = nowMs - AUTO_RELEASE_IDLE_MINUTES * 60 * 1000;
+    const oneMsPastBoundary = exactBoundaryMs - 1;
+    const recentStepMs = nowMs - 15 * 60 * 1000; // 15 minutes ago
+    const threeHoursAgoMs = nowMs - 180 * 60 * 1000; // 3 hours ago today (12:00 PM local)
+
+    const atBoundaryRun: TestRun = {
+      id: 'run-at-boundary',
+      planId: 'plan-core',
+      planName: 'Core Sanity',
+      testerName: 'Alice',
+      deviceId: 'dev-1',
+      deviceName: 'WP01',
+      status: 'in_progress',
+      currentStepIndex: 0,
+      startedAt: new Date(exactBoundaryMs).toISOString(),
+      results: {},
+      bugLogs: [],
+    };
+    expect(getAutoReleaseReason(atBoundaryRun, nowMs)).toBeNull();
+
+    const overBoundaryRun: TestRun = {
+      ...atBoundaryRun,
+      id: 'run-over-boundary',
+      startedAt: new Date(oneMsPastBoundary).toISOString(),
+    };
+    expect(getAutoReleaseReason(overBoundaryRun, nowMs)).toBe('idle');
+    expect(getAutoReleaseMessage('idle')).toBe(
+      'Your session was released after 2 hours with no activity.'
+    );
+
+    // Started 3 hours ago today, but recorded a step 15 minutes ago -> kept alive
+    const recentlyActiveRun: TestRun = {
+      ...atBoundaryRun,
+      id: 'run-recent-step',
+      startedAt: new Date(threeHoursAgoMs).toISOString(),
+      results: {
+        s1: { stepId: 's1', status: 'green', timestamp: new Date(recentStepMs).toISOString() },
+      },
+    };
+    expect(getRunLastActivityMs(recentlyActiveRun)).toBe(recentStepMs);
+    expect(getAutoReleaseReason(recentlyActiveRun, nowMs)).toBeNull();
+  });
+
+  it('leaves completed, terminated, and not_started runs untouched, releases device locks, is idempotent, and does not count toward quota', () => {
+    const threeHoursAgoIso = new Date(nowMs - 180 * 60 * 1000).toISOString();
+    const stuckRun: TestRun = {
+      id: 'run-stuck-idle',
+      planId: 'plan-core',
+      planName: 'Core Sanity',
+      testerName: 'Alice',
+      deviceId: 'dev-1',
+      deviceName: 'WP01',
+      status: 'in_progress',
+      currentStepIndex: 2,
+      startedAt: threeHoursAgoIso,
+      results: {
+        s1: { stepId: 's1', status: 'green', timestamp: threeHoursAgoIso },
+        s2: { stepId: 's2', status: 'green', timestamp: threeHoursAgoIso },
+      },
+      bugLogs: [],
+    };
+    const completedRun: TestRun = {
+      ...stuckRun,
+      id: 'run-already-completed',
+      status: 'completed',
+      completedAt: threeHoursAgoIso,
+    };
+    const terminatedRun: TestRun = {
+      ...stuckRun,
+      id: 'run-already-terminated',
+      status: 'terminated',
+      completedAt: threeHoursAgoIso,
+    };
+    const lockedDevice: DeviceProfile = {
+      ...sampleDevice,
+      activeRunId: 'run-stuck-idle',
+      activeTesterName: 'Alice',
+    };
+
+    const sweep1 = autoReleaseStuckSessions(
+      [stuckRun, completedRun, terminatedRun],
+      [lockedDevice],
+      nowDate
+    );
+    expect(sweep1.releasedRuns).toHaveLength(1);
+    expect(sweep1.releasedRuns[0].run.id).toBe('run-stuck-idle');
+    expect(sweep1.releasedRuns[0].reason).toBe('idle');
+    expect(sweep1.releasedDevices).toHaveLength(1);
+    expect(sweep1.devices[0].activeRunId).toBeUndefined();
+    expect(sweep1.devices[0].activeTesterName).toBeUndefined();
+
+    // Completed and terminated runs are untouched
+    expect(sweep1.testRuns[1]).toBe(completedRun);
+    expect(sweep1.testRuns[2]).toBe(terminatedRun);
+
+    // Idempotent second pass makes zero changes
+    const sweep2 = autoReleaseStuckSessions(sweep1.testRuns, sweep1.devices, new Date(nowMs + 60_000));
+    expect(sweep2.releasedRuns).toHaveLength(0);
+    expect(sweep2.releasedDevices).toHaveLength(0);
+    expect(getRunAutoReleasedMeta(sweep2.testRuns[0])?.at).toBe(nowDate.toISOString());
+
+    // Auto-released run never counts toward quota even if all steps had results
+    expect(isRunFullyCompleted(sweep1.testRuns[0], [samplePlan])).toBe(false);
+    const todayMap = computeTodayRunsMap(
+      [sweep1.testRuns[0]],
+      sweep1.devices,
+      [samplePlan],
+      undefined,
+      '2026-10-18'
+    );
+    expect(todayMap['dev-1']?.['plan-core']).toBeUndefined();
+  });
+});
+

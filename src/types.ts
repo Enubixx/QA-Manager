@@ -182,6 +182,11 @@ export interface StepResult {
   notes?: string;
 }
 
+export interface AutoReleaseMeta {
+  at: string;
+  reason: 'previous-day' | 'idle';
+}
+
 export interface TestRun {
   id: string;
   planId: string;
@@ -198,6 +203,9 @@ export interface TestRun {
   durationMs?: number;
   lastActivityTimestamp?: number;
   environment?: BuildEnvironment;
+  _meta?: {
+    autoReleased?: AutoReleaseMeta;
+  };
 }
 
 export interface DevicePlanQuota {

@@ -43,6 +43,11 @@ import {
   filterCloudArchivedRuns,
   filterCloudTestRuns,
   filterBugsAfterRunDelete,
+  getAutoReleaseReason,
+  getRunAutoReleasedMeta,
+  getRunLastActivityMs,
+  markRunAutoReleased,
+  autoReleaseStuckSessions,
 } from './utils/runUtils';
 import { mergeRunsById } from './utils/cujReportUtils';
 import {
@@ -55,7 +60,7 @@ import {
   safeDeleteArchivedRun,
   safeSyncDevices
 } from './services/offlineSyncQueue';
-import { APP_VERSION_CODE, CONFIG_MIN_APP_VERSION, CONFIG_DAILY_RESET_DATE } from './constants';
+import { APP_VERSION_CODE, CONFIG_MIN_APP_VERSION, CONFIG_DAILY_RESET_DATE, AUTO_RELEASE_IDLE_MINUTES } from './constants';
 
 const safeSetStorageItem = (key: string, value: string, fallbackFn?: () => string) => {
   try {
@@ -92,20 +97,35 @@ const normalizeRuns = (raw: unknown): TestRun[] => {
   if (!Array.isArray(raw)) return [];
   return raw
     .filter((r: any) => r && typeof r === 'object' && typeof r.id === 'string' && r.id.trim() !== '')
-    .map((r: any) => ({
-      ...r,
-      planId: typeof r.planId === 'string' ? r.planId : '',
-      planName: typeof r.planName === 'string' ? r.planName : 'Test Plan',
-      testerName: typeof r.testerName === 'string' ? r.testerName : '',
-      deviceName: typeof r.deviceName === 'string' ? r.deviceName : '',
-      status: r.status || 'not_started',
-      currentStepIndex: typeof r.currentStepIndex === 'number' && !isNaN(r.currentStepIndex) ? r.currentStepIndex : 0,
-      results: r.results && typeof r.results === 'object' && !Array.isArray(r.results) ? r.results : {},
-      bugLogs: Array.isArray(r.bugLogs)
-        ? r.bugLogs.filter((b: any) => b && typeof b === 'object' && typeof b.id === 'string')
-        : [],
-      startedAt: typeof r.startedAt === 'string' ? r.startedAt : new Date().toISOString()
-    }));
+    .map((r: any) => {
+      const results = r.results && typeof r.results === 'object' && !Array.isArray(r.results) ? { ...r.results } : {};
+      const autoReleased =
+        (results as any)?._meta?.autoReleased ||
+        (r._meta && typeof r._meta === 'object' ? r._meta.autoReleased : undefined);
+      if (autoReleased && typeof autoReleased === 'object') {
+        (results as any)._meta = {
+          ...((results as any)._meta || {}),
+          autoReleased,
+        };
+      }
+      return {
+        ...r,
+        planId: typeof r.planId === 'string' ? r.planId : '',
+        planName: typeof r.planName === 'string' ? r.planName : 'Test Plan',
+        testerName: typeof r.testerName === 'string' ? r.testerName : '',
+        deviceName: typeof r.deviceName === 'string' ? r.deviceName : '',
+        status: r.status || 'not_started',
+        currentStepIndex: typeof r.currentStepIndex === 'number' && !isNaN(r.currentStepIndex) ? r.currentStepIndex : 0,
+        results,
+        ...(autoReleased && typeof autoReleased === 'object'
+          ? { _meta: { ...(r._meta || {}), autoReleased } }
+          : {}),
+        bugLogs: Array.isArray(r.bugLogs)
+          ? r.bugLogs.filter((b: any) => b && typeof b === 'object' && typeof b.id === 'string')
+          : [],
+        startedAt: typeof r.startedAt === 'string' ? r.startedAt : new Date().toISOString()
+      };
+    });
 };
 
 const normalizeBugs = (raw: unknown): BugLog[] => {
@@ -154,6 +174,143 @@ export function App() {
     }
   });
 
+  // Merge any local `qa_in_progress_run_*` entries into the runs array so step activity is up-to-date
+  // and stuck local-only in-progress runs are also swept and preserved.
+  const mergeLocalInProgressRuns = (baseRuns: TestRun[]): TestRun[] => {
+    const byId = new Map<string, TestRun>();
+    (baseRuns || []).forEach(r => {
+      if (r && r.id) byId.set(r.id, r);
+    });
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith('qa_in_progress_run_')) continue;
+        const raw = localStorage.getItem(k);
+        if (!raw) continue;
+        const parsedList = normalizeRuns([JSON.parse(raw)]);
+        const saved = parsedList[0];
+        if (!saved || !saved.id || saved.status !== 'in_progress') continue;
+        const existing = byId.get(saved.id);
+        if (!existing) {
+          byId.set(saved.id, saved);
+        } else if (existing.status === 'in_progress') {
+          const mergedBugs = [
+            ...(existing.bugLogs || []),
+            ...(saved.bugLogs || []).filter(b => !(existing.bugLogs || []).some(eb => eb.id === b.id)),
+          ];
+          byId.set(saved.id, {
+            ...existing,
+            results: { ...(existing.results || {}), ...(saved.results || {}) },
+            bugLogs: mergedBugs,
+            currentStepIndex:
+              saved.currentStepIndex !== undefined ? saved.currentStepIndex : existing.currentStepIndex,
+          });
+        }
+      }
+    } catch {}
+    return Array.from(byId.values());
+  };
+
+  const clearInProgressCacheForReleasedRuns = (
+    releasedRuns: { run: TestRun; reason: 'previous-day' | 'idle' }[]
+  ) => {
+    if (!releasedRuns || releasedRuns.length === 0) return;
+    try {
+      const releasedIds = new Set(releasedRuns.map(x => x.run.id));
+      const storedTester = (
+        localStorage.getItem('qa_tester_name') ||
+        sessionStorage.getItem('qa_tester_name') ||
+        ''
+      )
+        .toLowerCase()
+        .trim();
+      const storedDev = (
+        localStorage.getItem('qa_device_name') ||
+        sessionStorage.getItem('qa_device_name') ||
+        ''
+      )
+        .toLowerCase()
+        .trim();
+      const storedDevId = (localStorage.getItem('qa_device_id') || '').toLowerCase().trim();
+      let hadLocalCacheForRun: { runId: string; reason: 'previous-day' | 'idle' } | null = null;
+
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith('qa_in_progress_run_')) continue;
+        try {
+          const parsed = JSON.parse(localStorage.getItem(k) || 'null');
+          if (parsed && parsed.id && releasedIds.has(parsed.id)) {
+            const matched = releasedRuns.find(x => x.run.id === parsed.id);
+            if (matched) hadLocalCacheForRun = { runId: matched.run.id, reason: matched.reason };
+            keysToRemove.push(k);
+          }
+        } catch {}
+      }
+      keysToRemove.forEach(k => localStorage.removeItem(k));
+
+      if (!hadLocalCacheForRun) {
+        const matchedMine = releasedRuns.find(({ run }) => {
+          const rTester = (run.testerName || '').toLowerCase().trim();
+          const rDev = (run.deviceName || '').toLowerCase().trim();
+          const rDevId = (run.deviceId || '').toLowerCase().trim();
+          if (storedTester && rTester && rTester === storedTester) return true;
+          if (storedDev && ((rDev && rDev === storedDev) || (rDevId && rDevId === storedDev))) return true;
+          if (storedDevId && rDevId && rDevId === storedDevId) return true;
+          return false;
+        });
+        if (matchedMine) {
+          hadLocalCacheForRun = { runId: matchedMine.run.id, reason: matchedMine.reason };
+        }
+      }
+
+      if (hadLocalCacheForRun) {
+        const ackRaw = localStorage.getItem('qa_ack_auto_released_runs');
+        const ackSet = new Set<string>(ackRaw ? JSON.parse(ackRaw) : []);
+        if (!ackSet.has(hadLocalCacheForRun.runId)) {
+          localStorage.setItem(
+            'qa_last_auto_released_run',
+            JSON.stringify({
+              runId: hadLocalCacheForRun.runId,
+              reason: hadLocalCacheForRun.reason,
+              at: new Date().toISOString(),
+            })
+          );
+        }
+      }
+    } catch {}
+  };
+
+  // Run initial synchronous auto-release pass so stuck sessions from localStorage are released on frame 0
+  const initialSweepRef = useRef<{
+    testRuns: TestRun[];
+    devices: DeviceProfile[];
+    releasedRuns: { run: TestRun; reason: 'previous-day' | 'idle' }[];
+    releasedDevices: DeviceProfile[];
+  } | null>(null);
+  if (!initialSweepRef.current) {
+    let rawRuns: TestRun[] = [];
+    let rawDevices: DeviceProfile[] = [];
+    try {
+      const savedRuns = localStorage.getItem('qa_test_runs');
+      if (savedRuns) rawRuns = normalizeRuns(JSON.parse(savedRuns));
+    } catch {}
+    try {
+      const savedDevices = localStorage.getItem('qa_devices_list');
+      if (savedDevices) rawDevices = normalizeDevices(JSON.parse(savedDevices));
+    } catch {}
+    const combinedRuns = mergeLocalInProgressRuns(rawRuns);
+    const sweep = autoReleaseStuckSessions(combinedRuns, rawDevices, Date.now(), AUTO_RELEASE_IDLE_MINUTES);
+    if (sweep.releasedRuns.length > 0 || sweep.releasedDevices.length > 0) {
+      clearInProgressCacheForReleasedRuns(sweep.releasedRuns);
+      safeSetStorageItem('qa_test_runs', JSON.stringify(sweep.testRuns));
+      if (sweep.releasedDevices.length > 0) {
+        safeSetStorageItem('qa_devices_list', JSON.stringify(sweep.devices));
+      }
+    }
+    initialSweepRef.current = sweep;
+  }
+
   // App State with LocalStorage persistence (starts empty by default)
   const [testPlans, setTestPlans] = useState<TestPlan[]>(() => {
     try {
@@ -163,22 +320,12 @@ export function App() {
     return [];
   });
 
-  const [testRuns, setTestRuns] = useState<TestRun[]>(() => {
-    try {
-      const saved = localStorage.getItem('qa_test_runs');
-      if (saved) {
-        const parsed = normalizeRuns(JSON.parse(saved));
-        const todayStr = getLocalDateStr();
-        return parsed.filter(r => {
-          if (r.status === 'in_progress') {
-            const runDate = r.startedAt ? getLocalDateStr(r.startedAt) : '';
-            return runDate === todayStr;
-          }
-          return true;
-        });
-      }
-    } catch (e) {}
-    return [];
+  const [testRuns, setTestRuns] = useState<TestRun[]>(() => initialSweepRef.current?.testRuns || []);
+
+  const [autoReleaseToast, setAutoReleaseToast] = useState<string | null>(() => {
+    const count = initialSweepRef.current?.releasedRuns.length || 0;
+    if (count <= 0) return null;
+    return count === 1 ? 'Released 1 stuck session' : `Released ${count} stuck sessions`;
   });
 
   const [archivedRuns, setArchivedRuns] = useState<TestRun[]>(() => {
@@ -222,13 +369,7 @@ export function App() {
   });
 
   // User-populated device profiles list (with readiness & plan quotas)
-  const [devices, setDevices] = useState<DeviceProfile[]>(() => {
-    try {
-      const saved = localStorage.getItem('qa_devices_list');
-      if (saved) return normalizeDevices(JSON.parse(saved));
-    } catch (e) {}
-    return [];
-  });
+  const [devices, setDevices] = useState<DeviceProfile[]>(() => initialSweepRef.current?.devices || []);
 
   // User-populated QA tester profiles list
   const [testers, setTesters] = useState<TesterProfile[]>(() => {
@@ -363,7 +504,8 @@ export function App() {
     clearLocalDailySessionCache();
     testRunsRef.current.forEach(r => {
       if (r.status === 'in_progress') {
-        safeDeleteTestRun(r.id);
+        const terminated = markRunAutoReleased(r, 'previous-day', Date.now());
+        safeSyncTestRun(terminated);
       }
     });
     const resetList = devList.map(d => ({
@@ -385,6 +527,70 @@ export function App() {
       }
     });
     return resetList;
+  };
+
+  useEffect(() => {
+    if (!autoReleaseToast) return;
+    const t = setTimeout(() => setAutoReleaseToast(null), 4000);
+    return () => clearTimeout(t);
+  }, [autoReleaseToast]);
+
+  // Sync any runs/devices released during initial synchronous sweep to Supabase once mounted
+  useEffect(() => {
+    const init = initialSweepRef.current;
+    if (!init) return;
+    if (init.releasedRuns.length > 0) {
+      init.releasedRuns.forEach(({ run }) => safeSyncTestRun(run));
+    }
+    if (init.releasedDevices.length > 0) {
+      init.releasedDevices.forEach(d => syncDeviceToSupabase(d));
+      safeSyncDevices(init.devices);
+    }
+  }, []);
+
+  // Idempotent local auto-release check (runs on poll, focus, visibilitychange, and load)
+  const runLocalAutoReleaseSweep = () => {
+    const now = Date.now();
+    const mergedRuns = mergeLocalInProgressRuns(testRunsRef.current);
+    const sweep = autoReleaseStuckSessions(mergedRuns, devicesRef.current, now, AUTO_RELEASE_IDLE_MINUTES);
+    if (sweep.releasedRuns.length === 0 && sweep.releasedDevices.length === 0) return;
+
+    const actuallyReleased: { run: TestRun; reason: 'previous-day' | 'idle' }[] = [];
+    setTestRuns(prev => {
+      const mergedPrev = mergeLocalInProgressRuns(prev);
+      let changed = false;
+      const next = mergedPrev.map(r => {
+        if (!r || r.status !== 'in_progress') return r;
+        const reason = getAutoReleaseReason(r, now, AUTO_RELEASE_IDLE_MINUTES);
+        if (!reason) return r;
+        changed = true;
+        const terminated = markRunAutoReleased(r, reason, now);
+        actuallyReleased.push({ run: terminated, reason });
+        safeSyncTestRun(terminated);
+        return terminated;
+      });
+      if (!changed) return prev;
+      testRunsRef.current = next;
+      return next;
+    });
+
+    if (actuallyReleased.length > 0) {
+      clearInProgressCacheForReleasedRuns(actuallyReleased);
+      const count = actuallyReleased.length;
+      setAutoReleaseToast(count === 1 ? 'Released 1 stuck session' : `Released ${count} stuck sessions`);
+    }
+
+    if (sweep.releasedDevices.length > 0) {
+      setDevices(prev => {
+        const devSweep = autoReleaseStuckSessions(testRunsRef.current, prev, now, AUTO_RELEASE_IDLE_MINUTES);
+        if (devSweep.releasedDevices.length === 0) return prev;
+        devicesRef.current = devSweep.devices;
+        safeSetStorageItem('qa_devices_list', JSON.stringify(devSweep.devices));
+        devSweep.releasedDevices.forEach(d => syncDeviceToSupabase(d));
+        safeSyncDevices(devSweep.devices);
+        return devSweep.devices;
+      });
+    }
   };
 
   // Supabase Initial Fetch & Real-Time Sync Subscription
@@ -423,9 +629,38 @@ export function App() {
         ...archivedRunsRef.current.map(r => r.id)
       ]);
 
+      // Auto-release any stuck cloud in_progress runs before filtering (re-checking against fresher local step timestamps)
+      const nowMs = Date.now();
+      const localRunsById = new Map<string, TestRun>(
+        mergeLocalInProgressRuns(testRunsRef.current).map(r => [r.id, r])
+      );
+      const rawCloudRuns = normalizeRuns(cloudData.testRuns || []).map(cr => {
+        if (cr.status !== 'in_progress') return cr;
+        const localCopy = localRunsById.get(cr.id);
+        if (localCopy && localCopy.status === 'in_progress') {
+          const localLast = getRunLastActivityMs(localCopy);
+          const cloudLast = getRunLastActivityMs(cr);
+          if (Number.isFinite(localLast) && (!Number.isFinite(cloudLast) || localLast > cloudLast)) {
+            return {
+              ...cr,
+              results: { ...(cr.results || {}), ...(localCopy.results || {}) },
+              bugLogs: localCopy.bugLogs?.length ? localCopy.bugLogs : cr.bugLogs,
+            };
+          }
+        }
+        return cr;
+      });
+      const cloudSweep = autoReleaseStuckSessions(rawCloudRuns, devicesRef.current, nowMs, AUTO_RELEASE_IDLE_MINUTES);
+      if (cloudSweep.releasedRuns.length > 0) {
+        clearInProgressCacheForReleasedRuns(cloudSweep.releasedRuns);
+        cloudSweep.releasedRuns.forEach(({ run }) => safeSyncTestRun(run));
+        const count = cloudSweep.releasedRuns.length;
+        setAutoReleaseToast(count === 1 ? 'Released 1 stuck session' : `Released ${count} stuck sessions`);
+      }
+
       // Filter out empty ghost runs, already-archived runs, tombstoned runs, and prior-day orphaned in_progress runs
       const validTestRuns = filterCloudTestRuns(
-        normalizeRuns(cloudData.testRuns || []),
+        cloudSweep.testRuns,
         archivedIdSet,
         isTestRunDeleted,
         isArchivedRunDeleted,
@@ -604,11 +839,18 @@ export function App() {
     // Web visibility and window focus triggers
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
+        runLocalAutoReleaseSweep();
         loadCloudData();
       }
     };
-    const handleWindowFocus = () => loadCloudData();
-    const handleOnline = () => loadCloudData();
+    const handleWindowFocus = () => {
+      runLocalAutoReleaseSweep();
+      loadCloudData();
+    };
+    const handleOnline = () => {
+      runLocalAutoReleaseSweep();
+      loadCloudData();
+    };
 
     window.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('focus', handleWindowFocus);
@@ -620,7 +862,10 @@ export function App() {
 
     // Polling fallback ensures continuous background sync without thrashing UI state
     const pollTimer = setInterval(() => {
-      if (!disposed) loadCloudData();
+      if (!disposed) {
+        runLocalAutoReleaseSweep();
+        loadCloudData();
+      }
     }, 4000);
 
     return () => {
@@ -2378,6 +2623,16 @@ export function App() {
           </div>
         )}
       </main>
+
+      {currentView === 'dashboard' && autoReleaseToast && (
+        <div
+          data-testid="auto-release-toast"
+          className="fixed bottom-4 right-4 z-50 px-3.5 py-2 rounded-xl bg-slate-900/95 border border-slate-700/80 text-slate-200 text-xs font-medium shadow-xl flex items-center gap-2"
+        >
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+          <span>{autoReleaseToast}</span>
+        </div>
+      )}
 
     </div>
   );

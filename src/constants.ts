@@ -26,3 +26,7 @@ export const formatAppVersionName = (code: number): string => {
 // Config identifiers stored in Supabase / LocalStorage
 export const CONFIG_MIN_APP_VERSION = '__APP_MIN_VERSION__';
 export const CONFIG_DAILY_RESET_DATE = '__DAILY_QUOTA_RESET_DATE__';
+
+// Auto-release stuck in_progress sessions after this many minutes of inactivity
+export const AUTO_RELEASE_IDLE_MINUTES = 120;
+
