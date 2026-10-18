@@ -969,7 +969,8 @@ export function App() {
   useEffect(() => {
     const seedUrl = ((import.meta as any).env?.VITE_PROTOTYPE_SEED_URL || '') as string;
     if (!seedUrl || isSupabaseConfigured) return;
-    if (localStorage.getItem('qa_prototype_seeded') === seedUrl) return;
+    const seededVal = localStorage.getItem('qa_prototype_seeded');
+    if (seededVal === seedUrl || seededVal === 'skip') return;
     fetch(seedUrl)
       .then(r => (r.ok ? r.json() : null))
       .then(data => {
@@ -1490,9 +1491,11 @@ export function App() {
         survivors.forEach(s => handlePatchBugLog(s.id, { bundle: undefined }));
       } else {
         const latest = survivors.reduce((acc, s) => (String(s.bundle!.at) > String(acc.at) ? s.bundle! : acc), survivors[0].bundle!);
+        const rawMemberIds = Array.isArray(latest?.memberIds) ? latest.memberIds : survivors.map(s => s.id);
+        const filteredMemberIds = rawMemberIds.filter(id => id !== bugId && survivors.some(s => s.id === id));
         const nextBundle = {
           ...latest,
-          memberIds: latest.memberIds.filter(id => id !== bugId && survivors.some(s => s.id === id)),
+          memberIds: filteredMemberIds.length >= 2 ? filteredMemberIds : survivors.map(s => s.id),
           at: new Date().toISOString(),
         };
         handlePatchBugLogs(Object.fromEntries(survivors.map(s => [s.id, { bundle: nextBundle }])));

@@ -1651,14 +1651,22 @@ function assembleBatchResult(
   return { featureSummaries, featureIssues, featureFiledBugs, otherFiledBugs, overallSummary, matchedCount, uncoveredCount };
 }
 
-/** Keeps only the first "notable"/"notably" in a summary; later ones are dropped (house style). */
+/** Keeps only the first "notable"/"notably" in a summary; later ones are dropped (house style), preserving sentence capitalization. */
 export function limitNotable(text: string): string {
   let seen = false;
-  return text.replace(/\b([Nn]otabl[ey])\b(\s+)?/g, (m, word: string) => {
-    if (!seen) { seen = true; return m; }
-    // Drop repeats mid-sentence only; a capitalized repeat starts a sentence and is left alone.
-    return word[0] === 'n' ? '' : m;
-  }).replace(/\s{2,}/g, ' ').replace(/\s+([,.])/g, '$1');
+  return text
+    .replace(/\b([Nn]otabl[ey])(?:,\s*|\s+)([a-zA-Z])?/g, (m, word: string, nextChar?: string) => {
+      if (!seen) {
+        seen = true;
+        return m;
+      }
+      if (!nextChar) return '';
+      // If a capitalized repeat ("Notably, the..." or "Notable issue...") started a sentence, capitalize the next word after dropping it
+      return word[0] === 'N' ? nextChar.toUpperCase() : nextChar;
+    })
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([,.])/g, '$1')
+    .trim();
 }
 
 /** Everything needed to ask an AI for the batch report and to read its answer back. */

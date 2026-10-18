@@ -602,6 +602,11 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
       else patches[d.bugId] = { filePending: pendingFor('new', { hotlistId }) };
     });
     patchMany(patches);
+    setSelected(prev => {
+      const next = new Set(prev);
+      ids.forEach(id => next.delete(id));
+      return next;
+    });
   };
 
   const openTabs = (list: BuganizerDraft[]) => {
@@ -1091,8 +1096,11 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
                 </div>
               ),
               onFiledAs: id => {
-                if (id) forMembers(g.members, () => ({ filed: newFiled('bundle', id), filePending: undefined }));
-                else if (g.members.every(m => m.filed?.via === 'bundle')) forMembers(g.members, () => ({ filed: undefined }));
+                if (id) {
+                  forMembers(g.members, () => ({ filed: newFiled('bundle', id), filePending: undefined }));
+                  if (layout === 'b') flash(`Stamped FILED as b/${id} and moved to the Filed tab.`);
+                  else if (!showFiled) flash(`Stamped FILED as b/${id} and hidden. Use "show" in the filed bar to see it again.`);
+                } else if (g.members.every(m => m.filed?.via === 'bundle')) forMembers(g.members, () => ({ filed: undefined }));
               },
             })}
           </div>
@@ -1180,7 +1188,8 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
               onFiledAs: id => {
                 if (id && bug.filed?.issueId !== id) {
                   patchBug(bug.id, { filed: newFiled('new', id), filePending: undefined });
-                  if (!showFiled) flash(`Stamped FILED as b/${id} and hidden. Use "show" in the filed bar to see it again.`);
+                  if (layout === 'b') flash(`Stamped FILED as b/${id} and moved to the Filed tab.`);
+                  else if (!showFiled) flash(`Stamped FILED as b/${id} and hidden. Use "show" in the filed bar to see it again.`);
                 } else if (!id && bug.filed?.via === 'new') {
                   patchBug(bug.id, { filed: undefined });
                 }
@@ -1331,6 +1340,7 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
     const tabKey = order.find(k => itemsFor(k).some(holds));
     if (!tabKey) { flash('That report is hidden by the plan / day / search filters here.'); return; }
     const it = itemsFor(tabKey).find(holds)!;
+    if (tabKey === 'filed') setShowFiled(true);
     setTab(tabKey);
     setListFilter('all');
     setExpandedKeys(prev => new Set(prev).add(it.key));

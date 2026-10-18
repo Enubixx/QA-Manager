@@ -87,7 +87,7 @@ export default function BundleSuggestionsPanel({ shown, bugsById, plans, dismiss
         <div className="flex-1 min-w-[260px]">
           <b>RX95 found likely duplicates.</b>{' '}
           {planIds.length === 1 ? planName(planIds[0]) : `${planIds.length} test plans`} · <b>{days.length === 1 ? fmtDay(days[0]) : `${days.length} days`}</b>:{' '}
-          <b>{shown.length} suggested group{shown.length === 1 ? '' : 's'}</b> ({reports} reports).
+          <b>{shown.length} suggested group{shown.length === 1 ? '' : 's'}</b> ({reports} report{reports === 1 ? '' : 's'}).
           <span className="block text-violet-200/70 mt-0.5">Categorize and bundle each group once instead of setting Type / Priority / Status on every dupe.</span>
         </div>
         {latest && <span className="text-slate-400">checked {minutesAgo(latest)}</span>}
@@ -120,7 +120,7 @@ export default function BundleSuggestionsPanel({ shown, bugsById, plans, dismiss
               <span className="px-2 py-0.5 rounded-full border border-sky-500/40 bg-sky-500/10 text-sky-200" data-testid="feed-bundle-hotlist">
                 {hotlist ? `Hotlist: ${hotlist.name} · ${hotlist.hotlistId}` : `No hotlist · ${planName(pid)} only`}
               </span>
-              <span className="text-slate-400">{members.length} reports · {testersN} tester{testersN === 1 ? '' : 's'} · {devicesN} device{devicesN === 1 ? '' : 's'}</span>
+              <span className="text-slate-400">{members.length} report{members.length === 1 ? '' : 's'} · {testersN} tester{testersN === 1 ? '' : 's'} · {devicesN} device{devicesN === 1 ? '' : 's'}</span>
             </div>
             <p className="text-[15px] font-extrabold text-white mt-2">{sg.title}</p>
             {sg.reason && <p className="text-xs text-slate-400 mt-0.5">Why: {sg.reason}</p>}
@@ -148,7 +148,7 @@ export default function BundleSuggestionsPanel({ shown, bugsById, plans, dismiss
             </div>
 
             <div className="mt-3 rounded-2xl border border-violet-500/30 bg-violet-500/[0.06] p-3">
-              <div className="text-[11px] font-bold uppercase tracking-wider text-violet-200 mb-2">Categorize all {tickedMembers.length} ticked reports as</div>
+              <div className="text-[11px] font-bold uppercase tracking-wider text-violet-200 mb-2">Categorize all {tickedMembers.length} ticked report{tickedMembers.length === 1 ? '' : 's'} as</div>
               <div className="flex flex-wrap items-end gap-2.5">
                 <div>
                   <div className="text-[10px] uppercase font-mono text-slate-400 font-semibold mb-1">Bug Type</div>
@@ -184,7 +184,7 @@ export default function BundleSuggestionsPanel({ shown, bugsById, plans, dismiss
                   setTickOverrides(prev => { const n = { ...prev }; delete n[sg.id]; return n; });
                 }}
                 className="px-3 h-8 rounded-xl text-xs font-bold bg-violet-500/25 border border-violet-500/60 text-violet-50 hover:bg-violet-500/35 disabled:opacity-40 disabled:cursor-not-allowed">
-                🧩 Categorize &amp; bundle {tickedMembers.length} reports
+                🧩 Categorize &amp; bundle {tickedMembers.length} report{tickedMembers.length === 1 ? '' : 's'}
               </button>
               <button type="button" data-testid="feed-suggestion-dismiss" onClick={() => dismiss(sg.id)}
                 className="px-3 h-8 rounded-xl text-xs font-semibold border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700">

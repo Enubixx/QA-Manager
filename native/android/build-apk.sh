@@ -18,7 +18,7 @@ npx cap sync android
 # Keep dev-only/static extras out of the APK (cap sync copies all of public/ via dist/):
 # the gitignored local seed snapshot (real bug data), sample test data, and the web download APK.
 ASSETS=android/app/src/main/assets/public
-rm -rf "$ASSETS/__local" "$ASSETS/qa_today_test_data.json"
+rm -rf "$ASSETS/__local" "$ASSETS/qa_today_test_data.json" "$ASSETS/warby-deck"
 rm -f "$ASSETS"/*.apk
 JAVA_DIR=android/app/src/main/java/com/qamanager/mobile
 cp native/android/DeviceBuildsPlugin.java "$JAVA_DIR/DeviceBuildsPlugin.java"

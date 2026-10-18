@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import GlassesBuildCapture from './GlassesBuildCapture';
 import { TITLE_PREFIX } from '../utils/buganizerDraft';
-import { atLocalTime, formatBugTime, toLocalHHMM, withBugTime } from '../utils/bugTime';
+import { atLocalTime, formatBugTime, normalizeHHMM, toLocalHHMM, withBugTime } from '../utils/bugTime';
 import { buildEnvironment, getCurrentGlassesBuild, getPhoneBuildInfo, type GlassesBuild, type PhoneBuildInfo } from '../services/deviceBuilds';
 import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile } from '../types';
@@ -365,6 +365,36 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         if (!isSelfDevice) {
           return false;
         }
+      } else if (dev.activeRunId || dev.activeTesterName) {
+        // Respect device lock when the other tester's run hasn't arrived in local testRuns yet,
+        // while ignoring stale locks pointing to already-completed, terminated, archived, deleted, or prior-day runs.
+        const knownRun = dev.activeRunId
+          ? [...testRuns, ...archivedRuns].find(r => r && r.id === dev.activeRunId)
+          : undefined;
+        const isStaleFinishedLock = Boolean(
+          dev.activeRunId && (
+            archivedIdSet.has(dev.activeRunId) ||
+            isTestRunDeleted(dev.activeRunId) ||
+            (knownRun && (
+              knownRun.status === 'completed' ||
+              knownRun.status === 'terminated' ||
+              getEffectiveRunStatus(knownRun, testPlans) === 'completed' ||
+              (knownRun.startedAt && getLocalDateStr(knownRun.startedAt) !== todayStr)
+            ))
+          )
+        );
+        if (!isStaleFinishedLock) {
+          const isSelfLock = Boolean(
+            (dev.activeRunId && activeRun?.id && dev.activeRunId === activeRun.id) ||
+            (myTesterLower && dev.activeTesterName && dev.activeTesterName.toLowerCase().trim() === myTesterLower) ||
+            (currentSavedName &&
+              dev.name.toLowerCase().trim() === currentSavedName.toLowerCase().trim() &&
+              !dev.activeTesterName)
+          );
+          if (!isSelfLock) {
+            return false;
+          }
+        }
       }
 
       // If device has no quotas at all, it cannot run tests
@@ -667,7 +697,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   const [bugTitle, setBugTitle] = useState('');
   const [bugNote, setBugNote] = useState('');
   const [showBuganizerPreview, setShowBuganizerPreview] = useState(false);
-  const [bugImageUrl, setBugImageUrl] = useState('');
   const [bugSeverity, setBugSeverity] = useState<'low' | 'medium' | 'high' | 'critical'>('medium');
   // Time of day the bug happened ("HH:MM", same day). Defaults to now for new bugs.
   const [bugTime, setBugTime] = useState('');
@@ -702,7 +731,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     setBugTitle('');
     setShowBuganizerPreview(false);
     setBugNote('');
-    setBugImageUrl('');
     setBugSeverity('medium');
     setShowBugModal(false);
   };
@@ -723,7 +751,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     setBugTitle('');
     setShowBuganizerPreview(false);
     setBugNote('');
-    setBugImageUrl('');
     setBugSeverity('medium');
     setBugTime(toLocalHHMM(new Date().toISOString()));
     setBugTimeTouched(false);
@@ -740,7 +767,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     setBugSeverity(bug.severity || 'medium');
     setBugTime(toLocalHHMM(bug.timestamp));
     setBugTimeTouched(false);
-    setBugImageUrl(bug.imageUrl || '');
     setShowBugModal(true);
   };
 
@@ -1466,7 +1492,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         title: titleText,
         note: noteText,
         severity: bugSeverity,
-        imageUrl: bugImageUrl.trim() || undefined
       }, bugTime);
 
       try {
@@ -1499,8 +1524,12 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     if (!activeRun || !currentPlan) return;
 
     const now = new Date();
+    const normBugTime = normalizeHHMM(bugTime);
+    const nowHHMM = toLocalHHMM(now.toISOString());
     // If the tester moved the time back (noted the bug late), keep the real logging time as originalTimestamp.
-    const picked = bugTimeTouched && bugTime && bugTime !== toLocalHHMM(now.toISOString()) ? atLocalTime(now.toISOString(), bugTime, now) : null;
+    // Future times clamp to now and must not set a misleading originalTimestamp.
+    const rawPicked = bugTimeTouched && normBugTime && normBugTime !== nowHHMM ? atLocalTime(now.toISOString(), normBugTime) : null;
+    const picked = rawPicked && rawPicked.getTime() < now.getTime() && toLocalHHMM(rawPicked.toISOString()) !== nowHHMM ? rawPicked : null;
     const isoTimestamp = (picked || now).toISOString();
     const formattedTime = formatBugTime(picked || now);
 
@@ -1516,7 +1545,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       severity: bugSeverity,
       title: titleText,
       note: noteText,
-      imageUrl: bugImageUrl.trim() || undefined,
       timestamp: isoTimestamp,
       formattedTime: formattedTime,
       ...(picked ? { originalTimestamp: now.toISOString() } : {}),
@@ -2351,8 +2379,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               <AlertTriangle className="w-8 h-8 text-rose-400" />
             </div>
             <h3 className="text-lg font-bold text-white mb-2 tracking-tight">Session Terminated</h3>
-            <p className="text-xs text-zinc-300 max-w-xs mb-6 leading-relaxed font-medium">
-              An administrator has ended your QA session from the desktop manager dashboard.
+            <p className="text-xs text-zinc-300 max-w-xs mb-6 leading-relaxed font-medium" data-testid="boot-message-text">
+              {bootMessage}
             </p>
             <button
               type="button"
@@ -2510,6 +2538,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                       </div>
                       <ChevronRight className="w-4 h-4 text-sky-400 group-hover:text-white flex-shrink-0 transition-transform" />
                     </button>
+                  ) : devices.some(d => d.isReady && d.quotas?.some(q => q.targetRunsPerDay > 0)) ? (
+                    <div className="p-3 bg-emerald-500/15 border border-emerald-500/30 rounded-2xl text-emerald-200 text-xs font-semibold text-center leading-relaxed" data-testid="all-devices-quota-met">
+                      All devices have hit today's quota
+                    </div>
                   ) : (
                     <div className="p-3 bg-amber-500/15 border border-amber-500/30 rounded-2xl text-amber-200 text-xs font-semibold text-center leading-relaxed">
                       ⚠️ No ready devices with active daily quotas found. Register devices and set daily plan quotas on the Web Dashboard under Devices & Quotas.
@@ -2624,7 +2656,13 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               </div>
 
               <div className="space-y-2 overflow-y-auto max-h-[350px] pr-1">
-                {selectableDevices.map(dev => {
+                {selectableDevices.length === 0 ? (
+                  <div className="p-4 bg-emerald-500/15 border border-emerald-500/30 rounded-2xl text-emerald-200 text-xs font-semibold text-center leading-relaxed">
+                    {devices.some(d => d.isReady && d.quotas?.some(q => q.targetRunsPerDay > 0))
+                      ? "All devices have hit today's quota"
+                      : 'No ready devices with active daily quotas found.'}
+                  </div>
+                ) : selectableDevices.map(dev => {
                   const isSelected = dev.name.toLowerCase().trim() === inputDeviceName.toLowerCase().trim() || dev.id === inputDeviceName;
                   const activeQuotas = (dev.quotas || []).filter(q => q.targetRunsPerDay > 0);
                   
@@ -2712,7 +2750,9 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                   </h4>
                   {(() => {
                     const loggedAt = editingBug ? (editingBug.originalTimestamp || editingBug.timestamp) : new Date().toISOString();
-                    const adjusted = !!bugTime && (editingBug ? true : bugTimeTouched) && bugTime !== toLocalHHMM(loggedAt);
+                    const normTime = normalizeHHMM(bugTime);
+                    const adjusted = !!normTime && (editingBug ? true : bugTimeTouched) && normTime !== toLocalHHMM(loggedAt);
+                    const isLoggedToday = getLocalDateStr(loggedAt) === todayStr;
                     return (
                       <div className="flex flex-col items-end gap-0.5">
                         <label
@@ -2724,7 +2764,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                             data-testid="bug-time"
                             aria-label="Time the bug happened"
                             value={bugTime}
-                            max={editingBug ? undefined : toLocalHHMM(new Date().toISOString())}
+                            max={(!editingBug || isLoggedToday) ? toLocalHHMM(new Date().toISOString()) : undefined}
                             onChange={e => { setBugTime(e.target.value); if (!editingBug) setBugTimeTouched(true); }}
                             className="bg-transparent text-inherit font-mono w-[88px] focus:outline-none [color-scheme:dark]"
                           />

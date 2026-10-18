@@ -9,6 +9,7 @@ import { isReviewed, isStronglyReviewed, reviewedNow } from '../utils/bugReview'
 import { currentRefinement } from '../utils/bugRefine';
 import { isRunFullyCompleted, buildStepFirstSeenIndex } from '../utils/runUtils';
 import { toLocalHHMM, withBugTime } from '../utils/bugTime';
+import { APP_VERSION_OPTIONS } from '../constants';
 import { ALL_PLANS, ALL_DATES, mergeRunsById, getKnownCujNames, computeCujReport, listReportDates, buildTimelinePoints, getPlanPickerOptions, buildCujReportText, buildReportScopeKey, formatReportDateLabel } from '../utils/cujReportUtils';
 import type { CujMetric } from '../utils/cujReportUtils';
 import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel, discoverAvailableGeminiModels, rankModelsForSummaries, DEFAULT_GEMINI_MODEL, getGeminiKeyErrorHint, buildChatSummaryPrompt, applyChatSummaryReply, isChatSummaryPrompt, getChatReplyReportId } from '../services/geminiService';
@@ -395,9 +396,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [expandedBugIds, setExpandedBugIds] = useState<Record<string, boolean>>({});
   // Bugs Feed tabs (New / Bundle Suggestions / Reviewed) and links to and from the Buganizer tab
   const [feedTab, setFeedTab] = useState<'new' | 'suggestions' | 'reviewed'>('new');
+  // Keep expanded rows on the New tab visible while the user edits Type/Priority/Status/text until they close the row or switch tabs
+  const [stickyNewBugIds, setStickyNewBugIds] = useState<Set<string>>(new Set());
+  const [feedToast, setFeedToast] = useState<string | null>(null);
+  const flashFeed = (msg: string) => { setFeedToast(msg); setTimeout(() => setFeedToast(null), 4000); };
   const [buganizerFocus, setBuganizerFocus] = useState<{ id: string; n: number } | null>(null);
   const [feedNow, setFeedNow] = useState(() => Date.now());
   useEffect(() => { const t = setInterval(() => setFeedNow(Date.now()), 10000); return () => clearInterval(t); }, []);
+  useEffect(() => { setStickyNewBugIds(new Set()); }, [feedTab, bugsView, activeTab]);
   // Bugs Feed inline edit (title, time, description), always shown on an expanded row so bugs can be
   // tidied before the Buganizer tab. A draft exists per bug only while it has unsaved changes.
   type FeedDraft = { title: string; note: string; time: string };
@@ -418,6 +424,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const title = d.title.replace(/\s+/g, ' ').trim().slice(0, 120);
     const note = d.note.trim() || title;
     if (!title && !note) return;
+    if (feedTab === 'new' && expandedBugIds[bug.id]) {
+      setStickyNewBugIds(prev => new Set(prev).add(bug.id));
+    }
     onUpdateBugLog(withBugTime({ ...bug, title: title || undefined, note }, d.time));
     markReviewed(bug.id);
     cancelFeedEdit(bug.id);
@@ -428,10 +437,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const moveToNew = (bugId: string) => onPatchBugLog?.(bugId, { reviewed: reviewedNow('new') });
 
   const toggleBugExpand = (bugId: string) => {
-    setExpandedBugIds(prev => ({
-      ...prev,
-      [bugId]: !prev[bugId]
-    }));
+    setExpandedBugIds(prev => {
+      const willClose = !!prev[bugId];
+      if (willClose) {
+        setStickyNewBugIds(s => {
+          if (!s.has(bugId)) return s;
+          const next = new Set(s);
+          next.delete(bugId);
+          return next;
+        });
+      }
+      return {
+        ...prev,
+        [bugId]: !prev[bugId]
+      };
+    });
   };
 
   // Search & Filter State
@@ -478,7 +498,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [chatAutoOpenGemini, setChatAutoOpenGemini] = useState<boolean>(() => localStorage.getItem(CHAT_AUTO_OPEN_GEMINI_KEY) === '1');
   const chatReplyHandlerRef = useRef<((text: string, source: 'auto' | 'paste') => void) | null>(null);
   const lastAutoCheckedReplyRef = useRef<string>('');
-  const [isVisualSnapshotModalOpen, setIsVisualSnapshotModalOpen] = useState<boolean>(false);
   const [selectedImagePreviewUrl, setSelectedImagePreviewUrl] = useState<string | null>(null);
 
   // Google Sheets Integration & Smart Categorization Settings
@@ -515,7 +534,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
       const keepLegacyFiled = field === 'status' && targetBug.status === 'Filed' && !targetBug.filed
         ? { filed: { via: 'legacy' as const, at: targetBug.timestamp } }
         : {};
-      // Setting type / priority / status is a review
+      // Setting type / priority / status is a review; keep expanded row open on the New tab until closed
+      if (feedTab === 'new' && expandedBugIds[bugId]) {
+        setStickyNewBugIds(prev => new Set(prev).add(bugId));
+        flashFeed('Marked reviewed · stays open until you close this row.');
+      }
       markReviewed(bugId);
       // filed is worker-owned: it can only change through the targeted patch handler
       if (keepLegacyFiled.filed && onPatchBugLog) onPatchBugLog(bugId, keepLegacyFiled);
@@ -680,7 +703,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (selectedImagePreviewUrl) setSelectedImagePreviewUrl(null);
-        if (isVisualSnapshotModalOpen) setIsVisualSnapshotModalOpen(false);
         if (isChatSummaryOpen) setIsChatSummaryOpen(false);
         if (isApiKeyModalOpen) setIsApiKeyModalOpen(false);
         if (isSheetModalOpen) setIsSheetModalOpen(false);
@@ -693,7 +715,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedImagePreviewUrl, isVisualSnapshotModalOpen, isChatSummaryOpen, isApiKeyModalOpen, isSheetModalOpen, isBugFilterMenuOpen, inspectorTarget, selectedInspectorTester, isFloorMenuOpen, isActivateTileOpen]);
+  }, [selectedImagePreviewUrl, isChatSummaryOpen, isApiKeyModalOpen, isSheetModalOpen, isBugFilterMenuOpen, inspectorTarget, selectedInspectorTester, isFloorMenuOpen, isActivateTileOpen]);
 
   // Close floor ⋯ menu on outside click
   useEffect(() => {
@@ -1640,8 +1662,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [suggestionsCollapsed, setSuggestionsCollapsed] = useState(false);
   // Bug ids being bundled right now (guards a fast double-click before React re-renders)
   const bundlingIdsRef = useRef<Set<string>>(new Set());
-  const [feedToast, setFeedToast] = useState<string | null>(null);
-  const flashFeed = (msg: string) => { setFeedToast(msg); setTimeout(() => setFeedToast(null), 4000); };
   const planNameById = (id?: string) => testPlans.find(p => p.id === id)?.name;
 
   /** Suggestions limited to the reports the feed currently shows (plan/date/search filters), hotlist-safe. */
@@ -1728,9 +1748,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const reviewedFeedBugs = useMemo(() => processedBugs.filter(b => reviewedOf(b)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [processedBugs, bugById, bugCategorizations]);
-  const feedRows = useMemo<FeedRow[]>(() => buildFeedRows(feedTab === 'reviewed' ? reviewedFeedBugs : newFeedBugs),
+  const feedRows = useMemo<FeedRow[]>(() => {
+    if (feedTab === 'reviewed') return buildFeedRows(reviewedFeedBugs);
+    const visibleNew = processedBugs.filter(b => !reviewedOf(b) || (stickyNewBugIds.has(b.id) && !!expandedBugIds[b.id]));
+    return buildFeedRows(visibleNew);
+  },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [feedTab, newFeedBugs, reviewedFeedBugs]);
+    [feedTab, newFeedBugs, reviewedFeedBugs, processedBugs, stickyNewBugIds, expandedBugIds]);
 
   /** Opens a report on the Bugs Feed (from the Buganizer tab): its tab, expanded, scrolled into view. */
   const openInFeed = (bugId?: string) => {
@@ -1809,7 +1833,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
       (p.description || '').toLowerCase().includes(q) ||
       (p.steps || []).some(s =>
         (s?.title || '').toLowerCase().includes(q) ||
-        (s?.feature || '').toLowerCase().includes(q)
+        (s?.feature || '').toLowerCase().includes(q) ||
+        (s?.description || '').toLowerCase().includes(q) ||
+        (s?.expectedOutcome || (s as any)?.expectedResult || '').toLowerCase().includes(q)
       )
     );
   }, [testPlans, searchPlanQuery]);
@@ -2165,7 +2191,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           const assignedPlan = validQuota ? testPlans.find(p => p.id === validQuota.planId) || null : null;
           const assignedQuota = validQuota;
           const hasAssignedPlan = Boolean(validQuota && assignedPlan);
-          const targetRuns = assignedQuota ? Math.max(1, assignedQuota.targetRunsPerDay || 1) : 2;
+          const targetRuns = assignedQuota ? Math.min(50, Math.max(1, assignedQuota.targetRunsPerDay || 1)) : 2;
           const doneToday = (assignedQuota && todayRunsMap[device.id] && todayRunsMap[device.id][assignedQuota.planId]) || 0;
           const remaining = assignedQuota ? Math.max(0, targetRuns - doneToday) : 0;
           const pct = assignedQuota && targetRuns > 0 ? Math.min(100, Math.round((doneToday / targetRuns) * 100)) : 0;
@@ -2480,14 +2506,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               style={{ backgroundColor: '#090d16', color: '#93c5fd' }}
                               className="bg-[#090d16] text-blue-300 font-mono font-bold border border-slate-700 rounded px-1.5 py-0.5 text-[11px] focus:outline-none cursor-pointer"
                             >
-                              <option value={1}>v1.0</option>
-                              <option value={2}>v2.0+</option>
-                              <option value={3}>v2.1+</option>
-                              <option value={4}>v2.2+</option>
-                              <option value={5}>v2.3.0</option>
-                              <option value={6}>v2.4.0</option>
-                              <option value={7}>v2.5.0</option>
-                              <option value={8}>v2.6.0</option>
+                              {APP_VERSION_OPTIONS.map(opt => (
+                                <option key={opt.code} value={opt.code}>{opt.label}</option>
+                              ))}
                             </select>
                           </div>
                         )}
@@ -2621,10 +2642,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       <button
                         type="button"
                         onClick={() => {
-                          if (!newPersonName.trim()) return;
+                          const trimmedName = newPersonName.trim();
+                          if (!trimmedName) return;
+                          if (unifiedTesters.some(t => t.name.trim().toLowerCase() === trimmedName.toLowerCase())) {
+                            alert(`Tester "${trimmedName}" already exists.`);
+                            return;
+                          }
                           const newTester: TesterProfile = {
                             id: `tester-${Date.now()}`,
-                            name: newPersonName.trim(),
+                            name: trimmedName,
                             role: newPersonRole.trim() || 'Mobile Tester'
                           };
                           if (onSaveTester) onSaveTester(newTester);
@@ -3292,7 +3318,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   if (onSaveDevice) onSaveDevice({ ...dev, quotas: [] });
                                   if (!dev.isInUse) setInspectorTarget(null);
                                 } else {
-                                  const currentTarget = dev.assignedQuota?.targetRunsPerDay || 2;
+                                  const currentTarget = Math.min(50, Math.max(1, dev.assignedQuota?.targetRunsPerDay || 2));
                                   if (onSaveDevice) {
                                     onSaveDevice({
                                       ...dev,
@@ -4962,10 +4988,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <span className="text-[10.5px] text-slate-400 w-[58px] whitespace-nowrap">{fmtT(bug.timestamp)}</span>
                 <span className="hidden md:inline text-[11.5px] text-slate-400 truncate max-w-[150px]">{bug.testerName || 'Unknown'} · {bug.deviceName || '?'}</span>
                 <span className="flex-1 min-w-0 truncate text-slate-100" title={bug.note}>{rowTitle}</span>
-                {bug.imageUrl && <ImageIcon className="w-3.5 h-3.5 text-blue-300 flex-shrink-0" />}
+                {bug.imageUrl && /^(data:image\/|https?:\/\/|blob:|\/)/i.test(bug.imageUrl) && <ImageIcon className="w-3.5 h-3.5 text-blue-300 flex-shrink-0" />}
                 <span className="hidden lg:inline text-[11.5px] text-slate-400 truncate max-w-[170px]">{bug.feature || 'General'}</span>
                 <span className={`${tagCls} ${TAG_STYLE.new}`}>{bug.bugType || 'Bug'}</span>
                 <span className={priTagCls(String(bug.priority || 'P2'))}>{bug.priority || 'P2'}</span>
+                {feedTab === 'new' && reviewed && <span data-testid="feed-reviewed-chip" className={`${tagCls} ${TAG_STYLE.filed}`}>✓ REVIEWED</span>}
                 {filed && <span data-testid="feed-filed-chip" className={`${tagCls} ${TAG_STYLE.filed} font-black`}>FILED</span>}
                 {pending && (
                   <span data-testid="feed-waiting-chip" title="Opened in Buganizer - RX95 stamps it FILED once it finds it there" className={`${tagCls} ${raw.filePending!.expired ? TAG_STYLE.expired : TAG_STYLE.waiting}`}>
@@ -4999,7 +5026,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           {!strong && (reviewed ? (
                             <button type="button" data-testid="move-to-new" className={smallBtnCls} onClick={() => { moveToNew(bug.id); flashFeed('Moved back to New.'); }}>↩ Move back to New</button>
                           ) : (
-                            <button type="button" data-testid="mark-reviewed" className="px-2.5 h-7 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white" onClick={() => { markReviewed(bug.id); flashFeed('Marked reviewed.'); }}>✓ Mark reviewed</button>
+                            <button type="button" data-testid="mark-reviewed" className="px-2.5 h-7 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white" onClick={() => {
+                              setStickyNewBugIds(prev => { if (!prev.has(bug.id)) return prev; const n = new Set(prev); n.delete(bug.id); return n; });
+                              markReviewed(bug.id);
+                              flashFeed('Marked reviewed.');
+                            }}>✓ Mark reviewed</button>
                           ))}
                           {BUGANIZER_ENABLED && (
                             <button type="button" data-testid="feed-open-buganizer" className={smallBtnCls} onClick={() => openInBuganizer(bug.id)}>Open in Buganizer tab ↗</button>
@@ -5042,6 +5073,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         type="time"
                         data-testid="feed-edit-time"
                         value={d.time}
+                        max={getLocalDateStr(bug.originalTimestamp || bug.timestamp) === todayStr ? toLocalHHMM(new Date().toISOString()) : undefined}
                         readOnly={!canEditText}
                         onChange={e => setFeedDraft(bug, { time: e.target.value })}
                         className={`${fieldCls} text-xs [color-scheme:dark]`}

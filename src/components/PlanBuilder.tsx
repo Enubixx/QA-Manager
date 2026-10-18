@@ -42,6 +42,7 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
     }
     if (selectingFeatureStepIndex !== null && selectingFeatureStepIndex >= 0) {
       handleUpdateStep(selectingFeatureStepIndex, 'feature', createdName.toLowerCase() === 'general' ? 'General' : createdName);
+      setSelectingFeatureStepIndex(null);
     }
     setNewCustomFeatureName('');
   };
@@ -120,7 +121,9 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
         title: s.title?.trim() || s.description?.trim().slice(0, 40) || `Step ${idx + 1}`,
         description: s.description?.trim() || '',
         expectedOutcome: s.expectedOutcome?.trim() || '',
-        feature: (s.feature?.trim() && !s.feature.trim().startsWith('__')) ? s.feature.trim() : 'General'
+        feature: (s.feature?.trim() && !s.feature.trim().startsWith('__')) ? s.feature.trim() : 'General',
+        imageUrl: s.imageUrl?.trim() || undefined,
+        slideUrl: s.slideUrl?.trim() || undefined,
       }));
 
     if (validSteps.length === 0) {
@@ -331,6 +334,29 @@ export const PlanBuilder: React.FC<PlanBuilderProps> = ({
                     onChange={e => handleUpdateStep(idx, 'description', e.target.value)}
                     className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
                   />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Reference Image URL (Optional)</label>
+                    <input
+                      type="text"
+                      placeholder="https://... or /warby-deck/slide-1.png"
+                      value={step.imageUrl || ''}
+                      onChange={e => handleUpdateStep(idx, 'imageUrl', e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Deck Slide URL (Optional)</label>
+                    <input
+                      type="text"
+                      placeholder="https://docs.google.com/presentation/..."
+                      value={step.slideUrl || ''}
+                      onChange={e => handleUpdateStep(idx, 'slideUrl', e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
                 </div>
 
                 {(step.imageUrl || step.slideUrl) && (
