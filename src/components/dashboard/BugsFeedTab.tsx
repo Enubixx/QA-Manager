@@ -136,9 +136,9 @@ export interface BugsFeedTabProps {
   selectedDeviceFilter: string;
   setSelectedDeviceFilter: React.Dispatch<React.SetStateAction<string>>;
   uniqueDevices: string[];
-  sortByDevice: 'newest' | 'oldest' | 'device-asc' | 'device-desc' | 'priority' | 'severity';
+  sortByDevice: 'newest' | 'oldest' | 'device-asc' | 'device-desc' | 'priority' | 'severity' | 'tester-asc' | 'tester-most';
   setSortByDevice: React.Dispatch<
-    React.SetStateAction<'newest' | 'oldest' | 'device-asc' | 'device-desc' | 'priority' | 'severity'>
+    React.SetStateAction<'newest' | 'oldest' | 'device-asc' | 'device-desc' | 'priority' | 'severity' | 'tester-asc' | 'tester-most'>
   >;
 }
 

@@ -363,7 +363,11 @@ export function useDashboardController({
   const [selectedDateFilter, setSelectedDateFilter] = useState<string>('all');
   const [selectedPlanFilter, setSelectedPlanFilter] = useState<string>('all');
   const [customDateInput, setCustomDateInput] = useState<string>('');
-  const [sortByDevice, setSortByDevice] = useState<'newest' | 'oldest' | 'device-asc' | 'device-desc' | 'priority' | 'severity'>('newest');
+  const [sortByDevice, setSortByDevice] = useState<'newest' | 'oldest' | 'device-asc' | 'device-desc' | 'priority' | 'severity' | 'tester-asc' | 'tester-most'>('newest');
+  const [feedGroupBy, setFeedGroupBy] = useState<'time' | 'tester' | 'device' | 'cuj'>('time');
+  const [selectedTesterFilters, setSelectedTesterFilters] = useState<string[]>([]);
+  const [isTesterFilterOpen, setIsTesterFilterOpen] = useState<boolean>(false);
+  const [focusedBugId, setFocusedBugId] = useState<string | null>(null);
   
   // Feature Creation, Report Expand, Copy Report & Bug Filter Menu state on Dashboard
   const visualCardRef = useRef<HTMLDivElement>(null);
@@ -461,6 +465,7 @@ export function useDashboardController({
         if (isChatSummaryOpen) setIsChatSummaryOpen(false);
         if (isApiKeyModalOpen) setIsApiKeyModalOpen(false);
         if (isBugFilterMenuOpen) setIsBugFilterMenuOpen(false);
+        if (isTesterFilterOpen) setIsTesterFilterOpen(false);
         if (inspectorTarget) setInspectorTarget(null);
         if (selectedInspectorTester) setSelectedInspectorTester('');
         if (isFloorMenuOpen) setIsFloorMenuOpen(false);
@@ -469,7 +474,7 @@ export function useDashboardController({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedImagePreviewUrl, isChatSummaryOpen, isApiKeyModalOpen, isBugFilterMenuOpen, inspectorTarget, selectedInspectorTester, isFloorMenuOpen, isActivateTileOpen]);
+  }, [selectedImagePreviewUrl, isChatSummaryOpen, isApiKeyModalOpen, isBugFilterMenuOpen, isTesterFilterOpen, inspectorTarget, selectedInspectorTester, isFloorMenuOpen, isActivateTileOpen]);
 
   // Close floor ⋯ menu on outside click
   useEffect(() => {
@@ -1310,6 +1315,34 @@ export function useDashboardController({
     }
   };
 
+  // Tester options for the Bugs tab Tester multi-select filter, with bug counts (sorted by count descending)
+  const bugTesterOptions = useMemo(() => {
+    const counts = new Map<string, { name: string; count: number; devices: Set<string>; p0Count: number; p1Count: number }>();
+    bugLogs.forEach(b => {
+      const rawName = (b.testerName || (b as any).reporter || '').trim() || 'Unknown';
+      const key = rawName.toLowerCase();
+      let entry = counts.get(key);
+      if (!entry) {
+        entry = { name: rawName, count: 0, devices: new Set<string>(), p0Count: 0, p1Count: 0 };
+        counts.set(key, entry);
+      }
+      entry.count += 1;
+      if (b.deviceName && b.deviceName.trim()) entry.devices.add(b.deviceName.trim());
+      const prio = bugCategorizations[b.id]?.priority || b.priority || (b.severity === 'critical' ? 'P0' : b.severity === 'high' ? 'P1' : 'P2');
+      if (prio === 'P0' || String(prio) === '0') entry.p0Count += 1;
+      else if (prio === 'P1' || String(prio) === '1') entry.p1Count += 1;
+    });
+    return Array.from(counts.values())
+      .map(x => ({
+        name: x.name,
+        count: x.count,
+        devices: Array.from(x.devices),
+        p0Count: x.p0Count,
+        p1Count: x.p1Count
+      }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  }, [bugLogs, bugCategorizations]);
+
   // Filter & Sort Bug Logs (memoized and null-safe)
   const processedBugs = useMemo(() => {
     let list = bugLogs.map(b => {
@@ -1324,6 +1357,14 @@ export function useDashboardController({
 
     if (selectedPlanFilter !== 'all') {
       list = list.filter(b => bugPlanLookup(b).planId === selectedPlanFilter);
+    }
+
+    if (selectedTesterFilters.length > 0) {
+      const wanted = new Set(selectedTesterFilters.map(t => t.toLowerCase().trim()));
+      list = list.filter(b => {
+        const tName = ((b.testerName || (b as any).reporter || '').trim() || 'Unknown').toLowerCase();
+        return wanted.has(tName);
+      });
     }
 
     if (selectedDeviceFilter !== 'all') {
@@ -1384,7 +1425,29 @@ export function useDashboardController({
       );
     }
 
+    const testerCounts = new Map<string, number>();
+    if (sortByDevice === 'tester-most') {
+      list.forEach(b => {
+        const k = ((b.testerName || (b as any).reporter || '').trim() || 'Unknown').toLowerCase();
+        testerCounts.set(k, (testerCounts.get(k) || 0) + 1);
+      });
+    }
+
     list.sort((a, b) => {
+      if (sortByDevice === 'tester-asc') {
+        const aT = (a.testerName || (a as any).reporter || 'Unknown').trim();
+        const bT = (b.testerName || (b as any).reporter || 'Unknown').trim();
+        const cmp = aT.localeCompare(bT, undefined, { sensitivity: 'base' });
+        if (cmp !== 0) return cmp;
+      }
+      if (sortByDevice === 'tester-most') {
+        const aT = ((a.testerName || (a as any).reporter || '').trim() || 'Unknown').toLowerCase();
+        const bT = ((b.testerName || (b as any).reporter || '').trim() || 'Unknown').toLowerCase();
+        const diff = (testerCounts.get(bT) || 0) - (testerCounts.get(aT) || 0);
+        if (diff !== 0) return diff;
+        const nameCmp = aT.localeCompare(bT, undefined, { sensitivity: 'base' });
+        if (nameCmp !== 0) return nameCmp;
+      }
       if (sortByDevice === 'device-asc') {
         return (a.deviceName || 'Unspecified').localeCompare(b.deviceName || 'Unspecified');
       }
@@ -1408,7 +1471,7 @@ export function useDashboardController({
     });
 
     return list;
-  }, [bugLogs, bugCategorizations, selectedPlanFilter, bugPlanLookup, selectedDeviceFilter, selectedFeatureFilter, selectedDateFilter, customDateInput, searchBugQuery, sortByDevice]);
+  }, [bugLogs, bugCategorizations, selectedPlanFilter, bugPlanLookup, selectedTesterFilters, selectedDeviceFilter, selectedFeatureFilter, selectedDateFilter, customDateInput, searchBugQuery, sortByDevice]);
 
   // ---------- RX95 same-day duplicate groups (Bugs Feed) ----------
   const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(() => loadDismissed());
@@ -1553,6 +1616,10 @@ export function useDashboardController({
   const totalPlans = testPlans.length;
   const activeRuns = liveInProgressRuns.length;
   const totalBugs = bugLogs.length;
+  const unreviewedBugsCount = useMemo(
+    () => bugLogs.filter(b => !isReviewed(b, bugCategorizations[b.id])).length,
+    [bugLogs, bugCategorizations]
+  );
 
   const assignedDevices = useMemo(
     () =>
@@ -1670,6 +1737,15 @@ export function useDashboardController({
     setCustomDateInput,
     sortByDevice,
     setSortByDevice,
+    feedGroupBy,
+    setFeedGroupBy,
+    selectedTesterFilters,
+    setSelectedTesterFilters,
+    isTesterFilterOpen,
+    setIsTesterFilterOpen,
+    focusedBugId,
+    setFocusedBugId,
+    bugTesterOptions,
     visualCardRef,
     newFeatureInput,
     setNewFeatureInput,
@@ -1780,6 +1856,7 @@ export function useDashboardController({
     totalPlans,
     activeRuns,
     totalBugs,
+    unreviewedBugsCount,
     unassignedDevices,
     activeOrTestedTodayCount
   };

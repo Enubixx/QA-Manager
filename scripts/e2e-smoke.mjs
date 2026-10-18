@@ -216,9 +216,12 @@ async function runE2ESmoke() {
       const btn =
         document.querySelector('[data-testid="run-on-phone-button"]') ||
         Array.from(document.querySelectorAll('button')).find(
-          b => b.textContent?.includes('Run on phone') || b.textContent?.includes('Test on Phone App')
+          b =>
+            b.textContent?.includes('Test on phone') ||
+            b.textContent?.includes('Run on phone') ||
+            b.textContent?.includes('Test on Phone App')
         );
-      if (!btn) throw new Error('Run on phone button not found');
+      if (!btn) throw new Error('Test on phone button not found');
       btn.click();
     });
     await new Promise(r => setTimeout(r, 300));

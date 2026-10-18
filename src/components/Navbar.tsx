@@ -10,9 +10,8 @@ export type DashboardTabKey = 'overview' | 'devices' | 'testers' | 'features' | 
 
 export interface NavbarTabCounts {
   plans: number;
-  floor: number;
-  cujs: number;
-  golden: number;
+  floor: string;
+  cuj: string;
   bugs: number;
 }
 
@@ -118,9 +117,9 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header className="bg-[#0b0f19]/90 backdrop-blur-xl border-b border-slate-800/80 sticky top-0 z-50" data-testid="app-navbar">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-12 flex items-center justify-between gap-3">
+      <div className="max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8 h-12 flex items-center justify-between gap-1.5 sm:gap-3 flex-nowrap">
         {/* Left side: Brand & Top-bar Navigation Tabs */}
-        <div className="flex items-center gap-4 min-w-0">
+        <div className="flex items-center gap-2 sm:gap-4 min-w-0 flex-nowrap">
           <div
             role="button"
             tabIndex={0}
@@ -136,25 +135,25 @@ export const Navbar: React.FC<NavbarProps> = ({
                 onSelectDashboardTab?.('overview');
               }
             }}
-            className="flex items-center gap-2 cursor-pointer group focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-xl shrink-0"
+            className="flex items-center gap-1.5 sm:gap-2 cursor-pointer group focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-xl shrink-0"
           >
             <div className="p-1.5 bg-blue-600 rounded-xl text-white shadow-sm border border-blue-500/40 transition-transform duration-200 group-hover:scale-105">
               <ShieldCheck className="w-4 h-4" />
             </div>
-            <h1 className="font-bold text-sm text-slate-50 tracking-tight whitespace-nowrap">QA Manager</h1>
+            <h1 className="hidden sm:block font-bold text-sm text-slate-50 tracking-tight whitespace-nowrap">QA Manager</h1>
           </div>
 
           {onSelectDashboardTab && (
             <nav
               aria-label="Main navigation"
               data-testid="navbar-tabs"
-              className="flex items-center gap-1 overflow-x-auto no-scrollbar"
+              className="flex items-center gap-0.5 sm:gap-1 overflow-x-auto no-scrollbar flex-nowrap"
             >
               {([
                 {
                   key: 'overview' as const,
                   testid: 'nav-tab-overview',
-                  label: 'Test Plans',
+                  label: 'Plans',
                   active: currentView === 'dashboard' && activeDashboardTab === 'overview',
                   badge: tabCounts ? String(tabCounts.plans) : undefined,
                 },
@@ -165,14 +164,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                   active:
                     currentView === 'dashboard' &&
                     (activeDashboardTab === 'devices' || activeDashboardTab === 'testers'),
-                  badge: tabCounts ? String(tabCounts.floor) : undefined,
+                  badge: tabCounts ? tabCounts.floor : undefined,
                 },
                 {
                   key: 'features' as const,
                   testid: 'nav-tab-features',
                   label: 'CUJ Report',
                   active: currentView === 'dashboard' && activeDashboardTab === 'features',
-                  badge: tabCounts ? `${tabCounts.cujs} · ${tabCounts.golden}★` : undefined,
+                  badge: tabCounts ? tabCounts.cuj : undefined,
                 },
                 {
                   key: 'bugs' as const,
@@ -191,7 +190,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     if (currentView !== 'dashboard') onNavigate('dashboard');
                     onSelectDashboardTab(tab.key);
                   }}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition whitespace-nowrap cursor-pointer border ${
+                  className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl text-[11px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition whitespace-nowrap cursor-pointer border shrink-0 ${
                     tab.active
                       ? 'bg-[#162038] text-white border-blue-500/50 shadow-sm'
                       : 'bg-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border-transparent'
@@ -200,9 +199,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <span>{tab.label}</span>
                   {tab.badge !== undefined && (
                     <span
-                      className={`text-[10.5px] font-mono px-1.5 py-0.2 rounded-full ${
+                      className={`text-[10px] sm:text-[10.5px] font-mono px-1.5 py-0.2 rounded-full ${
                         tab.active
-                          ? 'bg-blue-500/20 text-blue-200'
+                          ? 'bg-blue-600 text-white'
                           : 'bg-slate-800/90 text-slate-400'
                       }`}
                     >
@@ -216,11 +215,12 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
 
         {/* Right side: Sync badge, APK download & Data menu */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           <span
             data-testid="navbar-sync-status"
             data-sync-state={syncInfo.state}
-            className={`text-[11px] px-2.5 py-1 rounded-full font-semibold flex items-center gap-1.5 border whitespace-nowrap ${
+            title={syncInfo.label}
+            className={`text-[11px] px-2 sm:px-2.5 py-1 rounded-full font-semibold flex items-center gap-1.5 border whitespace-nowrap ${
               syncInfo.state === 'synced'
                 ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35'
                 : syncInfo.state === 'syncing'
@@ -237,7 +237,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   : 'bg-slate-400'
               }`}
             />
-            <span>{syncInfo.label}</span>
+            <span className="hidden md:inline">{syncInfo.label}</span>
           </span>
 
           <a
@@ -245,7 +245,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             target="_blank"
             rel="noreferrer"
             data-testid="navbar-apk-link"
-            className="px-3 py-1.5 bg-slate-800/90 hover:bg-slate-700 text-slate-100 rounded-xl text-xs font-semibold transition border border-slate-700/80 flex items-center gap-1.5 active:scale-95 whitespace-nowrap"
+            className="hidden sm:flex px-2.5 sm:px-3 py-1.5 bg-slate-800/90 hover:bg-slate-700 text-slate-100 rounded-xl text-xs font-semibold transition border border-slate-700/80 items-center gap-1.5 active:scale-95 whitespace-nowrap"
             title={`Download the latest QA Tester Android app (v${APP_VERSION_NAME}) from Google Drive`}
           >
             <span>↓ APK v{APP_VERSION_NAME}</span>

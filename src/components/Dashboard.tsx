@@ -142,24 +142,31 @@ export const Dashboard: React.FC<DashboardProps> = ({
     onActiveTabChange
   });
 
-  const floorBadgeCount =
-    c.activeOrTestedTodayCount > 0 ? c.activeOrTestedTodayCount : devices.length;
+  const floorBadgeLabel =
+    c.activeRuns > 0
+      ? `${c.activeRuns} live`
+      : c.activeOrTestedTodayCount > 0
+      ? `${c.activeOrTestedTodayCount} today`
+      : '0 live';
+
+  const cujBadgeLabel =
+    c.totalStepsAcrossFeatures > 0 && c.avgHealthScore !== null
+      ? `${Math.round(c.avgHealthScore)}%`
+      : 'Today';
 
   useEffect(() => {
     onTabCountsChange?.({
       plans: c.totalPlans,
-      floor: floorBadgeCount,
-      cujs: c.featureMetricsList.length,
-      golden: c.goldenRunsAnalysis.goldenCount,
-      bugs: c.totalBugs,
+      floor: floorBadgeLabel,
+      cuj: cujBadgeLabel,
+      bugs: c.unreviewedBugsCount,
     });
   }, [
     onTabCountsChange,
     c.totalPlans,
-    floorBadgeCount,
-    c.featureMetricsList.length,
-    c.goldenRunsAnalysis.goldenCount,
-    c.totalBugs,
+    floorBadgeLabel,
+    cujBadgeLabel,
+    c.unreviewedBugsCount,
   ]);
 
   return (
@@ -255,6 +262,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
           testPlans={testPlans}
           filteredPlans={c.filteredPlans}
           testRuns={testRuns}
+          archivedRuns={archivedRuns}
+          bugLogs={bugLogs}
+          todayStr={c.todayStr}
           liveInProgressRuns={c.liveInProgressRuns}
           activeRuns={c.activeRuns}
           searchPlanQuery={c.searchPlanQuery}

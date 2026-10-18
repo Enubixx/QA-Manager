@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   ListChecks,
   Plus,
@@ -15,14 +15,20 @@ import {
   ChevronRight,
   Timer,
   MoreHorizontal,
+  Play,
 } from 'lucide-react';
-import { TestPlan, TestRun } from '../../types';
+import { TestPlan, TestRun, BugLog } from '../../types';
 import { getLocalDateStr } from '../../utils/dateUtils';
+import { mergeRunsById } from '../../utils/cujReportUtils';
+import { isRunFullyCompleted, buildStepFirstSeenIndex } from '../../utils/runUtils';
 
 export interface TestPlansTabProps {
   testPlans: TestPlan[];
   filteredPlans: TestPlan[];
   testRuns: TestRun[];
+  archivedRuns?: TestRun[];
+  bugLogs?: BugLog[];
+  todayStr?: string;
   liveInProgressRuns: TestRun[];
   activeRuns: number;
   searchPlanQuery: string;
@@ -44,20 +50,28 @@ export interface TestPlansTabProps {
   formatOngoingDuration: (startedAt?: string) => string;
 }
 
-const formatCompactDate = (isoDate?: string): string => {
-  if (!isoDate) return '';
+const formatLastRunLabel = (isoDate: string | undefined, todayStr: string): string => {
+  if (!isoDate) return '—';
   try {
     const d = new Date(isoDate);
-    if (isNaN(d.getTime())) return '';
+    if (isNaN(d.getTime())) return '—';
+    const dayStr = getLocalDateStr(d);
+    if (dayStr === todayStr) {
+      return `Today ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    }
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   } catch {
-    return '';
+    return '—';
   }
 };
 
 export const TestPlansTab: React.FC<TestPlansTabProps> = ({
   testPlans,
   filteredPlans,
+  testRuns,
+  archivedRuns = [],
+  bugLogs = [],
+  todayStr: todayStrProp,
   liveInProgressRuns,
   activeRuns,
   searchPlanQuery,
@@ -80,6 +94,7 @@ export const TestPlansTab: React.FC<TestPlansTabProps> = ({
 }) => {
   const [openMenuPlanId, setOpenMenuPlanId] = useState<string | null>(null);
   const menuContainerRef = useRef<HTMLDivElement | null>(null);
+  const todayStr = todayStrProp || getLocalDateStr(new Date());
 
   useEffect(() => {
     if (!openMenuPlanId) return;
@@ -92,59 +107,97 @@ export const TestPlansTab: React.FC<TestPlansTabProps> = ({
     return () => document.removeEventListener('mousedown', handleOutside);
   }, [openMenuPlanId]);
 
+  // Compute per-plan metrics: lastRunIso, todayRunsCount, bugCount
+  const planStatsMap = useMemo(() => {
+    const mergedRuns = mergeRunsById(archivedRuns, testRuns);
+    const firstSeen = buildStepFirstSeenIndex(mergedRuns);
+    const runPlanById = new Map<string, string>();
+    mergedRuns.forEach(r => {
+      if (r && r.id && r.planId) runPlanById.set(r.id, r.planId);
+    });
+
+    const stats = new Map<
+      string,
+      { lastRunIso?: string; lastRunMs: number; todayCount: number; bugCount: number }
+    >();
+    testPlans.forEach(p => {
+      stats.set(p.id, { lastRunIso: undefined, lastRunMs: 0, todayCount: 0, bugCount: 0 });
+    });
+
+    mergedRuns.forEach(r => {
+      if (!r || !r.planId) return;
+      const entry = stats.get(r.planId);
+      if (!entry) return;
+      const completed = isRunFullyCompleted(r, testPlans, firstSeen);
+      if (!completed) return;
+      const refIso = r.completedAt || r.startedAt;
+      const ms = refIso ? new Date(refIso).getTime() : 0;
+      if (ms > entry.lastRunMs) {
+        entry.lastRunMs = ms;
+        entry.lastRunIso = refIso;
+      }
+      if (refIso && getLocalDateStr(refIso) === todayStr) {
+        entry.todayCount += 1;
+      }
+    });
+
+    bugLogs.forEach(b => {
+      const pid = b.planId || (b.testRunId ? runPlanById.get(b.testRunId) : undefined);
+      if (!pid) return;
+      const entry = stats.get(pid);
+      if (entry) entry.bugCount += 1;
+    });
+
+    return stats;
+  }, [testPlans, testRuns, archivedRuns, bugLogs, todayStr]);
+
   return (
     <div className="space-y-4">
+      {/* Single Compact Header Row spanning full width */}
+      <div
+        data-testid="test-plans-header"
+        className="flex flex-wrap items-center justify-between gap-3"
+      >
+        <div className="flex items-center gap-3 flex-1 min-w-0">
+          <h2 className="text-base font-bold text-slate-50 tracking-tight shrink-0">Test plans</h2>
+          {testPlans.length > 0 && (
+            <div className="relative w-full max-w-[220px]">
+              <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-2 pointer-events-none" />
+              <input
+                type="text"
+                data-testid="test-plans-search"
+                placeholder="Search plans..."
+                value={searchPlanQuery}
+                onChange={e => setSearchPlanQuery(e.target.value)}
+                className="w-full bg-[#0f172a] border border-slate-800 rounded-xl pl-8 pr-6 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+              />
+              {searchPlanQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchPlanQuery('')}
+                  className="absolute right-2 top-1.5 text-slate-500 hover:text-white text-xs cursor-pointer"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        <button
+          type="button"
+          data-testid="create-plan-button"
+          onClick={onSelectPlanToBuild}
+          className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-xl shadow-sm border border-blue-500 flex items-center gap-1.5 transition-all duration-200 active:scale-[0.98] cursor-pointer shrink-0"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          <span>New plan</span>
+        </button>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
         {/* Compact Test Plans Table Column */}
-        <div className="lg:col-span-2 space-y-3" ref={menuContainerRef}>
-          {/* Single Compact Header Row */}
-          <div
-            data-testid="test-plans-header"
-            className="flex flex-wrap items-center justify-between gap-3"
-          >
-            <div className="flex items-center gap-2">
-              <h2 className="text-base font-bold text-slate-50 tracking-tight">Test Plans</h2>
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-mono font-semibold bg-slate-800/80 text-slate-300 border border-slate-700/70">
-                {testPlans.length}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2.5 flex-1 sm:flex-initial justify-end">
-              {testPlans.length > 0 && (
-                <div className="relative w-full sm:w-56">
-                  <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-2 pointer-events-none" />
-                  <input
-                    type="text"
-                    data-testid="test-plans-search"
-                    placeholder="Search plans..."
-                    value={searchPlanQuery}
-                    onChange={e => setSearchPlanQuery(e.target.value)}
-                    className="w-full bg-[#0f172a] border border-slate-800 rounded-xl pl-8 pr-6 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
-                  />
-                  {searchPlanQuery && (
-                    <button
-                      type="button"
-                      onClick={() => setSearchPlanQuery('')}
-                      className="absolute right-2 top-1.5 text-slate-500 hover:text-white text-xs cursor-pointer"
-                    >
-                      ×
-                    </button>
-                  )}
-                </div>
-              )}
-
-              <button
-                type="button"
-                data-testid="create-plan-button"
-                onClick={onSelectPlanToBuild}
-                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-xl shadow-sm border border-blue-500 flex items-center gap-1.5 transition-all duration-200 active:scale-[0.98] cursor-pointer shrink-0"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Create Plan</span>
-              </button>
-            </div>
-          </div>
-
+        <div className="lg:col-span-2" ref={menuContainerRef}>
           {testPlans.length === 0 ? (
             <div className="bg-[#111827] border border-slate-800 rounded-2xl p-8 text-center space-y-4">
               <div className="p-3 bg-[#0f172a] rounded-full border border-slate-800 text-slate-500 w-fit mx-auto">
@@ -153,7 +206,7 @@ export const TestPlansTab: React.FC<TestPlansTabProps> = ({
               <div>
                 <h4 className="text-base font-bold text-white">No Test Plans Found</h4>
                 <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-                  Click "Create Plan" to get started with test steps.
+                  Click "New plan" to get started with test steps.
                 </p>
               </div>
               <div className="flex items-center justify-center gap-3">
@@ -176,10 +229,29 @@ export const TestPlansTab: React.FC<TestPlansTabProps> = ({
               data-testid="test-plans-table"
               className="bg-[#0f172a]/85 border border-slate-800/80 rounded-2xl divide-y divide-slate-800/80 overflow-visible"
             >
+              {/* Column Headers: PLAN · STEPS · LAST RUN · TODAY · BUGS */}
+              <div
+                data-testid="test-plans-table-header"
+                className="px-4 py-2.5 grid grid-cols-[minmax(0,1.6fr)_60px_110px_64px_56px_auto] items-center gap-3 text-[10px] font-bold uppercase tracking-wider text-slate-400"
+              >
+                <span>Plan</span>
+                <span>Steps</span>
+                <span className="hidden sm:inline">Last run</span>
+                <span className="hidden sm:inline">Today</span>
+                <span>Bugs</span>
+                <span className="sr-only">Actions</span>
+              </div>
+
               {filteredPlans.map(plan => {
                 const isExpanded = !!expandedPlanSteps[plan.id];
                 const isMenuOpen = openMenuPlanId === plan.id;
-                const compactDate = formatCompactDate(plan.createdAt);
+                const st = planStatsMap.get(plan.id) || {
+                  lastRunIso: undefined,
+                  lastRunMs: 0,
+                  todayCount: 0,
+                  bugCount: 0,
+                };
+                const lastRunStr = formatLastRunLabel(st.lastRunIso, todayStr);
 
                 return (
                   <div
@@ -188,20 +260,20 @@ export const TestPlansTab: React.FC<TestPlansTabProps> = ({
                     data-plan-id={plan.id}
                     className="transition-colors hover:bg-slate-900/40"
                   >
-                    <div className="px-4 py-3.5 flex items-center justify-between gap-4">
-                      {/* Left: Chevron + Plan Name & Description */}
-                      <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                    <div className="px-4 py-3 grid grid-cols-[minmax(0,1.6fr)_60px_110px_64px_56px_auto] items-center gap-3">
+                      {/* Col 1: Plan Name (click to expand steps) */}
+                      <div className="flex items-center gap-2 min-w-0">
                         <button
                           type="button"
                           data-testid="test-plan-expand"
                           onClick={() =>
                             setExpandedPlanSteps(prev => ({ ...prev, [plan.id]: !prev[plan.id] }))
                           }
-                          className="mt-0.5 p-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors cursor-pointer shrink-0"
+                          className="p-0.5 rounded text-slate-400 hover:text-slate-200 transition-colors cursor-pointer shrink-0"
                           title={isExpanded ? 'Collapse steps' : 'View steps'}
                         >
                           <ChevronRight
-                            className={`w-4 h-4 transition-transform duration-200 ${
+                            className={`w-3.5 h-3.5 transition-transform duration-200 ${
                               isExpanded ? 'rotate-90 text-blue-400' : ''
                             }`}
                           />
@@ -212,44 +284,73 @@ export const TestPlansTab: React.FC<TestPlansTabProps> = ({
                             setExpandedPlanSteps(prev => ({ ...prev, [plan.id]: !prev[plan.id] }))
                           }
                         >
-                          <h4 className="text-sm font-bold text-slate-100 tracking-tight truncate">
+                          <h4 className="text-xs font-bold text-slate-100 tracking-tight truncate">
                             {plan.name}
                           </h4>
-                          {plan.description && (
-                            <p className="text-xs text-slate-400 mt-0.5 line-clamp-1">
-                              {plan.description}
-                            </p>
-                          )}
                         </div>
                       </div>
 
-                      {/* Right: Step count · Date · Run on phone · ⋯ Menu */}
-                      <div className="flex items-center gap-3 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setExpandedPlanSteps(prev => ({ ...prev, [plan.id]: !prev[plan.id] }))
-                          }
-                          className="text-xs font-mono text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
-                        >
-                          {plan.steps.length} steps
-                        </button>
+                      {/* Col 2: Steps */}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedPlanSteps(prev => ({ ...prev, [plan.id]: !prev[plan.id] }))
+                        }
+                        className="text-left text-xs font-mono font-semibold text-slate-200 hover:text-blue-300 cursor-pointer"
+                      >
+                        {plan.steps.length}
+                      </button>
 
-                        {compactDate && (
-                          <span className="hidden sm:inline text-xs text-slate-500 font-mono">
-                            {compactDate}
+                      {/* Col 3: Last run */}
+                      <span
+                        data-testid="test-plan-last-run"
+                        className="hidden sm:inline text-xs text-slate-400 truncate"
+                      >
+                        {lastRunStr}
+                      </span>
+
+                      {/* Col 4: Today */}
+                      <span
+                        data-testid="test-plan-today"
+                        className="hidden sm:inline text-xs font-mono text-slate-400"
+                      >
+                        {st.todayCount > 0 ? st.todayCount : '—'}
+                      </span>
+
+                      {/* Col 5: Bugs */}
+                      <span data-testid="test-plan-bugs" className="text-xs">
+                        {st.bugCount > 0 ? (
+                          <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-full text-[10.5px] font-mono font-bold bg-rose-500/15 text-rose-300 border border-rose-500/35">
+                            {st.bugCount}
                           </span>
+                        ) : (
+                          <span className="text-slate-500 font-mono">—</span>
                         )}
+                      </span>
 
+                      {/* Col 6: Actions: [▶ Test on phone] [✎ Edit visible] [⋯ = Clone · Simulate a run · Delete] */}
+                      <div className="flex items-center justify-end gap-1.5 shrink-0">
                         <button
                           type="button"
                           data-testid="run-on-phone-button"
                           onClick={() => onOpenMobileView(plan.id)}
-                          className="px-3 py-1.5 bg-blue-600/15 hover:bg-blue-600/25 border border-blue-500/40 text-blue-300 hover:text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-all duration-150 cursor-pointer"
+                          className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-slate-100 hover:text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-all duration-150 cursor-pointer"
                         >
-                          <Smartphone className="w-3.5 h-3.5 text-blue-400" />
-                          <span>Run on phone</span>
+                          <Play className="w-3 h-3 fill-current text-slate-300" />
+                          <span>Test on phone</span>
                         </button>
+
+                        {onEditPlan && (
+                          <button
+                            type="button"
+                            data-testid="test-plan-edit-button"
+                            onClick={() => onEditPlan(plan)}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 transition-colors cursor-pointer"
+                            title="Edit Test Plan & Steps"
+                          >
+                            <Edit className="w-3.5 h-3.5" />
+                          </button>
+                        )}
 
                         {/* ⋯ Secondary Actions Menu */}
                         <div className="relative">
@@ -259,7 +360,7 @@ export const TestPlansTab: React.FC<TestPlansTabProps> = ({
                             onClick={() =>
                               setOpenMenuPlanId(prev => (prev === plan.id ? null : plan.id))
                             }
-                            className="p-1.5 rounded-lg bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 transition-colors cursor-pointer"
                             title="More actions"
                           >
                             <MoreHorizontal className="w-4 h-4" />
@@ -270,22 +371,6 @@ export const TestPlansTab: React.FC<TestPlansTabProps> = ({
                               data-testid="test-plan-menu-dropdown"
                               className="absolute right-0 mt-1.5 w-44 rounded-xl bg-[#0f172a] border border-slate-700/80 shadow-2xl py-1 z-50 text-xs"
                             >
-                              {onEditPlan && (
-                                <button
-                                  type="button"
-                                  data-testid="plan-menu-edit"
-                                  onClick={() => {
-                                    setOpenMenuPlanId(null);
-                                    onEditPlan(plan);
-                                  }}
-                                  className="w-full px-3 py-2 text-left text-slate-200 hover:bg-slate-800/80 flex items-center gap-2 cursor-pointer"
-                                  title="Edit Test Plan & Steps"
-                                >
-                                  <Edit className="w-3.5 h-3.5 text-slate-400" />
-                                  <span>Edit</span>
-                                </button>
-                              )}
-
                               <button
                                 type="button"
                                 data-testid="plan-menu-duplicate"
@@ -294,10 +379,10 @@ export const TestPlansTab: React.FC<TestPlansTabProps> = ({
                                   onClonePlan(plan.id);
                                 }}
                                 className="w-full px-3 py-2 text-left text-slate-200 hover:bg-slate-800/80 flex items-center gap-2 cursor-pointer"
-                                title="Duplicate / Clone Test Plan"
+                                title="Clone Test Plan"
                               >
                                 <Copy className="w-3.5 h-3.5 text-slate-400" />
-                                <span>Duplicate</span>
+                                <span>Clone</span>
                               </button>
 
                               {onRunSubagentTest && (
@@ -311,15 +396,15 @@ export const TestPlansTab: React.FC<TestPlansTabProps> = ({
                                     setSelectedReportPlanId(plan.id);
                                     setActiveTab('features');
                                     setSubagentToast(
-                                      `Subagent executed all ${plan.steps.length} steps in "${plan.name}" for Today! Features populated.`
+                                      `Simulated a full run of all ${plan.steps.length} steps in "${plan.name}" for Today.`
                                     );
                                     setTimeout(() => setSubagentToast(null), 5000);
                                   }}
                                   className="w-full px-3 py-2 text-left text-slate-200 hover:bg-slate-800/80 flex items-center gap-2 cursor-pointer"
-                                  title="Run autonomous subagent to execute all steps in this test flow and record data for Today"
+                                  title="Simulate a run for Today"
                                 >
                                   <Sparkles className="w-3.5 h-3.5 text-blue-400" />
-                                  <span>Auto-test today</span>
+                                  <span>Simulate a run</span>
                                 </button>
                               )}
 
@@ -347,6 +432,9 @@ export const TestPlansTab: React.FC<TestPlansTabProps> = ({
                     {/* Expandable Step Walkthrough */}
                     {isExpanded && (
                       <div className="px-4 pb-4 pt-2 border-t border-slate-800/60 bg-slate-950/30 space-y-2">
+                        {plan.description && (
+                          <p className="text-xs text-slate-400 pb-1">{plan.description}</p>
+                        )}
                         <div className="flex items-center justify-between text-[11px] font-bold text-slate-400 pb-1">
                           <span className="uppercase tracking-wider text-blue-400">
                             Steps ({plan.steps.length})
@@ -407,17 +495,10 @@ export const TestPlansTab: React.FC<TestPlansTabProps> = ({
           data-testid="live-now-panel"
           className="bg-[#0f172a]/85 border border-slate-800/80 rounded-2xl p-4 space-y-3"
         >
-          <div className="flex items-center justify-between">
-            <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  activeRuns > 0 ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'
-                }`}
-              />
-              <span>Live now</span>
-            </h3>
-            <span className="text-[11px] font-mono text-slate-400">
-              {activeRuns} active
+          <div className="flex items-center justify-between border-b border-slate-800/70 pb-2.5">
+            <h3 className="text-xs font-bold text-slate-200">Live now</h3>
+            <span className="px-2 py-0.5 rounded-full text-[11px] font-mono bg-slate-800/80 text-slate-400">
+              {activeRuns}
             </span>
           </div>
 
@@ -426,8 +507,8 @@ export const TestPlansTab: React.FC<TestPlansTabProps> = ({
               const ongoingRuns = liveInProgressRuns;
               if (ongoingRuns.length === 0) {
                 return (
-                  <p className="text-xs text-slate-500 py-2">
-                    No active runs right now.
+                  <p className="text-xs text-slate-500 py-1">
+                    No one is testing right now.
                   </p>
                 );
               }

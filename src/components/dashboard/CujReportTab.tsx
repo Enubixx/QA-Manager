@@ -191,7 +191,7 @@ export const CujReportTab: React.FC<CujReportTabProps> = ({
       {/* Single Compact CUJ Report Header */}
       <div
         data-testid="cuj-header"
-        className="flex flex-wrap items-center justify-between gap-2.5 liquid-glass-panel rounded-2xl px-4 py-2.5 shadow-lg"
+        className="relative z-30 flex flex-wrap items-center justify-between gap-2.5 liquid-glass-panel rounded-2xl px-4 py-2.5 shadow-lg"
       >
         {/* Left group: Title + Day & Plan filter pills */}
         <div className="flex flex-wrap items-center gap-2">
