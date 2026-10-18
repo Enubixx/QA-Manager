@@ -261,20 +261,22 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
         >
           <span className={`${tagCls} ${TAG_STYLE.bundle}`}>Bundle ×{total}</span>
           <span className="flex-1 min-w-0 truncate text-slate-100 font-semibold">{bd.title}</span>
-          <span
-            className={`font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold uppercase ${
-              pri === 'P0' || pri === '0'
-                ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
-                : pri === 'P1' || pri === '1'
-                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                  : 'bg-slate-800 text-slate-300 border-slate-700'
-            }`}
-          >
-            {pri}
-          </span>
-          <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border border-slate-700 bg-slate-800 text-slate-300">
-            {bugTypeLabel}
-          </span>
+          {pri !== 'P2' && (
+            <span
+              className={`font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold uppercase ${
+                pri === 'P0' || pri === '0'
+                  ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                  : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+              }`}
+            >
+              {pri}
+            </span>
+          )}
+          {bugTypeLabel !== 'Bug' && (
+            <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border border-slate-700 bg-slate-800 text-slate-300">
+              {bugTypeLabel}
+            </span>
+          )}
           {anyReprod && (
             <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold bg-violet-500/15 text-violet-200 border-violet-500/40">
               REPRO'D
@@ -287,16 +289,13 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
           )}
           {waiting && (
             <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold bg-amber-500/15 text-amber-200 border-amber-500/40">
-              ⏳ WAITING
+              WAITING
             </span>
           )}
           <span className="text-xs text-slate-400">
             {testersN} tester{testersN === 1 ? '' : 's'}
             {row.members.length < total ? ` · ${row.members.length} shown` : ''}
           </span>
-          <button type="button" className={rowActionCls}>
-            {open ? 'Close' : 'Open'}
-          </button>
         </div>
         {open && (
           <div className={`${expandedCls} space-y-3`} data-testid="feed-bundle-expanded">
@@ -419,13 +418,19 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
                   {bug.imageUrl && /^(data:image\/|https?:\/\/|blob:|\/)/i.test(bug.imageUrl) && (
                     <ImageIcon className="w-3.5 h-3.5 text-blue-300 flex-shrink-0" />
                   )}
-                  <span className="hidden lg:inline text-[11.5px] text-slate-400 truncate max-w-[170px]">
+                  <span className="hidden lg:inline text-[11.5px] text-slate-400 truncate max-w-[220px]" title={bug.feature || 'General'}>
                     {bug.feature || 'General'}
                   </span>
-                  <span className={`${tagCls} ${TAG_STYLE.new}`}>{bug.bugType || 'Bug'}</span>
-                  <span className={priTagCls(String(bug.priority || 'P2'))}>
-                    {bug.priority || 'P2'}
-                  </span>
+                  {(bug.bugType || 'Bug') !== 'Bug' && (
+                    <span data-testid="feed-type-chip" className={`${tagCls} ${TAG_STYLE.new}`}>
+                      {bug.bugType}
+                    </span>
+                  )}
+                  {String(bug.priority || 'P2') !== 'P2' && (
+                    <span data-testid="feed-priority-chip" className={priTagCls(String(bug.priority))}>
+                      {bug.priority}
+                    </span>
+                  )}
                   {feedTab === 'new' && reviewed && (
                     <span data-testid="feed-reviewed-chip" className={`${tagCls} ${TAG_STYLE.filed}`}>
                       ✓ REVIEWED
@@ -447,7 +452,7 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
                         raw.filePending!.expired ? TAG_STYLE.expired : TAG_STYLE.waiting
                       }`}
                     >
-                      {raw.filePending!.expired ? '⚠ NOT FOUND' : '⏳ WAITING'}
+                      {raw.filePending!.expired ? 'NOT FOUND' : 'WAITING'}
                     </span>
                   )}
                   {reprod && (
@@ -469,19 +474,9 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
                       className={`${tagCls} border border-violet-500/50 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20`}
                       title="RX95 thinks this is the same issue as other reports - review it in Bundle Suggestions"
                     >
-                      🧩 dupe of {sg.members.length - 1}
+                      dupe of {sg.members.length - 1}
                     </button>
                   )}
-                  <button
-                    type="button"
-                    className={rowActionCls}
-                    onClick={e => {
-                      e.stopPropagation();
-                      toggleBugExpand(bug.id);
-                    }}
-                  >
-                    {isBugExpanded ? 'Close' : 'Open'}
-                  </button>
                 </div>
                 {isBugExpanded && (
                   <div data-testid="feed-row-expanded" className={expandedCls}>
@@ -964,7 +959,7 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
                     className={`${chipCls} ${feedTab === 'new' ? chipOn : chipOff}`}
                     onClick={() => setFeedTab('new')}
                   >
-                    🆕 <b className="text-white">{newFeedBugs.length}</b> new
+                    <b className="text-white">{newFeedBugs.length}</b> new
                   </button>
                   <button
                     type="button"
@@ -972,7 +967,7 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
                     className={`${chipCls} ${feedTab === 'suggestions' ? chipOn : chipOff}`}
                     onClick={() => setFeedTab('suggestions')}
                   >
-                    🧩 <b className="text-white">{feedSuggestions.length}</b> suggestion
+                    <b className="text-white">{feedSuggestions.length}</b> suggestion
                     {feedSuggestions.length === 1 ? '' : 's'}
                   </button>
                   <button
@@ -981,7 +976,7 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
                     className={`${chipCls} ${feedTab === 'reviewed' ? chipOn : chipOff}`}
                     onClick={() => setFeedTab('reviewed')}
                   >
-                    ✓ <b className="text-white">{reviewedFeedBugs.length}</b> reviewed
+                    <b className="text-white">{reviewedFeedBugs.length}</b> reviewed
                   </button>
                 </div>
                 <div className="flex-1" />

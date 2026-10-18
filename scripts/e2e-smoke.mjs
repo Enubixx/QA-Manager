@@ -136,9 +136,18 @@ async function runE2ESmoke() {
       { timeout: 60000 }
     );
 
-    // 2. Verify Test Plans tab renders
+    // 2. Verify Test Plans tab renders & honest offline sync badge in sandbox
     const bodyTextPlans = await page.evaluate(() => document.body.innerText);
     assert.ok(bodyTextPlans.includes('E2E Core Plan'), 'Test Plans tab must render E2E Core Plan');
+
+    const syncBadge = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="navbar-sync-status"]');
+      return el ? { state: el.getAttribute('data-sync-state'), text: el.textContent?.trim() } : null;
+    });
+    assert.ok(
+      syncBadge && syncBadge.state === 'offline' && syncBadge.text?.includes('Offline · saved on this device'),
+      `Expected offline sync badge in offline sandbox, got: ${JSON.stringify(syncBadge)}`
+    );
 
     // 3. Navigate to Devices & Testers tab and activate WP-E2E-01 onto the floor
     await clickCardByTitle(page, 'Devices & Testers');
@@ -156,13 +165,27 @@ async function runE2ESmoke() {
     assert.ok(floorAfterActivate.includes('WP-E2E-01'), 'Activated device WP-E2E-01 must appear on floor');
     assert.ok(floorAfterActivate.includes('0/2'), 'Activated device must show 0/2 initial quota');
 
-    // 4. Verify CUJ Report tab renders
+    // 4. Verify CUJ Report tab renders with compact header, empty state, and ⋯ menu
     await clickCardByTitle(page, 'CUJ Report');
     const cujText = await page.evaluate(() => document.body.innerText);
     assert.ok(
-      cujText.includes('CUJ') || cujText.includes('Golden Runs'),
-      'CUJ Report tab must render'
+      cujText.includes('CUJ Report') && cujText.includes('No completed runs today'),
+      'CUJ Report tab must render compact header and empty state'
     );
+    const cujMenuBtn = await page.$('[data-testid="cuj-menu-button"]');
+    assert.ok(cujMenuBtn, 'CUJ Report ⋯ menu button must exist');
+    await cujMenuBtn.click();
+    await new Promise(r => setTimeout(r, 100));
+    const cujMenuText = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="cuj-menu-dropdown"]');
+      return el ? el.textContent : '';
+    });
+    assert.ok(
+      cujMenuText?.includes('Add feature') && cujMenuText?.includes('Simulate a run') && cujMenuText?.includes('Reset day'),
+      `Expected CUJ ⋯ menu items, got: ${cujMenuText}`
+    );
+    await cujMenuBtn.click();
+    await new Promise(r => setTimeout(r, 100));
 
     // 5. Return to Test Plans and launch Mobile Tester to complete a run & log a bug
     await clickCardByTitle(page, 'Test Plans');
@@ -305,7 +328,7 @@ async function runE2ESmoke() {
     assert.ok(floorAfterRun.includes('Ready'), 'Device WP-E2E-01 must return to Ready state after run completion');
     assert.ok(floorAfterRun.includes('Live Now (0)'), 'Tester Alice E2E must be idle (Live Now (0)) after run completion');
 
-    // 7. Verify Bugs Feed shows the logged bug and Buganizer sub-tab renders
+    // 7. Verify Bugs Feed shows the logged bug (quiet row without default Bug/P2/Open) and Buganizer sub-tab renders
     await clickCardByTitle(page, 'Bugs Feed');
 
     const bugsFeedText = await page.evaluate(() => document.body.innerText);
@@ -313,6 +336,21 @@ async function runE2ESmoke() {
       bugsFeedText.includes('E2E notification banner flicker on HUD'),
       'Bugs Feed must display the logged bug'
     );
+
+    const feedRowCheck = await page.evaluate(() => {
+      const row = document.querySelector('[data-testid="feed-row"]');
+      const rx95Offline = document.querySelector('[data-testid="feed-rx95-chip"]');
+      return {
+        hasTypeChip: !!row?.querySelector('[data-testid="feed-type-chip"]'),
+        hasPriChip: !!row?.querySelector('[data-testid="feed-priority-chip"]'),
+        hasOpenBtn: Array.from(row?.querySelectorAll('button') || []).some(b => b.textContent?.trim() === 'Open'),
+        hasRx95Offline: !!rx95Offline,
+      };
+    });
+    assert.equal(feedRowCheck.hasTypeChip, false, 'Default Bug type chip must be hidden on collapsed row');
+    assert.equal(feedRowCheck.hasPriChip, false, 'Default P2 priority chip must be hidden on collapsed row');
+    assert.equal(feedRowCheck.hasOpenBtn, false, 'Collapsed bug row must not have Open button');
+    assert.equal(feedRowCheck.hasRx95Offline, false, 'Offline RX95 chip must be hidden when no error');
 
     const buganizerTabBtn = await page.$('[data-testid="buganizer-tab"]');
     assert.ok(buganizerTabBtn, 'Buganizer sub-tab [data-testid="buganizer-tab"] must exist');

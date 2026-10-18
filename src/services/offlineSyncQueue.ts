@@ -10,8 +10,10 @@ import {
   isTestRunDeleted,
   markTestRunDeleted,
   isArchivedRunDeleted,
-  markArchivedRunDeleted
+  markArchivedRunDeleted,
+  setCloudSyncStatus
 } from './supabaseService';
+import { isSupabaseConfigured } from '../lib/supabase';
 import { TestRun, BugLog, DeviceProfile } from '../types';
 
 export type OfflineMutationType = 
@@ -223,6 +225,42 @@ function supersedeQueued(type: OfflineMutationType, payload: any, since: number)
 }
 
 let isDraining = false;
+let activeSyncCount = 0;
+let syncActivityListeners: Array<(active: boolean) => void> = [];
+
+export const getIsSyncing = (): boolean => isDraining || activeSyncCount > 0;
+
+export const onSyncActivityChange = (listener: (active: boolean) => void) => {
+  syncActivityListeners.push(listener);
+  listener(getIsSyncing());
+  return () => {
+    syncActivityListeners = syncActivityListeners.filter(l => l !== listener);
+  };
+};
+
+const notifySyncActivity = () => {
+  const active = getIsSyncing();
+  syncActivityListeners.forEach(l => {
+    try { l(active); } catch (e) {}
+  });
+};
+
+const withSyncActivity = async <T>(fn: () => Promise<T>): Promise<T> => {
+  if (!isSupabaseConfigured) return fn();
+  activeSyncCount++;
+  notifySyncActivity();
+  try {
+    const res = await fn();
+    setCloudSyncStatus(true);
+    return res;
+  } catch (err) {
+    setCloudSyncStatus(false);
+    throw err;
+  } finally {
+    activeSyncCount = Math.max(0, activeSyncCount - 1);
+    notifySyncActivity();
+  }
+};
 
 export const drainOfflineQueue = async () => {
   if (isDraining) return;
@@ -232,10 +270,12 @@ export const drainOfflineQueue = async () => {
   if (initialQueue.length === 0) return;
 
   isDraining = true;
+  notifySyncActivity();
   const snapshotIds = new Set(initialQueue.map(m => m.id));
   const failedToRetain: OfflineMutation[] = [];
 
   try {
+    let anySucceeded = false;
     for (const mut of initialQueue) {
       try {
         switch (mut.type) {
@@ -244,6 +284,7 @@ export const drainOfflineQueue = async () => {
               break;
             }
             await syncTestRunToSupabase(mut.payload as TestRun);
+            anySucceeded = true;
             break;
           case 'syncArchivedRun':
             if (!mut.payload?.id || isArchivedRunDeleted(mut.payload.id)) {
@@ -251,21 +292,27 @@ export const drainOfflineQueue = async () => {
             }
             markTestRunDeleted(mut.payload.id);
             await syncArchivedRunToSupabase(mut.payload as TestRun);
+            anySucceeded = true;
             break;
           case 'syncBugLog':
             await syncBugLogToSupabase(mut.payload as BugLog);
+            anySucceeded = true;
             break;
           case 'patchBugColumns':
             await patchBugWorkerColumns(mut.payload.bug as BugLog, mut.payload.fields as BugWorkerField[]);
+            anySucceeded = true;
             break;
           case 'deleteTestRun':
             await deleteTestRunFromSupabase(mut.payload as string);
+            anySucceeded = true;
             break;
           case 'deleteArchivedRun':
             await deleteArchivedRunFromSupabase(mut.payload as string);
+            anySucceeded = true;
             break;
           case 'syncDevices':
             await syncDevicesListToCloud(mut.payload as DeviceProfile[]);
+            anySucceeded = true;
             break;
         }
       } catch (err: any) {
@@ -280,12 +327,18 @@ export const drainOfflineQueue = async () => {
         }
       }
     }
+    if (anySucceeded && failedToRetain.length === 0) {
+      setCloudSyncStatus(true);
+    } else if (failedToRetain.length > 0) {
+      setCloudSyncStatus(false);
+    }
   } finally {
     // Re-read current queue so any mutations enqueued while draining are preserved
     const latestQueue = getOfflineQueue();
     const enqueuedDuringDrain = latestQueue.filter(m => !snapshotIds.has(m.id));
     saveOfflineQueue([...failedToRetain, ...enqueuedDuringDrain]);
     isDraining = false;
+    notifySyncActivity();
   }
 };
 
@@ -300,7 +353,7 @@ export const safeSyncTestRun = async (run: TestRun) => {
   }
   const startedAt = Date.now();
   try {
-    await syncTestRunToSupabase(run);
+    await withSyncActivity(() => syncTestRunToSupabase(run));
     supersedeQueued('syncTestRun', run, startedAt);
   } catch (e) {
     if (!isTestRunDeleted(run.id) && (run.status as string) !== 'completed') {
@@ -321,7 +374,7 @@ export const safeSyncArchivedRun = async (run: TestRun) => {
   }
   const startedAt = Date.now();
   try {
-    await syncArchivedRunToSupabase(run);
+    await withSyncActivity(() => syncArchivedRunToSupabase(run));
     supersedeQueued('syncArchivedRun', run, startedAt);
   } catch (e) {
     if (!isArchivedRunDeleted(run.id)) {
@@ -337,7 +390,7 @@ export const safeSyncBugLog = async (bug: BugLog) => {
   }
   const startedAt = Date.now();
   try {
-    await syncBugLogToSupabase(bug);
+    await withSyncActivity(() => syncBugLogToSupabase(bug));
     supersedeQueued('syncBugLog', bug, startedAt);
   } catch (e) {
     enqueueOfflineMutation('syncBugLog', bug);
@@ -353,7 +406,7 @@ export const safePatchBugColumns = async (bug: BugLog, fields: BugWorkerField[])
   }
   const startedAt = Date.now();
   try {
-    await patchBugWorkerColumns(bug, fields);
+    await withSyncActivity(() => patchBugWorkerColumns(bug, fields));
     supersedeQueued('patchBugColumns', { bug, fields }, startedAt);
   } catch (e) {
     enqueueOfflineMutation('patchBugColumns', { bug, fields });
@@ -370,7 +423,7 @@ export const safeDeleteTestRun = async (runId: string) => {
     return;
   }
   try {
-    await deleteTestRunFromSupabase(runId);
+    await withSyncActivity(() => deleteTestRunFromSupabase(runId));
     supersedeQueued('deleteTestRun', runId, Date.now());
   } catch (e) {
     enqueueOfflineMutation('deleteTestRun', runId);
@@ -389,7 +442,7 @@ export const safeDeleteArchivedRun = async (runId: string) => {
     return;
   }
   try {
-    await deleteArchivedRunFromSupabase(runId);
+    await withSyncActivity(() => deleteArchivedRunFromSupabase(runId));
     supersedeQueued('deleteArchivedRun', runId, Date.now());
   } catch (e) {
     enqueueOfflineMutation('deleteArchivedRun', runId);
@@ -402,11 +455,30 @@ export const safeSyncDevices = async (devices: DeviceProfile[]) => {
     return;
   }
   try {
-    await syncDevicesListToCloud(devices);
+    await withSyncActivity(() => syncDevicesListToCloud(devices));
   } catch (e) {
     enqueueOfflineMutation('syncDevices', devices);
   }
 };
+
+export type NavbarSyncState = 'synced' | 'syncing' | 'offline';
+
+export function computeNavbarSyncState(params: {
+  isOnline: boolean;
+  isSupabaseConfigured: boolean;
+  cloudSyncOk: boolean;
+  pendingCount: number;
+  isSyncing: boolean;
+}): { state: NavbarSyncState; label: string } {
+  const { isOnline, isSupabaseConfigured: configured, cloudSyncOk, pendingCount, isSyncing } = params;
+  if (!isOnline || !configured || (!cloudSyncOk && !isSyncing)) {
+    return { state: 'offline', label: 'Offline · saved on this device' };
+  }
+  if (isSyncing || pendingCount > 0) {
+    return { state: 'syncing', label: 'Syncing…' };
+  }
+  return { state: 'synced', label: 'Synced' };
+}
 
 // Global network listener to automatically drain queue upon reconnect
 if (typeof window !== 'undefined') {

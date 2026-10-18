@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Tag,
   Calendar,
@@ -12,8 +12,9 @@ import {
   MessageSquareText,
   Bot,
   ChevronDown,
-  History,
-  Trash2
+  MoreHorizontal,
+  Trash2,
+  X
 } from 'lucide-react';
 import { TestPlan, BugLog } from '../../types';
 import {
@@ -154,22 +155,56 @@ export const CujReportTab: React.FC<CujReportTabProps> = ({
   historicalTimelinePoints,
   makeBugsKey
 }) => {
+  const [cujMenuOpen, setCujMenuOpen] = useState(false);
+  const [featureManagerOpen, setFeatureManagerOpen] = useState(false);
+  const cujMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!cujMenuOpen) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (cujMenuRef.current && !cujMenuRef.current.contains(e.target as Node)) {
+        setCujMenuOpen(false);
+      }
+    };
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCujMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handleOutside);
+    window.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      window.removeEventListener('keydown', handleEsc);
+    };
+  }, [cujMenuOpen]);
+
+  const isTodayActive = selectedDailySessionDate === todayStr;
+  const allManageableFeatures = Array.from(
+    new Set([
+      ...featureMetricsList.map(m => m.featureName),
+      ...bugOnlyMetrics.map(m => m.featureName),
+      ...untestedCujNames,
+    ])
+  ).filter(n => n && n.toLowerCase() !== 'general');
+
   return (
-    <div className="space-y-5">
-      {/* Condensed Feature Health Toolbar */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 liquid-glass-panel rounded-3xl px-4 py-3 shadow-lg">
+    <div className="space-y-4">
+      {/* Single Compact CUJ Report Header */}
+      <div
+        data-testid="cuj-header"
+        className="flex flex-wrap items-center justify-between gap-2.5 liquid-glass-panel rounded-2xl px-4 py-2.5 shadow-lg"
+      >
         {/* Left group: Title + Day & Plan filter pills */}
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-sm font-bold text-slate-50 flex items-center gap-2 tracking-tight mr-1 flex-shrink-0">
-            <Tag className="w-4 h-4 text-blue-400" />
-            <span>Feature Health</span>
+            <span>CUJ Report</span>
           </h3>
 
           {/* Day Selector Dropdown */}
-          <div className="flex items-center gap-1.5 liquid-glass-input px-3 h-8 rounded-2xl text-xs min-w-0">
+          <div className="flex items-center gap-1.5 liquid-glass-input px-2.5 h-8 rounded-xl text-xs min-w-0">
             <Calendar className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
-            <span className="text-slate-400 font-medium text-xs whitespace-nowrap">Day:</span>
             <select
+              data-testid="cuj-day-picker"
+              aria-label="Report day"
               value={selectedDailySessionDate}
               onChange={e => setSelectedDailySessionDate(e.target.value)}
               className="bg-transparent text-slate-100 font-semibold focus:outline-none cursor-pointer text-xs h-full flex items-center min-w-0"
@@ -186,10 +221,10 @@ export const CujReportTab: React.FC<CujReportTabProps> = ({
           </div>
 
           {/* Test Plan Selector Dropdown */}
-          <div className="flex items-center gap-1.5 liquid-glass-input px-3 h-8 rounded-2xl text-xs min-w-0">
+          <div className="flex items-center gap-1.5 liquid-glass-input px-2.5 h-8 rounded-xl text-xs min-w-0">
             <ListChecks className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
-            <span className="text-slate-400 font-medium text-xs whitespace-nowrap">Plan:</span>
             <select
+              data-testid="cuj-plan-picker"
               value={reportPlanId}
               onChange={e => setSelectedReportPlanId(e.target.value)}
               title={`Test plan: ${reportPlanLabel}`}
@@ -208,76 +243,295 @@ export const CujReportTab: React.FC<CujReportTabProps> = ({
           </div>
         </div>
 
-        {/* Right group: Condensed action controls */}
+        {/* Right group: Copy report · Summarize with Gemini · ⋯ menu */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* Inline Feature Creation Form */}
-          <form onSubmit={handleCreateFeatureSubmit} className="flex items-center gap-1.5">
-            <div className="relative flex items-center">
-              <Tag className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none" />
-              <input
-                type="text"
-                placeholder="Add feature..."
-                value={newFeatureInput}
-                onChange={e => setNewFeatureInput(e.target.value)}
-                className="liquid-glass-input rounded-2xl pl-7 pr-2.5 h-8 text-xs text-slate-100 placeholder-slate-500 font-medium w-32 sm:w-40 focus:outline-none"
-                required
-              />
-            </div>
-            <button
-              type="submit"
-              className="px-3 h-8 bg-blue-600 hover:bg-blue-500 text-white border border-blue-500 rounded-2xl text-xs font-semibold flex items-center justify-center gap-1 transition-all shadow-sm"
-            >
-              <Plus className="w-3.5 h-3.5 flex-shrink-0" />
-              <span className="leading-none">Add</span>
-            </button>
-          </form>
+          <button
+            type="button"
+            data-testid="cuj-copy-report"
+            disabled={!hasCurrentReport || isGeneratingSummary}
+            onClick={handleCopyGeneratedReport}
+            className={`px-3 h-8 rounded-xl text-xs font-semibold flex items-center gap-1.5 border transition ${
+              !hasCurrentReport || isGeneratingSummary
+                ? 'bg-slate-900/60 border-slate-800 text-slate-400 cursor-not-allowed'
+                : copiedReport
+                ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                : 'bg-[#141c2f] hover:bg-slate-800 border-slate-700 text-slate-200 cursor-pointer'
+            }`}
+            title={
+              hasCurrentReport
+                ? 'Copy the generated report to your clipboard (rich text + plain text)'
+                : 'Summarize first, then copy the report here'
+            }
+          >
+            {copiedReport ? (
+              <>
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+                <span>Copied!</span>
+              </>
+            ) : (
+              <>
+                <Copy className="w-3.5 h-3.5 flex-shrink-0" />
+                <span>Copy report</span>
+              </>
+            )}
+          </button>
 
-          {/* Run Subagent QA Test Flow Button */}
-          {onRunSubagentTest && (
+          <button
+            type="button"
+            data-testid="cuj-summarize-button"
+            disabled={isGeneratingSummary || (featureMetricsList.length === 0 && bugOnlyMetrics.length === 0)}
+            onClick={handleGenerateSummary}
+            className={`px-3 h-8 rounded-xl text-xs font-semibold flex items-center gap-1.5 border transition ${
+              isGeneratingSummary
+                ? 'bg-blue-600/20 border-blue-500/40 text-blue-300 cursor-wait animate-pulse'
+                : featureMetricsList.length === 0 && bugOnlyMetrics.length === 0
+                ? 'bg-blue-600/40 border-blue-500/30 text-white/60 cursor-not-allowed'
+                : 'bg-blue-600 hover:bg-blue-500 border-blue-500 text-white shadow-sm cursor-pointer'
+            }`}
+            title="Summarize with Gemini"
+          >
+            <Sparkles className={`w-3.5 h-3.5 flex-shrink-0 ${isGeneratingSummary ? 'animate-spin' : ''}`} />
+            <span>
+              {isGeneratingSummary
+                ? 'Summarizing…'
+                : hasCurrentReport
+                ? 'Regenerate with Gemini'
+                : 'Summarize with Gemini'}
+            </span>
+          </button>
+
+          <div className="relative" ref={cujMenuRef}>
             <button
               type="button"
-              onClick={() => {
-                if (testPlans.length === 0) onLoadSampleData();
-                const targetId = (reportPlanId !== ALL_PLANS ? reportPlanId : testPlans[0]?.id) || 'plan-demo-1';
-                onRunSubagentTest(targetId);
-                setSubagentToast(`Autonomous Subagent tested all steps for Today (${todayStr})! Live feature metrics populated below.`);
-                setTimeout(() => setSubagentToast(null), 5000);
-              }}
-              className="px-3 h-8 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-2xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-              title="Run autonomous QA subagent to execute full test flow and record data for Today"
+              data-testid="cuj-menu-button"
+              aria-label="CUJ report menu"
+              onClick={() => setCujMenuOpen(v => !v)}
+              className="px-2.5 h-8 rounded-xl bg-[#141c2f] hover:bg-slate-800 text-slate-200 border border-slate-700 flex items-center justify-center transition cursor-pointer"
+              title="More CUJ report actions"
             >
-              <Sparkles className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
-              <span className="leading-none">Auto-Test</span>
+              <MoreHorizontal className="w-4 h-4" />
             </button>
-          )}
 
-          {/* Reset Active Day Datapoints Button (Active only on Today) */}
-          {(() => {
-            const isTodayActive = selectedDailySessionDate === todayStr;
-            return (
-              <button
-                type="button"
-                disabled={!isTodayActive}
-                onClick={() => {
-                  if (!isTodayActive || !onResetActiveDay) return;
-                  if (confirm(`Reset all test results and bug logs for Today (${todayStr})? This will start a fresh QA session for today.`)) {
-                    onResetActiveDay(todayStr);
-                  }
-                }}
-                className={`px-3 h-8 rounded-2xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all border ${
-                  isTodayActive
-                    ? 'bg-slate-800/90 hover:bg-rose-950/50 text-slate-300 hover:text-rose-300 border-slate-700 hover:border-rose-800/60 cursor-pointer'
-                    : 'bg-slate-900/40 text-slate-600 border-slate-800 opacity-40 cursor-not-allowed'
-                }`}
-                title={isTodayActive ? "Reset test step results & bugs for Today (all plans)" : "Reset is only available when viewing Today's active session."}
+            {cujMenuOpen && (
+              <div
+                data-testid="cuj-menu-dropdown"
+                className="absolute right-0 mt-1.5 w-52 rounded-xl bg-[#0e1526] border border-slate-700/90 shadow-2xl py-1.5 z-40 text-xs"
               >
-                <RefreshCw className={`w-3.5 h-3.5 flex-shrink-0 ${isTodayActive ? 'text-slate-400' : 'text-slate-600'}`} />
-                <span className="leading-none">Reset Day</span>
-              </button>
-            );
-          })()}
+                <button
+                  type="button"
+                  data-testid="cuj-menu-add-feature"
+                  onClick={() => {
+                    setCujMenuOpen(false);
+                    setFeatureManagerOpen(true);
+                  }}
+                  className="w-full px-3 py-2 text-left text-slate-200 hover:bg-[#13203a] hover:text-white flex items-center gap-2 transition cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Add feature</span>
+                </button>
+
+                {onRunSubagentTest && (
+                  <button
+                    type="button"
+                    data-testid="cuj-menu-simulate-run"
+                    onClick={() => {
+                      setCujMenuOpen(false);
+                      if (testPlans.length === 0) onLoadSampleData();
+                      const targetId = (reportPlanId !== ALL_PLANS ? reportPlanId : testPlans[0]?.id) || 'plan-demo-1';
+                      onRunSubagentTest(targetId);
+                      setSubagentToast(`Autonomous Subagent tested all steps for Today (${todayStr})! Live feature metrics populated below.`);
+                      setTimeout(() => setSubagentToast(null), 5000);
+                    }}
+                    className="w-full px-3 py-2 text-left text-slate-200 hover:bg-[#13203a] hover:text-white flex items-center gap-2 transition cursor-pointer"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Simulate a run</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  data-testid="cuj-menu-reset-day"
+                  disabled={!isTodayActive}
+                  onClick={() => {
+                    setCujMenuOpen(false);
+                    if (!isTodayActive || !onResetActiveDay) return;
+                    if (confirm(`Reset all test results and bug logs for Today (${todayStr})? This will start a fresh QA session for today.`)) {
+                      onResetActiveDay(todayStr);
+                    }
+                  }}
+                  className={`w-full px-3 py-2 text-left flex items-center gap-2 transition ${
+                    isTodayActive
+                      ? 'text-rose-300 hover:bg-rose-950/40 hover:text-rose-200 cursor-pointer'
+                      : 'text-slate-600 cursor-not-allowed opacity-50'
+                  }`}
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Reset day</span>
+                </button>
+
+                <div className="my-1 border-t border-slate-800" />
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCujMenuOpen(false);
+                    handleCopyVisualImageToClipboard();
+                  }}
+                  className="w-full px-3 py-2 text-left text-slate-200 hover:bg-[#13203a] hover:text-white flex items-center gap-2 transition cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Export PNG</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCujMenuOpen(false);
+                    openChatSummary();
+                  }}
+                  className="w-full px-3 py-2 text-left text-slate-200 hover:bg-[#13203a] hover:text-white flex items-center gap-2 transition cursor-pointer"
+                >
+                  <MessageSquareText className="w-3.5 h-3.5 text-blue-400" />
+                  <span>AI Chat summary</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCujMenuOpen(false);
+                    setTempApiKey(getStoredGeminiApiKey());
+                    setTempModel(getStoredGeminiModel());
+                    setIsApiKeyModalOpen(true);
+                  }}
+                  className="w-full px-3 py-2 text-left text-slate-200 hover:bg-[#13203a] hover:text-white flex items-center gap-2 transition cursor-pointer"
+                >
+                  <span className={`w-2 h-2 rounded-full ${getStoredGeminiApiKey() ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+                  <span>Gemini API key</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
+
+      {/* Inline Add / Manage Features Panel (opened from ⋯ -> Add feature) */}
+      {featureManagerOpen && (
+        <div
+          data-testid="cuj-feature-manager"
+          className="liquid-glass-panel rounded-2xl p-4 border border-slate-800 bg-[#111827] space-y-3"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+              <Tag className="w-3.5 h-3.5 text-blue-400" />
+              <span>Add or Manage CUJ Features</span>
+            </h4>
+            <button
+              type="button"
+              onClick={() => setFeatureManagerOpen(false)}
+              className="p-1 text-slate-400 hover:text-white rounded-lg"
+              aria-label="Close feature manager"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <form onSubmit={handleCreateFeatureSubmit} className="flex items-center gap-2">
+            <input
+              type="text"
+              data-testid="cuj-add-feature-input"
+              placeholder="New CUJ feature name…"
+              value={newFeatureInput}
+              onChange={e => setNewFeatureInput(e.target.value)}
+              className="liquid-glass-input rounded-xl px-3 h-8 text-xs text-slate-100 placeholder-slate-500 font-medium flex-1 max-w-xs focus:outline-none"
+              required
+            />
+            <button
+              type="submit"
+              data-testid="cuj-add-feature-submit"
+              className="px-3 h-8 bg-blue-600 hover:bg-blue-500 text-white border border-blue-500 rounded-xl text-xs font-semibold flex items-center gap-1 transition-all"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add feature</span>
+            </button>
+          </form>
+          {onDeleteFeature && allManageableFeatures.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-800/80">
+              <span className="text-[11px] text-slate-400 mr-1">Existing features:</span>
+              {allManageableFeatures.map(name => (
+                <span
+                  key={name}
+                  className="inline-flex items-center gap-1 pl-2.5 pr-1 py-0.5 rounded-full text-[11px] font-semibold text-slate-300 bg-slate-900 border border-slate-700"
+                >
+                  <span>{name}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (confirm(`Delete feature "${name}"? Linked steps will be assigned to General.`)) {
+                        onDeleteFeature(name);
+                      }
+                    }}
+                    className="p-0.5 text-slate-500 hover:text-rose-400 rounded-full transition"
+                    title={`Delete feature "${name}"`}
+                    aria-label={`Delete feature "${name}"`}
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Compact HEALTH BY DAY Bar Strip */}
+      {historicalTimelinePoints.length > 0 && (
+        <div
+          data-testid="cuj-health-by-day"
+          className="liquid-glass-panel rounded-2xl px-4 py-2.5 border border-slate-800 bg-[#111827] flex items-center gap-4 overflow-x-auto"
+        >
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 whitespace-nowrap flex-shrink-0">
+            Health by day
+          </span>
+          <div className="flex items-end gap-2">
+            {historicalTimelinePoints.map(point => {
+              const isSelected = selectedDailySessionDate === point.dateStr;
+              return (
+                <button
+                  type="button"
+                  key={point.dateStr}
+                  data-testid="cuj-day-bar"
+                  onClick={() => setSelectedDailySessionDate(point.dateStr)}
+                  className={`flex flex-col items-center gap-1 px-2.5 py-1.5 rounded-xl border transition cursor-pointer min-w-[54px] ${
+                    isSelected
+                      ? 'bg-[#162033] border-blue-500 ring-1 ring-blue-500/30'
+                      : 'bg-[#0f172a] hover:bg-slate-800/80 border-slate-800'
+                  }`}
+                  title={`Click to inspect ${point.displayDate}: ${point.scorePct}% Score, ${point.totalSteps} Steps, ${point.bugs} Bugs`}
+                >
+                  <span className="text-[10px] font-bold font-mono text-slate-200 leading-none">
+                    {point.scorePct}%
+                  </span>
+                  <div className="w-7 bg-slate-950 h-6 rounded overflow-hidden flex flex-col justify-end p-0.5 border border-slate-800/80">
+                    <div
+                      style={{ height: `${point.scorePct}%` }}
+                      className={`w-full rounded-sm ${
+                        point.scorePct >= 95
+                          ? 'bg-emerald-500'
+                          : point.scorePct >= 60
+                          ? 'bg-amber-500'
+                          : 'bg-rose-500'
+                      }`}
+                    />
+                  </div>
+                  <span className="text-[9.5px] font-semibold text-slate-400 font-mono leading-none whitespace-nowrap">
+                    {point.displayDate}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Feature Quality & Risk Profile Card */}
       {(featureMetricsList.length > 0 || bugOnlyMetrics.length > 0) && (
@@ -757,102 +1011,30 @@ export const CujReportTab: React.FC<CujReportTabProps> = ({
         </div>
       )}
 
-      {/* Separate Standalone Card: Historical Quality Evolution Timeline */}
-      {historicalTimelinePoints.length > 0 && (
-        <div className="liquid-glass-panel rounded-3xl p-5 sm:p-6 shadow-xl space-y-4 border border-slate-800 bg-[#111827]">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3.5">
-            <div>
-              <h4 className="text-base font-bold text-slate-50 flex items-center gap-2 tracking-tight">
-                <History className="w-4 h-4 text-blue-400" />
-                Historical Quality Evolution Timeline
-              </h4>
-              <p className="text-xs text-slate-400 font-medium mt-0.5">
-                Click any date bar below to time-travel snapshot and view that day's QA metrics.
-              </p>
-            </div>
-            <span className="text-[11px] text-blue-300 font-mono bg-blue-500/10 px-3 py-1 rounded-xl border border-blue-500/25 font-semibold w-fit">
-              {historicalTimelinePoints.length} Recorded Sessions
-            </span>
-          </div>
-
-          {/* Sparkline / Bar chart per date */}
-          <div className="flex items-end gap-3 overflow-x-auto pb-2 pt-3 px-3 bg-[#0f172a] rounded-2xl border border-slate-800 min-h-[120px]">
-            {historicalTimelinePoints.map(point => (
-              <div
-                key={point.dateStr}
-                onClick={() => setSelectedDailySessionDate(point.dateStr)}
-                className={`flex-1 min-w-[85px] max-w-[120px] flex flex-col items-center gap-1.5 group cursor-pointer transition-all duration-200 p-2.5 rounded-2xl border ${
-                  selectedDailySessionDate === point.dateStr
-                    ? 'bg-[#162033] border-blue-500 shadow-md font-bold ring-1 ring-blue-500/30'
-                    : 'liquid-glass-button hover:bg-slate-800/80 border-slate-800'
-                }`}
-                title={`Click to inspect ${point.displayDate}: ${point.scorePct}% Score, ${point.totalSteps} Steps, ${point.bugs} Bugs`}
-              >
-                <div className="text-[11px] font-bold font-mono text-slate-200 group-hover:text-white">
-                  {point.scorePct}%
-                </div>
-
-                {/* Vertical Bar Representation */}
-                <div className="w-full bg-slate-950 h-16 rounded-xl overflow-hidden flex flex-col justify-end p-0.5 border border-slate-800 shadow-inner">
-                  <div
-                    style={{ height: `${point.scorePct}%` }}
-                    className={`w-full rounded-lg transition-all duration-300 ${
-                      point.scorePct >= 95
-                        ? 'bg-emerald-500'
-                        : point.scorePct >= 60
-                        ? 'bg-amber-500'
-                        : 'bg-rose-500'
-                    }`}
-                  ></div>
-                </div>
-
-                <div className="text-[10px] font-semibold text-slate-300 font-mono group-hover:text-white truncate max-w-full">
-                  {point.displayDate}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {featureMetricsList.length === 0 && bugOnlyMetrics.length === 0 ? (
-        <div className="bg-[#111827] border border-slate-800 rounded-3xl p-10 text-center space-y-4 shadow-xl">
-          <div className="p-3 bg-slate-800/90 rounded-full border border-slate-700 text-blue-400 w-fit mx-auto">
-            <Tag className="w-6 h-6" />
-          </div>
+        <div
+          data-testid="cuj-empty-state"
+          className="bg-[#111827] border border-slate-800 rounded-2xl p-8 text-center space-y-2.5 shadow-xl"
+        >
           <div>
-            <h4 className="text-base font-bold text-slate-50">No completed runs for {reportPlanLabel} {reportDayPhrase}</h4>
+            <h4 className="text-sm font-bold text-slate-50">
+              {selectedDailySessionDate === todayStr
+                ? 'No completed runs today'
+                : `No completed runs for ${reportPlanLabel} ${reportDayPhrase}`}
+            </h4>
             <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
-              Execute test runs or click below to have the autonomous QA subagent test a flow and populate live feature data for today.
+              Results appear here as testers finish runs.
             </p>
           </div>
           {latestReportDate && latestReportDate !== selectedDailySessionDate && (
             <div className="pt-1 flex justify-center">
               <button
                 type="button"
+                data-testid="cuj-jump-latest-day"
                 onClick={() => setSelectedDailySessionDate(latestReportDate)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs rounded-2xl shadow-sm flex items-center gap-2 transition-all cursor-pointer"
+                className="px-3.5 py-1.5 bg-[#141c2f] hover:bg-slate-800 border border-slate-700 text-slate-200 font-semibold text-xs rounded-xl shadow-sm flex items-center gap-1.5 transition-all cursor-pointer"
               >
-                <Calendar className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
-                <span>Jump to {formatReportDateLabel(latestReportDate)} (latest day with data)</span>
-              </button>
-            </div>
-          )}
-          {onRunSubagentTest && (
-            <div className="pt-2 flex justify-center">
-              <button
-                type="button"
-                onClick={() => {
-                  if (testPlans.length === 0) onLoadSampleData();
-                  const targetId = (reportPlanId !== ALL_PLANS ? reportPlanId : testPlans[0]?.id) || 'plan-demo-1';
-                  onRunSubagentTest(targetId);
-                  setSubagentToast(`Autonomous Subagent tested all steps for Today (${todayStr})! Live feature metrics populated below.`);
-                  setTimeout(() => setSubagentToast(null), 5000);
-                }}
-                className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs rounded-2xl shadow-sm border border-blue-500 flex items-center gap-2 transition-all active:scale-95 cursor-pointer"
-              >
-                <Sparkles className="w-4 h-4 text-white" />
-                <span>Run Subagent Test Flow for Today</span>
+                <span>See {formatReportDateLabel(latestReportDate)} →</span>
               </button>
             </div>
           )}
@@ -971,31 +1153,19 @@ export const CujReportTab: React.FC<CujReportTabProps> = ({
         </div>
       )}
 
-      {/* Known CUJs with no data in this view: kept out of every report, listed so they can still be deleted */}
+      {/* Known CUJs with no data in this view: kept out of every report, listed as quiet chips */}
       {untestedCujNames.length > 0 && (
-        <div className="liquid-glass-card rounded-2xl px-4 py-3 flex flex-wrap items-center gap-2">
-          <span className="text-[11px] font-bold text-slate-400 whitespace-nowrap">Not tested in this view ({untestedCujNames.length}):</span>
+        <div data-testid="cuj-untested-chips" className="liquid-glass-card rounded-2xl px-4 py-2.5 flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] font-bold text-slate-400 whitespace-nowrap mr-1">
+            Not tested in this view ({untestedCujNames.length}):
+          </span>
           {untestedCujNames.map(name => (
             <span
               key={name}
-              className={`inline-flex items-center gap-1 pl-2.5 ${onDeleteFeature ? 'pr-1' : 'pr-2.5'} py-0.5 rounded-full text-[11px] font-semibold text-slate-300 bg-slate-900/70 border border-slate-700/80 max-w-full`}
+              data-testid="cuj-untested-chip"
+              className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold text-slate-300 bg-slate-900/70 border border-slate-700/80 max-w-full"
             >
               <span className="truncate max-w-[14rem]" title={name}>{name}</span>
-              {onDeleteFeature && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (confirm(`Delete feature "${name}"? Linked steps will be assigned to General.`)) {
-                      onDeleteFeature(name);
-                    }
-                  }}
-                  className="p-0.5 text-slate-500 hover:text-rose-400 hover:bg-slate-800 rounded-full transition flex-shrink-0"
-                  title={`Delete feature "${name}"`}
-                  aria-label={`Delete feature "${name}"`}
-                >
-                  <Trash2 className="w-3 h-3" />
-                </button>
-              )}
             </span>
           ))}
         </div>

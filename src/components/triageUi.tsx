@@ -51,7 +51,7 @@ export function TabBar<K extends string>({ tabs, active, onChange, testid }: {
   );
 }
 
-/** "RX95 live · synced Ns ago" (or offline) from the worker heartbeat. */
+/** "RX95 live · synced Ns ago" (or error) from the worker heartbeat; hidden when offline without error. */
 export function Rx95LiveChip({ heartbeatAt, nowMs, jobsInProgress = 0, offlineText = 'offline', error = false, title, onClick, testid }: {
   heartbeatAt?: string;
   nowMs: number;
@@ -64,11 +64,12 @@ export function Rx95LiveChip({ heartbeatAt, nowMs, jobsInProgress = 0, offlineTe
 }) {
   const age = heartbeatAt ? Math.max(0, (nowMs - new Date(heartbeatAt).getTime()) / 1000) : Infinity;
   const live = Number.isFinite(age) && age < 90;
+  if (!live && !error) return null;
   return (
     <button type="button" data-testid={testid} onClick={onClick}
       className={`${chipCls} ${!live && error ? 'border-amber-500/60 text-amber-200 bg-amber-500/10' : chipOff}`}
       title={title ?? (live ? 'RX95 is working in the background' : "RX95's background helper is offline")}>
-      <span className={`w-[7px] h-[7px] rounded-full ${live ? 'bg-green-500 shadow-[0_0_6px_#22c55e]' : 'bg-slate-500'}`} />
+      <span className={`w-[7px] h-[7px] rounded-full ${live ? 'bg-green-500 shadow-[0_0_6px_#22c55e]' : 'bg-amber-400'}`} />
       <b className="text-white">{live ? 'RX95 live' : 'RX95'}</b> · {live ? `synced ${Math.round(age)}s ago${jobsInProgress ? ` · ${jobsInProgress} in progress` : ''}` : offlineText}
     </button>
   );

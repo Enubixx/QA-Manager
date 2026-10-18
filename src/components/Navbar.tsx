@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ShieldCheck, WifiOff, RefreshCw, Download, MoreHorizontal, FileJson, Upload, Trash2, AlertTriangle, X, RotateCcw } from 'lucide-react';
-import { onQueueCountChange } from '../services/offlineSyncQueue';
+import { ShieldCheck, MoreHorizontal, FileJson, Upload, Trash2, AlertTriangle, X, RotateCcw } from 'lucide-react';
+import { onQueueCountChange, onSyncActivityChange, computeNavbarSyncState } from '../services/offlineSyncQueue';
+import { onCloudSyncStatusChange, getCloudSyncStatus } from '../services/supabaseService';
+import { isSupabaseConfigured } from '../lib/supabase';
 import { APK_DOWNLOAD_URL, APP_VERSION_NAME } from '../constants';
 import { RecentlyDeletedEntry } from '../utils/undoDeleteStore';
 
@@ -26,6 +28,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenRecentlyDeleted,
 }) => {
   const [pendingCount, setPendingCount] = useState(0);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [cloudSyncOk, setCloudSyncOk] = useState(() => getCloudSyncStatus());
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [menuOpen, setMenuOpen] = useState(false);
   const [clearModalOpen, setClearModalOpen] = useState(false);
@@ -35,7 +39,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const unsub = onQueueCountChange(setPendingCount);
+    const unsubQueue = onQueueCountChange(setPendingCount);
+    const unsubActivity = onSyncActivityChange(setIsSyncing);
+    const unsubCloud = onCloudSyncStatusChange(setCloudSyncOk);
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
 
@@ -43,11 +49,21 @@ export const Navbar: React.FC<NavbarProps> = ({
     window.addEventListener('offline', handleOffline);
 
     return () => {
-      unsub();
+      unsubQueue();
+      unsubActivity();
+      unsubCloud();
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
+
+  const syncInfo = computeNavbarSyncState({
+    isOnline,
+    isSupabaseConfigured,
+    cloudSyncOk,
+    pendingCount,
+    isSyncing,
+  });
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -105,34 +121,43 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
           <div className="flex items-center gap-2.5">
             <h1 className="font-bold text-sm text-slate-50 tracking-tight">QA Manager</h1>
-            {!isOnline ? (
-              <span data-testid="navbar-sync-status" className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1 backdrop-blur-md">
-                <WifiOff className="w-3 h-3 text-amber-400" /> Offline {pendingCount > 0 ? `(${pendingCount} pending)` : ''}
-              </span>
-            ) : pendingCount > 0 ? (
-              <span data-testid="navbar-sync-status" className="text-[10px] bg-blue-500/20 text-blue-300 border border-blue-500/40 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1 backdrop-blur-md animate-pulse">
-                <RefreshCw className="w-3 h-3 animate-spin text-blue-400" /> Syncing ({pendingCount})
-              </span>
-            ) : (
-              <span data-testid="navbar-sync-status" className="text-[10px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold uppercase tracking-wider backdrop-blur-md flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> Live Sync
-              </span>
-            )}
           </div>
         </div>
 
-        {/* Right side: APK download & Data menu */}
+        {/* Right side: Sync badge, APK download & Data menu */}
         <div className="flex items-center gap-2">
+          <span
+            data-testid="navbar-sync-status"
+            data-sync-state={syncInfo.state}
+            className={`text-[11px] px-2.5 py-1 rounded-full font-semibold flex items-center gap-1.5 border whitespace-nowrap ${
+              syncInfo.state === 'synced'
+                ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35'
+                : syncInfo.state === 'syncing'
+                ? 'bg-amber-500/15 text-amber-300 border-amber-500/35'
+                : 'bg-slate-800/90 text-slate-300 border-slate-700'
+            }`}
+          >
+            <span
+              className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                syncInfo.state === 'synced'
+                  ? 'bg-emerald-400'
+                  : syncInfo.state === 'syncing'
+                  ? 'bg-amber-400 animate-pulse'
+                  : 'bg-slate-400'
+              }`}
+            />
+            <span>{syncInfo.label}</span>
+          </span>
+
           <a
             href={APK_DOWNLOAD_URL}
             target="_blank"
             rel="noreferrer"
             data-testid="navbar-apk-link"
-            className="px-3 py-1.5 bg-slate-800/90 hover:bg-slate-700 text-slate-100 rounded-xl text-xs font-semibold transition border border-slate-700/80 flex items-center gap-1.5 active:scale-95"
+            className="px-3 py-1.5 bg-slate-800/90 hover:bg-slate-700 text-slate-100 rounded-xl text-xs font-semibold transition border border-slate-700/80 flex items-center gap-1.5 active:scale-95 whitespace-nowrap"
             title={`Download the latest QA Tester Android app (v${APP_VERSION_NAME}) from Google Drive`}
           >
-            <Download className="w-3.5 h-3.5 text-blue-400" />
-            <span className="hidden sm:inline">Download</span> APK v{APP_VERSION_NAME}
+            <span>↓ APK v{APP_VERSION_NAME}</span>
           </a>
 
           {(onExportBackup || onImportBackup || onClearAllData) && (

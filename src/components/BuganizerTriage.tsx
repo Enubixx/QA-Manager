@@ -1423,7 +1423,7 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
         )}
         {(reproTotal > 0 || layout !== 'a') && (
           <button type="button" data-testid="repro-bar" className={`${chipCls} ${rep.on ? chipOn : matchPaused ? 'border-amber-500/60 text-amber-200 bg-amber-500/10' : chipOff}`} onClick={rep.click}>
-            🔁 <b className="text-white">{reproChecked}/{reproTotal}</b> repro'd checked{reproRunning ? ` · checking ${reproRunning}` : ''}{matchPaused ? ' · paused' : ''}
+            <b className="text-white">{reproChecked}/{reproTotal}</b> repro'd checked{reproRunning ? ` · checking ${reproRunning}` : ''}{matchPaused ? ' · paused' : ''}
             {matchPaused && rx95Ready && (
               <span role="button" tabIndex={0} className="ml-1 underline" onClick={e => { e.stopPropagation(); retryMatches(); }}>retry</span>
             )}
@@ -1432,22 +1432,22 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
         {(shown.length > 0 || bundleItems.length > 0 || layout !== 'a') && (
           <span className="inline-flex items-center gap-1">
             <button type="button" data-testid="chip-bundles" className={`${chipCls} ${bun.on ? chipOn : chipOff}`} onClick={bun.click}>
-              🧩 <b className="text-white">{bundleItems.length}</b> bundled
+              <b className="text-white">{bundleItems.length}</b> bundled
             </button>
             {shown.length > 0 && onOpenBugsFeed && (
               <button type="button" data-testid="chip-suggestions-feed" className={`${chipCls} ${chipOff}`} onClick={() => onOpenBugsFeed()}
                 title="RX95's same-day bundle suggestions are reviewed on the Bugs Feed">
-                ✨ <b className="text-white">{shown.length}</b> suggested · Bugs Feed ↗
+                <b className="text-white">{shown.length}</b> suggested · Bugs Feed ↗
               </button>
             )}
           </span>
         )}
         {(waitItems.length > 0 || layout !== 'a') && (
-          <button type="button" data-testid="chip-waiting" className={`${chipCls} ${wait.on ? chipOn : chipOff}`} onClick={wait.click}>⏳ <b className="text-white">{waitItems.length}</b> waiting</button>
+          <button type="button" data-testid="chip-waiting" className={`${chipCls} ${wait.on ? chipOn : chipOff}`} onClick={wait.click}><b className="text-white">{waitItems.length}</b> waiting</button>
         )}
         {layout !== 'b' && filedCount > 0 && (
           <span data-testid="filed-hidden" className={`${chipCls} ${showFiled ? chipOn : chipOff}`}>
-            ✓ <b className="text-white">{filedCount}</b> filed {showFiled ? 'shown' : 'hidden'} ·{' '}
+            <b className="text-white">{filedCount}</b> filed {showFiled ? 'shown' : 'hidden'} ·{' '}
             <button type="button" data-testid="filed-hidden-toggle" className="text-blue-300 hover:underline" onClick={() => setShowFiled(v => !v)}>{showFiled ? 'hide' : 'show'}</button>
           </span>
         )}

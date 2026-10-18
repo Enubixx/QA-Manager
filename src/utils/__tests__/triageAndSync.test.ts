@@ -18,7 +18,7 @@ import {
 import { normalizeHHMM, toLocalHHMM, withBugTime } from '../bugTime';
 import { parseRefineReply } from '../bugRefine';
 import { shortlistCandidates, parseMatchReply } from '../reproMatch';
-import { isPermanentSyncError } from '../../services/offlineSyncQueue';
+import { isPermanentSyncError, computeNavbarSyncState } from '../../services/offlineSyncQueue';
 import { isReviewed, isStronglyReviewed } from '../bugReview';
 import { limitNotable } from '../../services/geminiService';
 import * as exportUtils from '../exportUtils';
@@ -266,5 +266,70 @@ describe('offlineSyncQueue.isPermanentSyncError, bugReview, limitNotable, export
 
     expect(Object.keys(exportUtils)).toEqual(['exportAllQADataToJSON']);
     expect(APK_DOWNLOAD_URL.startsWith('https://drive.google.com/file/d/15qrnpJExF8siPcuTBy6wTIBk33racp3_')).toBe(true);
+  });
+
+  it('computes honest navbar sync badge states (U1 #2)', () => {
+    // Offline or unconfigured or cloud unreachable -> offline ("Offline · saved on this device")
+    expect(
+      computeNavbarSyncState({
+        isOnline: false,
+        isSupabaseConfigured: true,
+        cloudSyncOk: true,
+        pendingCount: 0,
+        isSyncing: false,
+      })
+    ).toEqual({ state: 'offline', label: 'Offline · saved on this device' });
+
+    expect(
+      computeNavbarSyncState({
+        isOnline: true,
+        isSupabaseConfigured: false,
+        cloudSyncOk: false,
+        pendingCount: 0,
+        isSyncing: false,
+      })
+    ).toEqual({ state: 'offline', label: 'Offline · saved on this device' });
+
+    expect(
+      computeNavbarSyncState({
+        isOnline: true,
+        isSupabaseConfigured: true,
+        cloudSyncOk: false,
+        pendingCount: 0,
+        isSyncing: false,
+      })
+    ).toEqual({ state: 'offline', label: 'Offline · saved on this device' });
+
+    // Draining queue or active sync -> syncing ("Syncing…")
+    expect(
+      computeNavbarSyncState({
+        isOnline: true,
+        isSupabaseConfigured: true,
+        cloudSyncOk: true,
+        pendingCount: 2,
+        isSyncing: false,
+      })
+    ).toEqual({ state: 'syncing', label: 'Syncing…' });
+
+    expect(
+      computeNavbarSyncState({
+        isOnline: true,
+        isSupabaseConfigured: true,
+        cloudSyncOk: false,
+        pendingCount: 0,
+        isSyncing: true,
+      })
+    ).toEqual({ state: 'syncing', label: 'Syncing…' });
+
+    // Online + configured + cloud sync ok + 0 pending -> synced ("Synced")
+    expect(
+      computeNavbarSyncState({
+        isOnline: true,
+        isSupabaseConfigured: true,
+        cloudSyncOk: true,
+        pendingCount: 0,
+        isSyncing: false,
+      })
+    ).toEqual({ state: 'synced', label: 'Synced' });
   });
 });

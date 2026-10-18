@@ -1,6 +1,29 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, BundleSuggestion, BundleSuggestionSet } from '../types';
 
+let cloudSyncOk = false;
+let cloudSyncListeners: Array<(ok: boolean) => void> = [];
+
+export const getCloudSyncStatus = (): boolean => cloudSyncOk;
+
+export const setCloudSyncStatus = (ok: boolean): void => {
+  const next = Boolean(ok && isSupabaseConfigured);
+  if (cloudSyncOk !== next) {
+    cloudSyncOk = next;
+    cloudSyncListeners.forEach(l => {
+      try { l(cloudSyncOk); } catch (e) {}
+    });
+  }
+};
+
+export const onCloudSyncStatusChange = (listener: (ok: boolean) => void) => {
+  cloudSyncListeners.push(listener);
+  listener(cloudSyncOk);
+  return () => {
+    cloudSyncListeners = cloudSyncListeners.filter(l => l !== listener);
+  };
+};
+
 const deletedTestRunIdsMemory = new Set<string>();
 const deletedArchivedRunIdsMemory = new Set<string>();
 
@@ -134,7 +157,10 @@ export const extractDeviceIdFromRunId = (runId: string, knownDeviceIds?: Iterabl
 };
 
 export const fetchAllSupabaseData = async () => {
-  if (!supabase || !isSupabaseConfigured) return null;
+  if (!supabase || !isSupabaseConfigured) {
+    setCloudSyncStatus(false);
+    return null;
+  }
 
   try {
     const [plansRes, runsRes, archivedRes, bugsRes, featuresRes] = await Promise.all([
@@ -152,6 +178,7 @@ export const fetchAllSupabaseData = async () => {
         archived: archivedRes.error,
         features: featuresRes.error,
       });
+      setCloudSyncStatus(false);
       return null;
     }
 
@@ -353,6 +380,7 @@ export const fetchAllSupabaseData = async () => {
     devices = devices.filter(d => !deletedDeviceIds.has(d.id));
     testers = testers.filter(t => !deletedTesterIds.has(t.id));
 
+    setCloudSyncStatus(true);
     return {
       testPlans,
       testRuns,
@@ -364,6 +392,7 @@ export const fetchAllSupabaseData = async () => {
     };
   } catch (err) {
     console.error('Error fetching Supabase data:', err);
+    setCloudSyncStatus(false);
     return null;
   }
 };
