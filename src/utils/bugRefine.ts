@@ -84,12 +84,74 @@ Return ONLY a JSON object: {"bugs":[{"n":1,"title":"...","description":"..."}, .
 const clean = (v: unknown, max: number) =>
   (typeof v === 'string' ? v : '').replace(/\r\n?/g, '\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, max);
 
+function extractJsonObject(reply: string): any {
+  const candidates: string[] = [];
+  // 1. Greedy fence match (first ``` to last ```) so inner ``` inside JSON string literals don't cut it in half
+  const greedyFence = reply.match(/```(?:json)?\s*([\s\S]*)```/);
+  if (greedyFence?.[1]) {
+    const inner = greedyFence[1];
+    candidates.push(inner);
+    const firstBrace = inner.indexOf('{');
+    const lastBrace = inner.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      candidates.push(inner.slice(firstBrace, lastBrace + 1));
+    }
+  }
+  // 2. Non-greedy fenced blocks
+  const nonGreedyRe = /```(?:json)?\s*([\s\S]*?)```/g;
+  let m: RegExpExecArray | null;
+  while ((m = nonGreedyRe.exec(reply)) !== null) {
+    if (m[1]) candidates.push(m[1]);
+  }
+  // 3. Outermost { ... } in reply
+  const openIdx = reply.indexOf('{');
+  const closeIdx = reply.lastIndexOf('}');
+  if (openIdx >= 0 && closeIdx > openIdx) {
+    candidates.push(reply.slice(openIdx, closeIdx + 1));
+  }
+  // 4. Balanced { ... } blocks (respecting JSON string literals)
+  for (let i = 0; i < reply.length; i++) {
+    if (reply[i] !== '{') continue;
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let j = i; j < reply.length; j++) {
+      const ch = reply[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === '\\') esc = true;
+        else if (ch === '"') inStr = false;
+      } else {
+        if (ch === '"') inStr = true;
+        else if (ch === '{') depth++;
+        else if (ch === '}') {
+          depth--;
+          if (depth === 0) {
+            candidates.push(reply.slice(i, j + 1));
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  let fallback: any = null;
+  for (const cand of candidates) {
+    try {
+      const obj = JSON.parse(cand);
+      if (obj && typeof obj === 'object') {
+        if (Array.isArray(obj.bugs)) return obj;
+        if (!fallback) fallback = obj;
+      }
+    } catch { /* try next */ }
+  }
+  return fallback;
+}
+
 /** Parses RX95's reply into refinements keyed by bug id. Silently skips anything malformed. */
 export function parseRefineReply(reply: string, bugs: Array<Pick<BugLog, 'id' | 'title' | 'note'>>): Record<string, RefinedBugText> {
-  const fenced = reply.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const body = fenced ? fenced[1] : reply.slice(reply.indexOf('{'), reply.lastIndexOf('}') + 1);
-  let parsed: any;
-  try { parsed = JSON.parse(body); } catch { return {}; }
+  const parsed = extractJsonObject(String(reply || ''));
+  if (!parsed) return {};
   const items: any[] = Array.isArray(parsed?.bugs) ? parsed.bugs : [];
   const at = new Date().toISOString();
   const out: Record<string, RefinedBugText> = {};
@@ -97,7 +159,13 @@ export function parseRefineReply(reply: string, bugs: Array<Pick<BugLog, 'id' | 
     const n = Number(it?.n);
     if (!Number.isInteger(n) || n < 1 || n > bugs.length) continue;
     const bug = bugs[n - 1];
-    const title = clean(it?.title, REFINE_TITLE_MAX).replace(/\n+/g, ' ').replace(/^\[[^\]]*\]\s*/g, '').replace(/[.]+$/, '');
+    const strippedTitle = (typeof it?.title === 'string' ? it.title : '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/^(?:\[[^\]]*\]\s*)+/, '')
+      .replace(/[.]+$/, '')
+      .trim();
+    const title = clean(strippedTitle, REFINE_TITLE_MAX).replace(/\n+/g, ' ');
     const description = clean(it?.description, REFINE_DESCRIPTION_MAX);
     if (!title || out[bug.id]) continue;
     out[bug.id] = { sig: bugTextSig(bug), title, description: description || title, at, by: 'rx95' };

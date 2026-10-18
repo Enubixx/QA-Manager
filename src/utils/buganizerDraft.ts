@@ -87,10 +87,23 @@ export function sliceCodePoints(s: string, start: number, end?: number): string 
   return Array.from(s || '').slice(start, end).join('');
 }
 
-/** First sentence of the tester note, tidied for a bug title. */
+const ABBREV_END_RE = /\b(?:e\.g|i\.e|vs|v|mr|mrs|ms|dr|st|etc|approx|cf|fig|no|vol|inc|ltd|co|[a-z])\.$/i;
+
+/** First sentence of the tester note, tidied for a bug title (never splits on abbreviations like e.g. / i.e. / vs. / v1.2). */
 export function titleFromNote(note: string, max = 110): string {
   const clean = (note || '').replace(/\s+/g, ' ').trim();
-  const first = clean.split(/(?<=[.!?])\s+/)[0] || clean;
+  let first = clean;
+  const re = /[.!?]\s+/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(clean)) !== null) {
+    const punct = m[0][0];
+    const upToPunct = clean.slice(0, m.index + 1);
+    if (punct === '.' && (ABBREV_END_RE.test(upToPunct) || /\d\.$/.test(upToPunct))) {
+      continue;
+    }
+    first = upToPunct;
+    break;
+  }
   const t = Array.from(first).length > max ? `${sliceCodePoints(first, 0, max - 1).trimEnd()}…` : first;
   return t ? t.charAt(0).toUpperCase() + t.slice(1) : 'Untitled bug';
 }
@@ -158,7 +171,9 @@ export function buildDefaultDraft(bug: BugLog, ctx: DraftContext): BuganizerDraf
 }
 
 export function defaultTitle(bug: BugLog, cuj: string, refined?: RefinedBugText): string {
-  const core = (refined?.title || bug.title || '').replace(/\s+/g, ' ').trim() || titleFromNote(bug.note);
+  const rawCore = (refined?.title || bug.title || '').replace(/\s+/g, ' ').trim();
+  const strippedCore = rawCore.replace(/^(?:\[[^\]]{1,60}\]\s*)+/, '').trim();
+  const core = strippedCore || rawCore || titleFromNote(bug.note);
   return `${TITLE_PREFIX} [${cuj}] ${core}`;
 }
 
@@ -169,35 +184,48 @@ export function generatedText(bug: BugLog, ctx: DraftContext, useRefined = true)
   return { title: defaultTitle(bug, cuj, c.refined), description: defaultDescription(bug, c) };
 }
 
-/** Changes whenever the tester's title or description is edited (e.g. from the Bugs Feed). */
+/** Changes whenever the tester's title or description is edited (never includes time, so adjusting time doesn't wipe drafts). */
 export function bugSourceSig(bug: BugLog): string {
-  // The time only joins the fingerprint once it has been adjusted, so older drafts keep their sig.
-  const time = bug.originalTimestamp ? `\u0000${bug.timestamp}` : '';
-  return `${(bug.title || '').trim()}\u0000${(bug.note || '').trim()}${time}`;
+  return `${(bug.title || '').trim()}\u0000${(bug.note || '').trim()}`;
 }
 
 /**
  * Bring a saved draft up to date: re-generate title/description when the bug itself was
- * edited since the draft was made, and fill the default hotlist/CC for drafts saved before
- * those defaults existed.
+ * edited since the draft was made (unless the user hand-edited the draft in Buganizer tab),
+ * fill Found in when empty and firmware becomes available, and fill default hotlist/CC for older drafts.
  */
 export function syncDraftWithBug(saved: BuganizerDraft, bug: BugLog, ctx: DraftContext): BuganizerDraft {
-  const d: BuganizerDraft = { ...saved, foundIn: saved.foundIn ?? (bug.environment?.glassesFirmware || '') };
+  const fw = (bug.environment?.glassesFirmware || '').trim();
+  const savedFoundIn = (saved.foundIn || '').trim();
+  const d: BuganizerDraft = {
+    ...saved,
+    foundIn: savedFoundIn || fw,
+  };
   const sig = bugSourceSig(bug);
-  const textChanged = saved.sourceSig !== undefined && saved.sourceSig !== sig;
+  // Normalize older sourceSigs that appended a 3rd time segment
+  const prevSig = saved.sourceSig !== undefined ? saved.sourceSig.split('\u0000').slice(0, 2).join('\u0000') : undefined;
+  const textChanged = prevSig !== undefined && prevSig !== sig;
   // Drafts saved before `textEdited` existed: treat them as edited unless they still match the generated text.
   const edited = saved.textEdited ?? (() => {
     const plain = generatedText(bug, ctx, false);
-    return saved.title !== plain.title || saved.description !== plain.description;
+    const withRefined = generatedText(bug, ctx, true);
+    return (
+      (saved.title !== plain.title || saved.description !== plain.description) &&
+      (saved.title !== withRefined.title || saved.description !== withRefined.description)
+    );
   })();
-  if (textChanged) {
-    // The reporter's own text changed (Bugs Feed edit) - that always wins.
+  if (edited) {
+    // A draft with textEdited:true is never overwritten silently.
+    d.textEdited = true;
+  } else if (textChanged) {
+    // Reporter's own text changed in Bugs Feed and draft was not hand-edited in Buganizer tab.
     Object.assign(d, generatedText(bug, ctx), { textEdited: false, refinedAt: ctx.refined?.at });
-  } else if (ctx.refined && saved.refinedAt !== ctx.refined.at && !edited) {
+  } else if (ctx.refined && saved.refinedAt !== ctx.refined.at) {
     // New RX95 wording arrived and nobody has hand-edited this draft's text.
     Object.assign(d, generatedText(bug, ctx), { textEdited: false, refinedAt: ctx.refined.at });
   } else {
-    d.textEdited = edited;
+    // Keep unedited generated text in sync with latest time label / environment / CUJ.
+    Object.assign(d, generatedText(bug, ctx, Boolean(saved.refinedAt && ctx.refined)), { textEdited: false });
   }
   if (saved.sourceSig === undefined) {
     // Draft predates hotlist/CC defaults: fill them only if they were left blank.
@@ -212,34 +240,44 @@ export function syncDraftWithBug(saved: BuganizerDraft, bug: BugLog, ctx: DraftC
 }
 
 const usernames = (s: string) =>
-  s.split(/[,\s]+/).map(u => u.trim().replace(/@google\.com$/i, '')).filter(u => /^[a-z0-9._-]{1,64}$/i.test(u));
+  (s || '').split(/[,\s]+/).map(u => u.trim().replace(/@google\.com$/i, '')).filter(u => /^[a-z0-9._-]{1,64}$/i.test(u));
 
 /** Prefilled Buganizer "new issue" URL (go/buganizer/concepts/templates#supported-query-parameters). */
-export function buildBuganizerUrl(d: BuganizerDraft): string {
+export function buildBuganizerUrl(d: Partial<BuganizerDraft>): string {
   // Buganizer's docs ask for %20-style escaping (not "+" for spaces), so encode each value strictly.
   const params: Array<[string, string]> = [];
   const add = (k: string, v: string) => params.push([k, v]);
-  if (/^\d{1,12}$/.test(d.componentId)) add('component', d.componentId);
-  if (d.title.trim()) add('title', d.title.trim());
-  if (d.description.trim()) {
-    add('description', d.description.trim());
+  const componentId = String(d?.componentId || '');
+  const title = String(d?.title || '').trim();
+  const description = String(d?.description || '').trim();
+  const priority = String(d?.priority || '');
+  const severity = String(d?.severity || '');
+  const type = String(d?.type || '');
+  const assignee = String(d?.assignee || '').trim().replace(/@google\.com$/i, '');
+  const hotlistIds = Array.isArray(d?.hotlistIds) ? d.hotlistIds : [];
+
+  if (/^\d{1,12}$/.test(componentId)) add('component', componentId);
+  if (title) add('title', title);
+  if (description) {
+    add('description', description);
     add('format', 'MARKDOWN');
   }
-  if (/^P[0-4]$/.test(d.priority)) add('priority', d.priority);
-  if (ALLOWED_TYPES.has(d.type)) add('type', d.type);
+  if (/^P[0-4]$/.test(priority)) add('priority', priority);
+  if (/^S[0-4]$/.test(severity)) add('severity', severity);
+  if (ALLOWED_TYPES.has(type)) add('type', type);
   // Assignee must be exactly one valid username - anything else (e.g. "john doe") is dropped, not guessed
-  const assigneeRaw = d.assignee.trim().replace(/@google\.com$/i, '');
-  if (/^[a-z0-9._-]{1,64}$/i.test(assigneeRaw)) add('assignee', assigneeRaw);
-  const cc = usernames(d.cc).map(u => `${u}@google.com`);
+  if (/^[a-z0-9._-]{1,64}$/i.test(assignee)) add('assignee', assignee);
+  const cc = usernames(String(d?.cc || '')).map(u => `${u}@google.com`);
   if (cc.length) add('cc', cc.join(','));
-  d.hotlistIds.filter(h => /^\d{1,12}$/.test(h)).forEach(h => add('hotlistIds', h));
-  const foundIn = sliceCodePoints((d.foundIn || '').replace(/[\r\n]+/g, ' ').trim(), 0, 200);
+  hotlistIds.filter(h => /^\d{1,12}$/.test(String(h || ''))).forEach(h => add('hotlistIds', String(h)));
+  const foundIn = sliceCodePoints(String(d?.foundIn || '').replace(/[\r\n]+/g, ' ').trim(), 0, 200);
   if (foundIn) add('foundIn', foundIn);
   const query = params.map(([k, v]) => `${k}=${safeEncodeURIComponent(v)}`).join('&');
   return `${BUGANIZER_NEW_ISSUE_URL}?${query}`;
 }
 
 export function loadDrafts(): Record<string, BuganizerDraft> {
+  if (typeof localStorage === 'undefined') return {};
   try {
     const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
     return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
@@ -249,7 +287,8 @@ export function loadDrafts(): Record<string, BuganizerDraft> {
 }
 
 export function saveDrafts(drafts: Record<string, BuganizerDraft>): void {
+  if (typeof localStorage === 'undefined') return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(drafts));
-  } catch { /* storage full - drafts stay in memory for this session */ }
+  } catch { /* storage full */ }
 }

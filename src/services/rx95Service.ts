@@ -100,7 +100,12 @@ async function sendRx95(
       await sleep(2500);
       tick();
       const s = await fetch(`${BRIDGE_URL}/api/rx95/summary/${body.requestId}`).then(r => r.json()).catch(() => null);
-      if (s?.status === 'done' && s.reply) return { reply: s.reply, conversationId: s.conversationId };
+      if (s?.status === 'done') {
+        if (typeof s.reply === 'string' && s.reply.trim()) {
+          return { reply: s.reply, conversationId: s.conversationId };
+        }
+        throw new Error(`RX95 returned an empty reply for the ${what}. Try again.`);
+      }
       if (s?.status === 'error') throw new Error(`RX95 couldn't finish the ${what}: ${s.error}`);
     }
     throw new Error('RX95 took too long to reply. Try again, or use AI Chat.');
@@ -115,7 +120,12 @@ async function sendRx95(
     await sleep(3000);
     tick();
     const { data } = await supabase.from(TABLE).select('status,reply,error,conversation_id').eq('id', id).maybeSingle();
-    if (data?.status === 'done' && data.reply) return { reply: data.reply, conversationId: data.conversation_id || undefined };
+    if (data?.status === 'done') {
+      if (typeof data.reply === 'string' && data.reply.trim()) {
+        return { reply: data.reply, conversationId: data.conversation_id || undefined };
+      }
+      throw new Error(`RX95 returned an empty reply for the ${what}. Try again.`);
+    }
     if (data?.status === 'error') throw new Error(`RX95 couldn't finish the ${what}: ${data.error}`);
   }
   throw new Error('RX95 did not pick up the request in time. Is your Cloudtop online? You can use AI Chat instead.');

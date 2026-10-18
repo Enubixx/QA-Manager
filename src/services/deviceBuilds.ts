@@ -24,7 +24,7 @@ export interface GlassesBuild { firmware?: string; serial?: string; product?: st
 const GLASSES_KEY = 'qa_glasses_build_v1';
 
 const plugin = (): any => {
-  const cap = (window as any).Capacitor;
+  const cap = typeof window !== 'undefined' ? (window as any).Capacitor : undefined;
   if (!cap?.isNativePlatform?.()) return null;
   try {
     return cap.Plugins?.DeviceBuilds || cap.registerPlugin?.('DeviceBuilds') || null;
@@ -33,19 +33,21 @@ const plugin = (): any => {
   }
 };
 
-export const isNativeApp = (): boolean => !!(window as any).Capacitor?.isNativePlatform?.();
+export const isNativeApp = (): boolean =>
+  typeof window !== 'undefined' && !!(window as any).Capacitor?.isNativePlatform?.();
 
-let phoneInfoCache: PhoneBuildInfo | null | undefined;
+let phoneInfoCache: PhoneBuildInfo | null = null;
 export async function getPhoneBuildInfo(): Promise<PhoneBuildInfo | null> {
-  if (phoneInfoCache !== undefined) return phoneInfoCache;
+  if (phoneInfoCache !== null) return phoneInfoCache;
   const p = plugin();
-  if (!p?.getBuildInfo) return (phoneInfoCache = null);
+  if (!p?.getBuildInfo) return null;
   try {
-    phoneInfoCache = (await p.getBuildInfo()) as PhoneBuildInfo;
+    const info = (await p.getBuildInfo()) as PhoneBuildInfo | null;
+    if (info && typeof info === 'object') phoneInfoCache = info;
+    return phoneInfoCache;
   } catch {
-    phoneInfoCache = null;
+    return null;
   }
-  return phoneInfoCache;
 }
 
 /** On-device OCR of an image data URL (ML Kit, no network). Throws if unavailable. */
@@ -57,6 +59,7 @@ export async function recognizeImageText(dataUrl: string): Promise<OcrResult> {
 
 interface StoredGlasses { current?: GlassesBuild; bySerial?: Record<string, GlassesBuild> }
 const readStore = (): StoredGlasses => {
+  if (typeof localStorage === 'undefined') return {};
   try {
     const v = JSON.parse(localStorage.getItem(GLASSES_KEY) || '{}');
     return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
@@ -72,14 +75,16 @@ export function saveGlassesBuild(build: GlassesBuild): GlassesBuild {
     firmware: build.firmware?.trim() || undefined,
     serial: build.serial?.trim().toUpperCase() || undefined,
     product: build.product?.trim() || undefined,
-    capturedAt: build.capturedAt || new Date().toISOString(),
+    capturedAt: new Date().toISOString(),
   };
   const store = readStore();
   store.current = clean;
   if (clean.serial) store.bySerial = { ...(store.bySerial || {}), [clean.serial]: clean };
-  try {
-    localStorage.setItem(GLASSES_KEY, JSON.stringify(store));
-  } catch { /* storage full - keep in memory only */ }
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.setItem(GLASSES_KEY, JSON.stringify(store));
+    } catch { /* storage full - keep in memory only */ }
+  }
   return clean;
 }
 

@@ -65,6 +65,18 @@ export function splitFiledTitle(title: string): { cuj: string; text: string } {
 
 export const normCuj = (s: string) => String(s || '').toLowerCase().replace(/\([^)]*\)/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
 
+/** Whole-word/token CUJ comparison so short tags like "[UI]", "[IO]", "[A]" never match substrings inside "Fluidity", "Audio", "Navigation". */
+function isSameOrTokenMatchingCuj(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const aWords = a.split(/\s+/).filter(Boolean);
+  const bWords = b.split(/\s+/).filter(Boolean);
+  if (!aWords.length || !bWords.length) return false;
+  const aSet = new Set(aWords);
+  const bSet = new Set(bWords);
+  return aWords.every(w => bSet.has(w)) || bWords.every(w => aSet.has(w));
+}
+
 const STOP = new Set(('a an the and or but if then than so to of in on at by for from with without into onto over under up down out off is are was were be been being am ' +
   'it its this that these those there here i me my we our you your he she they them his her their what which who whom when where why how ' +
   'not no do does did done doing have has had having can could should would will just also very really still even only again after before ' +
@@ -183,7 +195,7 @@ export function shortlistCandidates(bug: MatchBugInput, candidates: HotlistCandi
       s += weight * hit;
     }
     let score = norm > 0 ? s / norm : 0;
-    if (feature && d.cuj && (d.cuj === feature || d.cuj.includes(feature) || feature.includes(d.cuj))) score += 0.15;
+    if (isSameOrTokenMatchingCuj(feature, d.cuj)) score += 0.15;
     return { candidate: d.c, score };
   });
   return scored.sort((a, b) => b.score - a.score).slice(0, size);
@@ -293,9 +305,70 @@ const VERDICTS = new Set(['very_likely', 'possible', 'unlikely']);
 const VERDICT_BANDS: Record<ReproCandidate['verdict'], [number, number]> = { very_likely: [80, 100], possible: [35, 79], unlikely: [0, 34] };
 
 function extractJson(reply: string): any {
-  const fenced = reply.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const body = fenced ? fenced[1] : reply.slice(reply.indexOf('{'), reply.lastIndexOf('}') + 1);
-  try { return JSON.parse(body); } catch { return null; }
+  const text = String(reply || '');
+  const candidates: string[] = [];
+  // 1. Greedy fence match (first ``` to last ```) so inner ``` inside JSON string literals don't cut it in half
+  const greedyFence = text.match(/```(?:json)?\s*([\s\S]*)```/);
+  if (greedyFence?.[1]) {
+    const inner = greedyFence[1];
+    candidates.push(inner);
+    const firstBrace = inner.indexOf('{');
+    const lastBrace = inner.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      candidates.push(inner.slice(firstBrace, lastBrace + 1));
+    }
+  }
+  // 2. Non-greedy fenced blocks
+  const nonGreedyRe = /```(?:json)?\s*([\s\S]*?)```/g;
+  let m: RegExpExecArray | null;
+  while ((m = nonGreedyRe.exec(text)) !== null) {
+    if (m[1]) candidates.push(m[1]);
+  }
+  // 3. Outermost { ... }
+  const openIdx = text.indexOf('{');
+  const closeIdx = text.lastIndexOf('}');
+  if (openIdx >= 0 && closeIdx > openIdx) {
+    candidates.push(text.slice(openIdx, closeIdx + 1));
+  }
+  // 4. Balanced { ... } blocks (respecting JSON string literals)
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '{') continue;
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let j = i; j < text.length; j++) {
+      const ch = text[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === '\\') esc = true;
+        else if (ch === '"') inStr = false;
+      } else {
+        if (ch === '"') inStr = true;
+        else if (ch === '{') depth++;
+        else if (ch === '}') {
+          depth--;
+          if (depth === 0) {
+            candidates.push(text.slice(i, j + 1));
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  let fallback: any = null;
+  for (const cand of candidates) {
+    try {
+      const obj = JSON.parse(cand);
+      if (obj && typeof obj === 'object') {
+        if (Array.isArray(obj.bugs) || Array.isArray(obj.matches) || Array.isArray(obj.candidatesCatalog)) {
+          return obj;
+        }
+        if (!fallback) fallback = obj;
+      }
+    } catch { /* try next */ }
+  }
+  return fallback;
 }
 
 /** Validates one bug's matches strictly against its shortlist catalog. */
