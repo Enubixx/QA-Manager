@@ -334,8 +334,22 @@ export function useDashboardController({
   };
 
   // Bugs Feed review state (New / Reviewed). Written with the targeted patch (bug_logs.reviewed), never by RX95.
-  const markReviewed = (bugId: string) => onPatchBugLog?.(bugId, { reviewed: reviewedNow('reviewed') });
-  const moveToNew = (bugId: string) => onPatchBugLog?.(bugId, { reviewed: reviewedNow('new') });
+  const markReviewed = (bugId: string) => {
+    const patch = { reviewed: reviewedNow('reviewed') };
+    if (onPatchBugLog) onPatchBugLog(bugId, patch);
+    else if (onUpdateBugLog) {
+      const target = bugById.get(bugId);
+      if (target) onUpdateBugLog({ ...target, ...patch });
+    }
+  };
+  const moveToNew = (bugId: string) => {
+    const patch = { reviewed: reviewedNow('new') };
+    if (onPatchBugLog) onPatchBugLog(bugId, patch);
+    else if (onUpdateBugLog) {
+      const target = bugById.get(bugId);
+      if (target) onUpdateBugLog({ ...target, ...patch });
+    }
+  };
 
   const toggleBugExpand = (bugId: string) => {
     setExpandedBugIds(prev => {
@@ -364,8 +378,37 @@ export function useDashboardController({
   const [selectedPlanFilter, setSelectedPlanFilter] = useState<string>('all');
   const [customDateInput, setCustomDateInput] = useState<string>('');
   const [sortByDevice, setSortByDevice] = useState<'newest' | 'oldest' | 'device-asc' | 'device-desc' | 'priority' | 'severity' | 'tester-asc' | 'tester-most'>('newest');
-  const [feedGroupBy, setFeedGroupBy] = useState<'time' | 'tester' | 'device' | 'cuj'>('time');
-  const [selectedTesterFilters, setSelectedTesterFilters] = useState<string[]>([]);
+  const [feedGroupBy, setFeedGroupByState] = useState<'time' | 'tester' | 'device' | 'cuj'>(() => {
+    try {
+      const saved = localStorage.getItem('qa_bugs_group_by');
+      if (saved === 'time' || saved === 'tester' || saved === 'device' || saved === 'cuj') return saved;
+    } catch {}
+    return 'time';
+  });
+  const setFeedGroupBy: React.Dispatch<React.SetStateAction<'time' | 'tester' | 'device' | 'cuj'>> = (val) => {
+    setFeedGroupByState(prev => {
+      const next = typeof val === 'function' ? val(prev) : val;
+      try { localStorage.setItem('qa_bugs_group_by', next); } catch {}
+      return next;
+    });
+  };
+  const [selectedTesterFilters, setSelectedTesterFiltersState] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('qa_bugs_tester_filters');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed.filter((x): x is string => typeof x === 'string');
+      }
+    } catch {}
+    return [];
+  });
+  const setSelectedTesterFilters: React.Dispatch<React.SetStateAction<string[]>> = (val) => {
+    setSelectedTesterFiltersState(prev => {
+      const next = typeof val === 'function' ? val(prev) : val;
+      try { localStorage.setItem('qa_bugs_tester_filters', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
   const [isTesterFilterOpen, setIsTesterFilterOpen] = useState<boolean>(false);
   const [focusedBugId, setFocusedBugId] = useState<string | null>(null);
   
@@ -1508,7 +1551,8 @@ export function useDashboardController({
       el.classList.add('ring-2', 'ring-violet-400');
       setTimeout(() => el.classList.remove('ring-2', 'ring-violet-400'), 1400);
     };
-    setFeedTab('suggestions');
+    setBugsView('feed');
+    setFeedTab('new');
     if (suggestionsCollapsed) setSuggestionsCollapsed(false);
     setTimeout(go, 80);
   };
@@ -1531,7 +1575,7 @@ export function useDashboardController({
     const patch = { bugType: cat.bugType, priority: cat.priority, status: cat.status, bundle, reviewed: reviewedNow('reviewed') };
     if (onPatchBugLogs) onPatchBugLogs(Object.fromEntries(current.map(m => [m.id, patch])));
     else if (onUpdateBugLog) onUpdateBugLog(current.map(m => ({ ...m, ...patch })));
-    flashFeed(`Set ${cat.bugType} · ${cat.priority} · ${cat.status} on ${current.length} reports and bundled them into one bug.`);
+    flashFeed(`Bundled ${current.length} reports and moved to ② Ready to file.`);
   };
 
   const unbundleFromFeed = (bundleId: string) => {
@@ -1543,13 +1587,42 @@ export function useDashboardController({
   };
 
   type FeedBug = (typeof processedBugs)[number];
-  type FeedRow = { kind: 'bug'; bug: FeedBug } | { kind: 'bundle'; id: string; members: FeedBug[] };
+  type FeedRow =
+    | { kind: 'bug'; bug: FeedBug }
+    | { kind: 'bundle'; id: string; members: FeedBug[] }
+    | { kind: 'suggestion'; id: string; shown: ShownSuggestion };
   const reviewedOf = (b: BugLog) => isReviewed(bugById.get(b.id) || b, bugCategorizations[b.id]);
   /** Bundled reports collapse into one row (placed where the first visible member would be). */
-  const buildFeedRows = (list: FeedBug[]): FeedRow[] => {
+  const buildFeedRows = (list: FeedBug[], includeInlineSuggestions = false): FeedRow[] => {
     const rows: FeedRow[] = [];
     const bundleRows = new Map<string, { kind: 'bundle'; id: string; members: FeedBug[] }>();
+    const activeSugByBugId = new Map<string, ShownSuggestion>();
+    const emittedSugIds = new Set<string>();
+
+    if (includeInlineSuggestions && feedSuggestions.length > 0) {
+      const listById = new Map(list.map(b => [b.id, b]));
+      feedSuggestions.forEach(s => {
+        // Members already reviewed are excluded; a suggestion with <2 remaining unreviewed members disappears
+        const rem = s.members
+          .filter(m => listById.has(m.id) && !reviewedOf(m))
+          .map(m => listById.get(m.id) || m)
+          .sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
+        if (rem.length >= 2) {
+          const activeShown: ShownSuggestion = { ...s, members: rem };
+          rem.forEach(m => activeSugByBugId.set(m.id, activeShown));
+        }
+      });
+    }
+
     list.forEach(b => {
+      const activeSug = activeSugByBugId.get(b.id);
+      if (activeSug) {
+        if (!emittedSugIds.has(activeSug.suggestion.id)) {
+          emittedSugIds.add(activeSug.suggestion.id);
+          rows.push({ kind: 'suggestion', id: activeSug.suggestion.id, shown: activeSug });
+        }
+        return;
+      }
       const bid = b.bundle?.id;
       if (!bid) { rows.push({ kind: 'bug', bug: b }); return; }
       let row = bundleRows.get(bid);
@@ -1566,25 +1639,28 @@ export function useDashboardController({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [processedBugs, bugById, bugCategorizations]);
   const feedRows = useMemo<FeedRow[]>(() => {
-    if (feedTab === 'reviewed') return buildFeedRows(reviewedFeedBugs);
+    if (feedTab === 'reviewed') return buildFeedRows(reviewedFeedBugs, false);
     const visibleNew = processedBugs.filter(
       b =>
         !reviewedOf(b) ||
         (stickyNewBugIds.has(b.id) && (!!expandedBugIds[b.id] || focusedBugId === b.id))
     );
-    return buildFeedRows(visibleNew);
+    return buildFeedRows(visibleNew, true);
   },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [feedTab, newFeedBugs, reviewedFeedBugs, processedBugs, stickyNewBugIds, expandedBugIds, focusedBugId]);
+    [feedTab, newFeedBugs, reviewedFeedBugs, processedBugs, stickyNewBugIds, expandedBugIds, focusedBugId, feedSuggestions]);
 
-  /** Opens a report on the Bugs Feed (from the Buganizer tab): its tab, expanded, scrolled into view. */
+  /** Opens a report on ① To review (from ② Ready to file): expanded, scrolled into view. */
   const openInFeed = (bugId?: string) => {
     setBugsView('feed');
-    if (!bugId) { setFeedTab('suggestions'); setSuggestionsCollapsed(false); return; }
+    setFeedTab('new');
+    if (!bugId) { setSuggestionsCollapsed(false); return; }
     const b = bugById.get(bugId);
     if (!b) return;
     if (!processedBugs.some(x => x.id === bugId)) flashFeed('That report is hidden by the current plan / day / search filters.');
-    setFeedTab(reviewedOf(b) ? 'reviewed' : 'new');
+    if (reviewedOf(b)) {
+      moveToNew(bugId);
+    }
     setExpandedBugIds(prev => ({ ...prev, [bugId]: true }));
     if (b.bundle?.id) setExpandedFeedBundles(prev => new Set(prev).add(b.bundle!.id));
     setTimeout(() => {
@@ -1596,6 +1672,10 @@ export function useDashboardController({
     }, 120);
   };
   const openInBuganizer = (bugId: string) => {
+    const b = bugById.get(bugId);
+    if (b && !reviewedOf(b)) {
+      markReviewed(bugId);
+    }
     setBugsView('buganizer');
     setBuganizerFocus({ id: bugId, n: Date.now() });
   };

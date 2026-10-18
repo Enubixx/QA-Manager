@@ -96,6 +96,17 @@ interface Props {
   /** Shared dismissed bundle suggestion IDs (kept in sync with Bugs Feed). */
   dismissed?: Set<string>;
   onDismissedChange?: (next: Set<string>) => void;
+  /** Pipeline stage when embedded in the unified 3-stage Bugs pipeline ('ready' = ② Ready to file, 'filed' = ③ Filed). */
+  pipelineStage?: 'ready' | 'filed';
+  onStageChange?: (stage: 'review' | 'ready' | 'filed') => void;
+  /** Ordered list of bug IDs matching the unified top bar's filters & sort (Plan, Tester, Day, Date range, CUJ, Device, Search). */
+  filteredBugIds?: string[];
+  feedGroupBy?: 'time' | 'tester' | 'device' | 'cuj';
+  sortByDevice?: string;
+  todayStr?: string;
+  getLocalDateStr?: (dateInput?: string | Date) => string;
+  onMoveToReview?: (bugId: string) => void;
+  onCountsChange?: (counts: { ready: number; filed: number }) => void;
 }
 
 type Layout = 'a' | 'b' | 'c';
@@ -148,7 +159,31 @@ const topComponents = BUGANIZER_COMPONENTS.slice(0, TOP_COMPONENT_COUNT);
 const otherComponents = BUGANIZER_COMPONENTS.slice(TOP_COMPONENT_COUNT).sort((a, b) => a.name.localeCompare(b.name));
 const pathTail = (path: string) => path.split(' > ').slice(-2, -1)[0] || '';
 
-export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: dismissedProp, onDismissedChange, nowMs: nowMsProp, plans, onApplyRefinements, onPatchBugLog, onApplyReproMatches, onPatchBugLogs, rx95Suggestions, onOpenBugsFeed, focusBug, onFocused }: Props) {
+export default function BuganizerTriage({
+  bugs,
+  bugCategorizations,
+  dismissed: dismissedProp,
+  onDismissedChange,
+  nowMs: nowMsProp,
+  plans,
+  onApplyRefinements,
+  onPatchBugLog,
+  onApplyReproMatches,
+  onPatchBugLogs,
+  rx95Suggestions,
+  onOpenBugsFeed,
+  focusBug,
+  onFocused,
+  pipelineStage,
+  onStageChange,
+  filteredBugIds,
+  feedGroupBy = 'time',
+  sortByDevice = 'newest',
+  todayStr: todayStrProp,
+  getLocalDateStr: getLocalDateStrProp,
+  onMoveToReview,
+  onCountsChange,
+}: Props) {
   const planName = (id?: string) => plans.find(p => p.id === id)?.name || id || 'Unknown plan';
   const bugReviewed = (b: BugLog) => isReviewed(b, bugCategorizations?.[b.id]);
   const [drafts, setDrafts] = useState<Record<string, BuganizerDraft>>(() => loadDrafts());
@@ -165,6 +200,8 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
   const [allowOpen, setAllowOpen] = useState(false);
   const [openQueue, setOpenQueue] = useState<BuganizerDraft[]>([]);
   const [toast, setToast] = useState<string | null>(null);
+  const [customReproIssue, setCustomReproIssue] = useState<Record<string, string>>({});
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
 
   useEffect(() => saveDrafts(drafts), [drafts]);
 
@@ -274,29 +311,45 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
 
   const groups = useMemo(() => groupBundles(bugs), [bugs]);
   const bundledIds = useMemo(() => new Set(Array.from(groups.values()).flatMap(g => g.members.map(m => m.id))), [groups]);
+  const filteredBugIdSet = useMemo(
+    () => (filteredBugIds ? new Set(filteredBugIds) : null),
+    [filteredBugIds]
+  );
+  const filteredBugOrderMap = useMemo(() => {
+    if (!filteredBugIds) return null;
+    const m = new Map<string, number>();
+    filteredBugIds.forEach((id, idx) => m.set(id, idx));
+    return m;
+  }, [filteredBugIds]);
+
   /** Opened in Buganizer, not yet confirmed (shown in the "Waiting" group instead of the list). */
   const isPending = (b: BugLog) => !!b.filePending && !isFiled(b);
-  const passesBase = (b: BugLog) =>
-    (tester === 'all' || (b.testerName || '').trim().toLowerCase() === tester.toLowerCase())
-    && (planId === 'all' || b.planId === planId)
-    && (!day || localDay(b.timestamp) === day)
-    && (cuj === 'all' || (b.feature || 'General') === cuj);
+  const passesBase = (b: BugLog) => {
+    if (filteredBugIdSet) return filteredBugIdSet.has(b.id);
+    return (
+      (tester === 'all' || (b.testerName || '').trim().toLowerCase() === tester.toLowerCase()) &&
+      (planId === 'all' || b.planId === planId) &&
+      (!day || localDay(b.timestamp) === day) &&
+      (cuj === 'all' || (b.feature || 'General') === cuj)
+    );
+  };
 
   /** Everything matching the filters, filed or not (bundle members and waiting bugs are shown elsewhere). */
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return bugs
+    const list = bugs
       .filter(b => (b.note || '').trim())
       .filter(b => !bundledIds.has(b.id) && !isPending(b))
-      .filter(b => tester === 'all' || (b.testerName || '').trim().toLowerCase() === tester.toLowerCase())
-      .filter(b => planId === 'all' || b.planId === planId)
-      .filter(b => !day || localDay(b.timestamp) === day)
-      .filter(b => cuj === 'all' || (b.feature || 'General') === cuj)
+      .filter(b => passesBase(b))
+      .filter(b => (pipelineStage ? isFiled(b) || bugReviewed(b) : true))
       .filter(b => stateFilter === 'all' || draftFor(b).state === stateFilter)
-      .filter(b => !q || `${b.note} ${b.stepTitle} ${draftFor(b).title}`.toLowerCase().includes(q))
-      .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+      .filter(b => !q || `${b.note} ${b.stepTitle} ${draftFor(b).title}`.toLowerCase().includes(q));
+    if (filteredBugOrderMap) {
+      return list.sort((a, b) => (filteredBugOrderMap.get(a.id) ?? 0) - (filteredBugOrderMap.get(b.id) ?? 0));
+    }
+    return list.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bugs, tester, planId, day, cuj, stateFilter, query, drafts, bundledIds]);
+  }, [bugs, filteredBugIdSet, filteredBugOrderMap, pipelineStage, bugCategorizations, tester, planId, day, cuj, stateFilter, query, drafts, bundledIds]);
 
   // Mega-bug drafts (stored under the bundle id)
   const megaCtx = (g: BundleGroup) => ({ planId: g.members[0]?.planId, planName: planName(g.members[0]?.planId) });
@@ -330,7 +383,7 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
       .filter(g => stateFilter === 'all' || megaDraftFor(g).state === stateFilter)
       .filter(g => !q || `${g.bundle.title} ${g.members.map(m => `${m.note} ${m.title || ''} ${m.stepTitle}`).join(' ')}`.toLowerCase().includes(q));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups, tester, planId, day, cuj, stateFilter, query, drafts]);
+  }, [groups, filteredBugIdSet, tester, planId, day, cuj, stateFilter, query, drafts]);
   const filedGroups = visibleGroups.filter(groupIsFiled);
   const shownGroups = showFiled ? visibleGroups : visibleGroups.filter(g => !groupIsFiled(g));
 
@@ -348,7 +401,7 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
     });
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bugs, groups, tester, planId, day, cuj]);
+  }, [bugs, groups, filteredBugIdSet, tester, planId, day, cuj]);
   const waitingCount = bugs.filter(isPending).length;
 
   const filedCount = useMemo(() => filtered.filter(isFiled).length + filedGroups.reduce((n, g) => n + g.members.length, 0), [filtered, filedGroups]);
@@ -776,14 +829,17 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
   const renderReproPanel = (t: ReproTarget) => {
     const m = t.matches;
     const st = matchState[t.key] || {};
-    const pickedId = picked[t.key];
-    const cand = m?.candidates.find(c => c.id === pickedId);
+    const customId = normalizeIssueId(customReproIssue[t.key] || '');
+    const pickedId = picked[t.key] ?? m?.candidates[0]?.id;
+    const cand: ReproCandidate | undefined = customId
+      ? { id: customId, title: 'Existing Buganizer issue', verdict: 'possible', confidence: 100, reason: 'Custom issue ID' }
+      : m?.candidates.find(c => c.id === pickedId);
     const comment = cand ? t.comment() : '';
     const showComment = commentOpen.has(t.key);
     return (
       <div className="space-y-2" data-testid="repro-panel">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className={labelCls + ' mb-0'}>Possible existing bugs (pick one to follow up)</p>
+          <p className={labelCls + ' mb-0'}>Possible existing bugs (pick one or type a b/ ID to follow up)</p>
           <span className="text-[11px] text-slate-400" data-testid="repro-checked">
             {st.running ? 'Checking…' : m ? `checked ${minutesAgo(m.at)}` : st.error ? 'Check failed' : rx95Ready ? 'Not checked yet' : ''}
             {rx95Ready && !st.running && (
@@ -791,18 +847,18 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
             )}
           </span>
         </div>
-        {!rx95Ready && <p className="text-xs text-slate-400">RX95 isn't available here (needs the cloud connection), so possible existing bugs can't be looked up.</p>}
+        {!rx95Ready && <p className="text-xs text-slate-400">RX95 isn't available here (needs the cloud connection), so possible existing bugs can't be looked up automatically. Type an existing b/ ID below to follow up.</p>}
         {st.error && <p className="text-xs text-amber-300" data-testid="repro-error">{st.error}</p>}
         {m && m.candidates.length === 0 && (
           <p className="text-xs text-slate-400" data-testid="repro-none">RX95 found no likely existing bug ({m.searched} searched in hotlist {m.hotlistId}).</p>
         )}
         {m && t.compact && m.candidates.length > 0 && <p className={labelCls + ' mb-0'}>Best match</p>}
         {m && (t.compact && !allMatches.has(t.key) ? m.candidates.slice(0, 1) : m.candidates).map(c => {
-          const sel = c.id === pickedId;
+          const sel = !customId && c.id === pickedId;
           return (
             <label key={c.id} data-testid="repro-candidate"
               className={`flex gap-2.5 items-start rounded-2xl border px-3 py-2.5 cursor-pointer ${sel ? 'border-violet-500 ring-1 ring-violet-500/50 bg-violet-500/[0.07]' : 'border-slate-700 bg-[#0b1220]'} ${c.verdict === 'unlikely' && !sel ? 'opacity-75' : ''}`}>
-              <input type="radio" name={`repro-${t.key}`} className="mt-1 accent-violet-400" checked={sel} onChange={() => setPicked(prev => ({ ...prev, [t.key]: c.id }))} />
+              <input type="radio" name={`repro-${t.key}`} className="mt-1 accent-violet-400" checked={sel} onChange={() => { setCustomReproIssue(prev => ({ ...prev, [t.key]: '' })); setPicked(prev => ({ ...prev, [t.key]: c.id })); }} />
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <a href={issueUrl(c.id)} target="_blank" rel="noreferrer" className="font-extrabold text-blue-300 hover:underline text-xs" onClick={e => e.stopPropagation()}>b/{c.id}</a>
@@ -821,6 +877,18 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
             {allMatches.has(t.key) ? 'Show only the best match ▴' : `+${m.candidates.length - 1} other possible match${m.candidates.length - 1 === 1 ? '' : 'es'} ▾`}
           </button>
         )}
+        <div className="flex items-center gap-2 pt-0.5">
+          <span className="text-[11px] text-slate-400">Or type b/ ID:</span>
+          <input
+            type="text"
+            data-testid="repro-custom-b-input"
+            aria-label="Custom existing b/ issue number"
+            placeholder="b/ 381204918"
+            value={customReproIssue[t.key] || ''}
+            onChange={e => setCustomReproIssue(prev => ({ ...prev, [t.key]: e.target.value }))}
+            className="w-36 bg-[#0b1220] border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-slate-100 font-mono focus:outline-none focus:border-violet-500"
+          />
+        </div>
         {cand && showComment && (
           <pre data-testid="followup-comment" className="whitespace-pre-wrap bg-[#0b1220] border border-slate-700 rounded-xl p-3 text-[11px] leading-relaxed text-slate-200 font-mono max-h-64 overflow-auto">{comment}</pre>
         )}
@@ -1156,11 +1224,43 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
                 {bug.testerName || 'Unknown'} · {bug.deviceName || 'Unknown device'} · {bug.formattedTime || localDay(bug.timestamp)}
               </p>
               <p className="text-[11px] text-slate-500 truncate">{planName(bug.planId)} › {bug.stepTitle}</p>
-              {onOpenBugsFeed && (
-                <button type="button" data-testid="open-in-feed" className="text-[11px] text-blue-300 hover:underline" onClick={() => onOpenBugsFeed(bug.id)}>
-                  Open in Bugs Feed ↗{!bugReviewed(bug) ? ' · not reviewed yet' : ''}
-                </button>
-              )}
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                {!filed && (onMoveToReview || onOpenBugsFeed) && (
+                  <button
+                    type="button"
+                    data-testid="move-to-new"
+                    className="px-2.5 h-7 rounded-xl text-xs font-semibold border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700"
+                    onClick={() => {
+                      if (onMoveToReview) onMoveToReview(bug.id);
+                      else onOpenBugsFeed?.(bug.id);
+                    }}
+                  >
+                    ↩ Move back to New
+                  </button>
+                )}
+                {filed && (
+                  <button
+                    type="button"
+                    data-testid="filed-move-back-detail"
+                    className="px-2.5 h-7 rounded-xl text-xs font-semibold border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700"
+                    onClick={() => {
+                      patchBug(bug.id, {
+                        filed: undefined,
+                        ...(bug.status === 'Filed' ? { status: 'New' as const } : {}),
+                      });
+                      updateDraft(bug, { state: 'ready', issueId: undefined });
+                      flash('Moved back to ② Ready to file.');
+                    }}
+                  >
+                    ↩ Move back to Ready to file
+                  </button>
+                )}
+                {onOpenBugsFeed && !pipelineStage && (
+                  <button type="button" data-testid="open-in-feed" className="text-[11px] text-blue-300 hover:underline" onClick={() => onOpenBugsFeed(bug.id)}>
+                    Open in Bugs Feed ↗{!bugReviewed(bug) ? ' · not reviewed yet' : ''}
+                  </button>
+                )}
+              </div>
               {repro && bug.environment && (
                 <p className="text-[11px] text-slate-500 truncate" data-testid="row-build">
                   Build: {[bug.environment.glassesFirmware, [bug.environment.phoneManufacturer, bug.environment.phoneModel].filter(Boolean).join(' '), bug.environment.androidVersion ? `Android ${bug.environment.androidVersion}` : ''].filter(Boolean).join(' · ') || 'not captured'}
@@ -1185,10 +1285,26 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
                   ← Back to RX95's possible existing bugs
                 </button>
               ) : undefined,
+              bottom: (
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    data-testid="single-open-buganizer"
+                    className="px-3 h-8 rounded-xl text-xs font-semibold flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 text-white"
+                    onClick={() => {
+                      setAllowOpen(false);
+                      setPreviewExpanded(new Set([d.bugId]));
+                      setPreview([d]);
+                    }}
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" /> Open in Buganizer
+                  </button>
+                </div>
+              ),
               onFiledAs: id => {
                 if (id && bug.filed?.issueId !== id) {
                   patchBug(bug.id, { filed: newFiled('new', id), filePending: undefined });
-                  if (layout === 'b') flash(`Stamped FILED as b/${id} and moved to the Filed tab.`);
+                  if (layout === 'b') flash(`Stamped FILED as b/${id} and moved to Filed.`);
                   else if (!showFiled) flash(`Stamped FILED as b/${id} and hidden. Use "show" in the filed bar to see it again.`);
                 } else if (!id && bug.filed?.via === 'new') {
                   patchBug(bug.id, { filed: undefined });
@@ -1224,6 +1340,16 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
     if (/^[\d\W]{0,4}$/.test(t)) { const n = (b.note || '').replace(/\s+/g, ' ').trim(); return n.length > 110 ? `${n.slice(0, 109)}…` : (n || t); }
     return t;
   };
+  const bundleTesterSummary = (members: BugLog[]) => {
+    const counts = new Map<string, number>();
+    members.forEach(m => {
+      const name = (m.testerName || '').trim() || 'Unknown';
+      counts.set(name, (counts.get(name) || 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .map(([name, c]) => (c > 1 ? `${name} ×${c}` : name))
+      .join(', ');
+  };
   const bugItem = (b: BugLog): Item => {
     const filed = isFiled(b);
     const repro = !filed && isReproRow(b);
@@ -1232,7 +1358,7 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
     const kind: ItemKind = filed ? 'filed' : repro ? 'repro' : 'new';
     return {
       key: b.id, kind, ts: String(b.timestamp), bug: b,
-      title: `${bugTitle(b)}${best ? ` → b/${best.id}` : ''}`,
+      title: pipelineStage ? bugTitle(b) : `${bugTitle(b)}${best ? ` → b/${best.id}` : ''}`,
       cuj: b.feature || 'General',
       priority: draftFor(b).priority,
       tag: kind === 'filed' ? 'Filed' : kind === 'repro' ? (best ? `Repro'd · ${Math.round(best.confidence)}%` : "Repro'd") : 'New',
@@ -1245,9 +1371,12 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
     const filed = groupIsFiled(g);
     const repro = !filed && isReproGroup(g);
     const best = repro ? groupMatches(g)?.candidates[0] : undefined;
+    const newestMemberTs = g.members
+      .map(m => String(m.timestamp || ''))
+      .sort((a, b) => b.localeCompare(a))[0] || '';
     return {
-      key: g.bundle.id, kind: filed ? 'filed' : 'bundle', ts: String(g.members[g.members.length - 1]?.timestamp || ''), group: g,
-      title: `${g.bundle.title}${best ? ` → b/${best.id}` : ''}`,
+      key: g.bundle.id, kind: filed ? 'filed' : 'bundle', ts: newestMemberTs, group: g,
+      title: pipelineStage ? g.bundle.title : `${g.bundle.title}${best ? ` → b/${best.id}` : ''}`,
       cuj: bundleCuj(g.members),
       priority: megaDraftFor(g).priority,
       tag: filed ? `Filed · ×${g.members.length}` : `Bundle ×${g.members.length}${best ? ` · ${Math.round(best.confidence)}%` : ''}`,
@@ -1275,21 +1404,196 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
   const groupItems = shownGroups.map(groupItem);
   const waitItems = waitingEntries.map(waitingItem);
   const toFileItems = bugItems.filter(x => x.kind === 'new');
-  const reproItems = [...bugItems.filter(x => x.kind === 'repro'), ...groupItems.filter(x => x.kind === 'bundle' && x.group && isReproGroup(x.group))];
+  const reproItems = pipelineStage
+    ? bugItems.filter(x => x.kind === 'repro')
+    : [...bugItems.filter(x => x.kind === 'repro'), ...groupItems.filter(x => x.kind === 'bundle' && x.group && isReproGroup(x.group))];
   const bundleItems = groupItems.filter(x => x.kind === 'bundle');
   const filedItems = [...filtered.filter(isFiled).map(bugItem), ...filedGroups.map(groupItem)].sort(byNewest);
-  const allItems = [...waitItems, ...bugItems, ...groupItems].sort(byNewest);
+  const allItems = [...waitItems, ...bugItems.filter(x => x.kind !== 'filed'), ...groupItems.filter(x => x.kind !== 'filed')].sort(byNewest);
   const itemsFor = (f: ListFilter | TabKey): Item[] => {
     switch (f) {
-      case 'tofile': return toFileItems.sort(byNewest);
-      case 'reprod': return reproItems.sort(byNewest);
-      case 'bundles': return bundleItems.sort(byNewest);
+      case 'tofile': return toFileItems;
+      case 'reprod': return reproItems;
+      case 'bundles': return bundleItems;
       case 'waiting': return waitItems;
       case 'filed': return filedItems;
       default: return allItems;
     }
   };
-  const listItems = layout === 'b' ? itemsFor(tab) : itemsFor(listFilter);
+  const listItems = pipelineStage === 'filed'
+    ? filedItems
+    : pipelineStage === 'ready'
+    ? itemsFor(listFilter)
+    : layout === 'b'
+    ? itemsFor(tab)
+    : itemsFor(listFilter);
+
+  useEffect(() => {
+    onCountsChange?.({ ready: allItems.length, filed: filedItems.length });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allItems.length, filedItems.length]);
+
+  const itemLeadBug = (it: Item): BugLog =>
+    it.bug || it.group?.members[0] || it.entry?.members[0] || ({ id: it.key, timestamp: it.ts, note: it.title } as BugLog);
+
+  // Grouped sections for pipeline mode (Time / Tester / Device / CUJ)
+  const groupedListSections = useMemo(() => {
+    const getDayStr = getLocalDateStrProp || localDay;
+    const todayDateStr = todayStrProp || getDayStr(new Date().toISOString());
+    const yesterdayDate = new Date();
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterdayStr = getDayStr(yesterdayDate.toISOString());
+
+    let maxRowMs = 0;
+    listItems.forEach(it => {
+      const ms = new Date(it.ts || itemLeadBug(it).timestamp || '').getTime();
+      if (!isNaN(ms) && ms > maxRowMs) maxRowMs = ms;
+    });
+    const refNowMs = maxRowMs > 0 ? Math.max(nowMs, maxRowMs) : nowMs;
+
+    if (feedGroupBy === 'time') {
+      const map = new Map<string, { key: string; label: string; count: number; rightMeta?: string; rows: Item[] }>();
+      listItems.forEach(it => {
+        const d = new Date(it.ts || itemLeadBug(it).timestamp || '');
+        const ms = d.getTime();
+        const dayStr = !isNaN(ms) ? getDayStr(d.toISOString()) : '';
+        let key = 'older';
+        let label = 'OLDER';
+        if (dayStr === todayDateStr) {
+          if (!isNaN(ms) && refNowMs - ms <= 60 * 60 * 1000) {
+            key = 'last-hour';
+            label = 'LAST HOUR';
+          } else {
+            key = 'earlier-today';
+            label = 'EARLIER TODAY';
+          }
+        } else if (dayStr === yesterdayStr) {
+          key = 'yesterday';
+          label = 'YESTERDAY';
+        } else if (dayStr) {
+          key = `day-${dayStr}`;
+          label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase();
+        }
+        let sec = map.get(key);
+        if (!sec) {
+          sec = { key, label, count: 0, rows: [] };
+          map.set(key, sec);
+        }
+        sec.count += 1;
+        sec.rows.push(it);
+      });
+      return Array.from(map.values());
+    }
+
+    if (feedGroupBy === 'tester') {
+      const map = new Map<
+        string,
+        { key: string; label: string; count: number; devices: Set<string>; latestIso?: string; latestMs: number; rows: Item[] }
+      >();
+      listItems.forEach(it => {
+        const b = itemLeadBug(it);
+        const rawTester = (b.testerName || (b as any).reporter || '').trim() || 'Unknown';
+        const k = rawTester.toLowerCase();
+        let sec = map.get(k);
+        if (!sec) {
+          sec = {
+            key: `tester-${k}`,
+            label: rawTester.toUpperCase(),
+            count: 0,
+            devices: new Set<string>(),
+            latestIso: undefined,
+            latestMs: 0,
+            rows: [],
+          };
+          map.set(k, sec);
+        }
+        sec.count += 1;
+        if (b.deviceName && b.deviceName.trim()) sec.devices.add(b.deviceName.trim());
+        const ms = new Date(it.ts || b.timestamp || '').getTime();
+        if (!isNaN(ms) && ms > sec.latestMs) {
+          sec.latestMs = ms;
+          sec.latestIso = it.ts || b.timestamp;
+        }
+        sec.rows.push(it);
+      });
+      const list = Array.from(map.values());
+      if (sortByDevice === 'tester-most') {
+        list.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+      } else {
+        list.sort((a, b) => a.label.localeCompare(b.label));
+      }
+      return list.map(s => {
+        const devStr = Array.from(s.devices).join(', ');
+        const latestStr = s.latestIso ? `latest ${fmtTime(s.latestIso)}` : '';
+        return {
+          key: s.key,
+          label: s.label,
+          count: s.count,
+          rightMeta: [devStr, latestStr].filter(Boolean).join(' · '),
+          rows: s.rows,
+        };
+      });
+    }
+
+    if (feedGroupBy === 'device') {
+      const map = new Map<string, { key: string; label: string; count: number; latestIso?: string; latestMs: number; rows: Item[] }>();
+      listItems.forEach(it => {
+        const b = itemLeadBug(it);
+        const rawDev = (b.deviceName || '').trim() || 'Unspecified';
+        const k = rawDev.toLowerCase();
+        let sec = map.get(k);
+        if (!sec) {
+          sec = { key: `device-${k}`, label: rawDev.toUpperCase(), count: 0, latestIso: undefined, latestMs: 0, rows: [] };
+          map.set(k, sec);
+        }
+        sec.count += 1;
+        const ms = new Date(it.ts || b.timestamp || '').getTime();
+        if (!isNaN(ms) && ms > sec.latestMs) {
+          sec.latestMs = ms;
+          sec.latestIso = it.ts || b.timestamp;
+        }
+        sec.rows.push(it);
+      });
+      return Array.from(map.values())
+        .sort((a, b) => a.label.localeCompare(b.label))
+        .map(s => ({
+          key: s.key,
+          label: s.label,
+          count: s.count,
+          rightMeta: s.latestIso ? `latest ${fmtTime(s.latestIso)}` : undefined,
+          rows: s.rows,
+        }));
+    }
+
+    // feedGroupBy === 'cuj'
+    const map = new Map<string, { key: string; label: string; count: number; latestIso?: string; latestMs: number; rows: Item[] }>();
+    listItems.forEach(it => {
+      const rawCuj = (it.cuj || '').trim() || 'General';
+      const k = rawCuj.toLowerCase();
+      let sec = map.get(k);
+      if (!sec) {
+        sec = { key: `cuj-${k}`, label: rawCuj.toUpperCase(), count: 0, latestIso: undefined, latestMs: 0, rows: [] };
+        map.set(k, sec);
+      }
+      sec.count += 1;
+      const ms = new Date(it.ts || '').getTime();
+      if (!isNaN(ms) && ms > sec.latestMs) {
+        sec.latestMs = ms;
+        sec.latestIso = it.ts;
+      }
+      sec.rows.push(it);
+    });
+    return Array.from(map.values())
+      .sort((a, b) => a.label.localeCompare(b.label))
+      .map(s => ({
+        key: s.key,
+        label: s.label,
+        count: s.count,
+        rightMeta: s.latestIso ? `latest ${fmtTime(s.latestIso)}` : undefined,
+        rows: s.rows,
+      }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listItems, feedGroupBy, todayStrProp, nowMs, sortByDevice]);
 
   const renderItemDetail = (it: Item, stack = false) => {
     if (it.entry) return renderWaiting(it.entry);
@@ -1303,26 +1607,254 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
   const renderCompactRow = (it: Item, mode: 'expand' | 'select') => {
     const open = mode === 'expand' ? expandedKeys.has(it.key) : selectedKey === it.key;
     const onRow = () => (mode === 'expand' ? toggleExpanded(it.key) : setSelectedKey(it.key));
+    const leadB = itemLeadBug(it);
+    const reproMatches = it.kind === 'repro' ? (it.bug ? matchesFor(it.bug) : it.group ? groupMatches(it.group) : undefined) : undefined;
+    const customReproId = normalizeIssueId(customReproIssue[it.key] || '');
+    const bestReproCand: ReproCandidate | undefined = customReproId
+      ? { id: customReproId, title: 'Existing Buganizer issue', verdict: 'possible', confidence: 100, reason: 'Custom issue ID' }
+      : reproMatches?.candidates.find(c => c.id === picked[it.key]) || reproMatches?.candidates[0];
+    const filedInfo = it.kind === 'filed'
+      ? (it.bug ? effectiveFiled(it.bug) : it.group ? effectiveFiled(it.group.members[0]) : undefined)
+      : undefined;
+
     return (
       <div key={it.key} data-item-key={it.key}>
         <div data-testid="row-compact" data-kind={it.kind} role="button" tabIndex={0} onClick={onRow}
           onKeyDown={e => { if (e.key === 'Enter') onRow(); }}
           className={`${rowCls} ${open ? (mode === 'select' ? 'bg-[#13203a] shadow-[inset_3px_0_0_#3b82f6]' : rowOpenCls) : ''}`}>
           {mode === 'expand' && (it.selectable ? (
-            <input type="checkbox" aria-label={`Select ${it.key}`} className="accent-blue-500" checked={selected.has(it.key)}
+            <input type="checkbox" aria-label={`Select ${it.key}`} className="accent-blue-500 flex-shrink-0 cursor-pointer" checked={selected.has(it.key)}
               onClick={e => e.stopPropagation()} onChange={() => toggle(it.key)} />
-          ) : <span className="w-[13px]" />)}
-          <span className={`${tagCls} ${KIND_TAG[it.kind]}`}>{mode === 'select' ? it.shortTag : it.tag}</span>
-          {it.bug && !bugReviewed(it.bug) && <UnreviewedDot />}
-          <span className="flex-1 min-w-0 truncate text-slate-100">{it.title}</span>
-          {mode === 'expand' && <span className="hidden md:inline text-[11.5px] text-slate-400 truncate max-w-[180px]">{it.cuj}</span>}
-          {mode === 'expand' && it.priority && <span className="text-[10.5px] rounded-md px-1.5 py-0.5 font-semibold bg-slate-800 text-slate-300">{it.priority}</span>}
-          <span className="text-[10.5px] text-slate-400 w-[58px] text-right whitespace-nowrap">{fmtTime(it.ts)}</span>
+          ) : <span className="w-[13px] flex-shrink-0" />)}
+          <span className="font-mono text-[10.5px] text-slate-400 w-[58px] whitespace-nowrap flex-shrink-0">
+            {fmtTime(it.ts)}
+          </span>
+          {it.kind === 'new' && (
+            <span data-testid="ready-kind-badge" className="font-mono text-[10px] px-2 py-0.5 rounded-md border font-bold uppercase tracking-wide whitespace-nowrap bg-blue-500/15 text-blue-300 border-blue-500/40">
+              NEW ISSUE
+            </span>
+          )}
+          {it.kind === 'repro' && (
+            <span data-testid="ready-kind-badge" className="font-mono text-[10px] px-2 py-0.5 rounded-md border font-bold uppercase tracking-wide whitespace-nowrap bg-amber-500/15 text-amber-300 border-amber-500/40">
+              REPRO'D
+            </span>
+          )}
+          {it.kind === 'bundle' && (
+            <span data-testid="ready-kind-badge" className="font-mono text-[10px] px-2 py-0.5 rounded-md border font-bold uppercase tracking-wide whitespace-nowrap bg-teal-500/15 text-teal-300 border-teal-500/40">
+              BUNDLE · {it.group?.members.length || 2}
+            </span>
+          )}
+          {it.kind === 'waiting' && (
+            <span data-testid="ready-kind-badge" className={`font-mono text-[10px] px-2 py-0.5 rounded-md border font-bold uppercase tracking-wide whitespace-nowrap ${
+              it.entry?.pending.expired
+                ? 'bg-rose-500/15 text-rose-300 border-rose-500/40'
+                : 'bg-amber-500/15 text-amber-200 border-amber-500/40'
+            }`}>
+              {it.entry?.pending.expired ? 'NOT FOUND' : 'WAITING FOR b/'}
+            </span>
+          )}
+          {it.kind === 'filed' && (
+            <>
+              <span data-testid="ready-kind-badge" className="font-mono text-[10px] px-2 py-0.5 rounded-md border font-bold uppercase tracking-wide whitespace-nowrap bg-emerald-500/15 text-emerald-300 border-emerald-500/40">
+                FILED{it.group ? ` · ×${it.group.members.length}` : ''}
+              </span>
+              {filedInfo?.issueId && (
+                <a
+                  href={issueUrl(filedInfo.issueId)}
+                  target="_blank"
+                  rel="noreferrer"
+                  data-testid="filed-b-link"
+                  onClick={e => e.stopPropagation()}
+                  className="font-mono text-[11px] font-bold text-emerald-300 hover:underline whitespace-nowrap flex-shrink-0"
+                >
+                  b/{filedInfo.issueId}
+                </a>
+              )}
+              {filedInfo?.via === 'follow-up' && (
+                <span data-testid="filed-followup-pill" className="font-mono text-[10px] px-1.5 py-0.5 rounded border border-violet-500/40 bg-violet-500/10 text-violet-200 whitespace-nowrap flex-shrink-0">
+                  follow-up
+                </span>
+              )}
+            </>
+          )}
+          {!it.group && !it.entry?.group && (
+            <span className="hidden md:inline text-[11.5px] text-slate-400 truncate max-w-[145px] flex-shrink-0">
+              {feedGroupBy === 'tester'
+                ? leadB.deviceName || '?'
+                : feedGroupBy === 'device'
+                ? leadB.testerName || 'Unknown'
+                : `${leadB.testerName || 'Unknown'} · ${leadB.deviceName || '?'}`}
+            </span>
+          )}
+          <span className="flex-1 min-w-0 truncate text-slate-100">
+            {it.title}
+            {it.group && (
+              <span className="text-slate-400 font-normal"> · {bundleTesterSummary(it.group.members)}</span>
+            )}
+            {it.kind === 'waiting' && it.entry && (
+              <span className="text-[11px] font-normal text-amber-300/90 ml-1.5">
+                · opened in Buganizer {minutesAgo(it.entry.pending.openedAt)}
+              </span>
+            )}
+          </span>
+          {it.kind === 'repro' && (
+            bestReproCand ? (
+              <span
+                data-testid="repro-inline-match"
+                className="hidden sm:inline-flex items-center gap-1.5 text-[11.5px] text-slate-400 truncate max-w-[300px] flex-shrink-0"
+              >
+                <span className="text-slate-500">RX95 match:</span>
+                <a
+                  href={issueUrl(bestReproCand.id)}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={e => e.stopPropagation()}
+                  className="font-mono font-bold text-amber-300 hover:underline flex-shrink-0"
+                >
+                  b/{bestReproCand.id}
+                </a>
+                <span className="truncate text-slate-300">"{bestReproCand.title}"</span>
+                <span className="text-[10.5px] text-amber-200/80 flex-shrink-0">
+                  ({Math.round(bestReproCand.confidence)}%)
+                </span>
+              </span>
+            ) : (
+              <span
+                data-testid="repro-inline-match"
+                className="hidden sm:inline-flex items-center gap-1 text-[11px] text-slate-500 flex-shrink-0"
+              >
+                Pick or type b/…
+              </span>
+            )
+          )}
           {mode === 'expand' && (
-            <button type="button" className={rowActionCls}
-              onClick={e => { e.stopPropagation(); setExpandedKeys(prev => new Set(prev).add(it.key)); }}>
-              {it.action}
-            </button>
+            <span className="hidden lg:inline text-[11.5px] text-slate-400 truncate max-w-[160px] flex-shrink-0">
+              {it.cuj}
+            </span>
+          )}
+          {mode === 'expand' && it.priority && it.priority !== 'P2' && (
+            <span className="font-mono text-[10px] px-2 py-0.5 rounded-full border font-bold uppercase bg-rose-500/20 text-rose-300 border-rose-500/40 flex-shrink-0">
+              {it.priority}
+            </span>
+          )}
+          {mode === 'expand' && (
+            <div className="flex items-center gap-1.5 flex-shrink-0" onClick={e => e.stopPropagation()}>
+              {(it.kind === 'new' || it.kind === 'bundle') && (
+                <>
+                  <button
+                    type="button"
+                    data-testid="ready-edit-draft"
+                    className={rowActionCls}
+                    onClick={() => toggleExpanded(it.key)}
+                  >
+                    Edit draft
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="ready-open-buganizer"
+                    className="px-2.5 h-6 rounded-lg text-[11px] font-bold bg-blue-600 hover:bg-blue-500 text-white whitespace-nowrap cursor-pointer"
+                    onClick={() => {
+                      const d = it.group ? megaDraftFor(it.group) : draftFor(it.bug!);
+                      setAllowOpen(false);
+                      setPreviewExpanded(new Set([d.bugId]));
+                      setPreview([d]);
+                    }}
+                  >
+                    Open in Buganizer
+                  </button>
+                </>
+              )}
+              {it.kind === 'repro' && (
+                <>
+                  <button
+                    type="button"
+                    data-testid="repro-other-match"
+                    className={rowActionCls}
+                    onClick={() => toggleExpanded(it.key)}
+                  >
+                    Other match ▾
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="repro-add-followup"
+                    className="px-2.5 h-6 rounded-lg text-[11px] font-bold bg-amber-500/20 border border-amber-500/50 text-amber-200 hover:bg-amber-500/30 whitespace-nowrap cursor-pointer"
+                    onClick={() => {
+                      if (bestReproCand) {
+                        if (it.group) followUpBundle(it.group, bestReproCand);
+                        else if (it.bug) followUp(it.bug, bestReproCand);
+                      } else {
+                        setExpandedKeys(prev => new Set(prev).add(it.key));
+                      }
+                    }}
+                  >
+                    Add follow-up
+                  </button>
+                </>
+              )}
+              {it.kind === 'waiting' && it.entry && (
+                <>
+                  <input
+                    type="text"
+                    data-testid="waiting-inline-issue"
+                    aria-label="Filed b/ issue number"
+                    placeholder="b/ 382910441"
+                    value={waitingIssue[it.entry.key] ?? it.entry.pending.issueId ?? ''}
+                    onChange={ev => setWaitingIssue(prev => ({ ...prev, [it.entry!.key]: ev.target.value }))}
+                    onBlur={ev => setWaitingIssue(prev => ({ ...prev, [it.entry!.key]: normalizeIssueId(ev.target.value) }))}
+                    className="w-28 h-6 bg-[#0b1120] border border-slate-700 rounded-lg px-2 text-[11px] text-slate-100 font-mono focus:outline-none focus:border-blue-500"
+                  />
+                  <button
+                    type="button"
+                    data-testid="waiting-inline-mark-filed"
+                    onClick={() => {
+                      const ent = it.entry!;
+                      const p = ent.pending;
+                      const via = p.kind === 'follow-up' ? 'follow-up' : p.kind === 'bundle' ? 'bundle' : 'new';
+                      const id = normalizeIssueId(waitingIssue[ent.key] || p.issueId || '');
+                      const members = ent.group ? ent.group.members : ent.members;
+                      forMembers(members, () => ({ filed: newFiled(via, id || undefined), filePending: undefined }));
+                    }}
+                    className="px-2.5 h-6 rounded-lg text-[11px] font-bold bg-emerald-500/20 border border-emerald-500/50 text-emerald-200 hover:bg-emerald-500/30 whitespace-nowrap cursor-pointer"
+                  >
+                    Mark filed
+                  </button>
+                </>
+              )}
+              {it.kind === 'filed' && (
+                <>
+                  <button
+                    type="button"
+                    data-testid="filed-move-back"
+                    className={rowActionCls}
+                    onClick={() => {
+                      if (it.group) {
+                        forMembers(it.group.members, m => ({
+                          filed: undefined,
+                          ...(m.status === 'Filed' ? { status: 'New' as const } : {}),
+                        }));
+                        flash('Moved bundle back to ② Ready to file.');
+                      } else if (it.bug) {
+                        patchBug(it.bug.id, {
+                          filed: undefined,
+                          ...(it.bug.status === 'Filed' ? { status: 'New' as const } : {}),
+                        });
+                        updateDraft(it.bug, { state: 'ready', issueId: undefined });
+                        flash('Moved back to ② Ready to file.');
+                      }
+                    }}
+                  >
+                    ↩ Move back
+                  </button>
+                  <button
+                    type="button"
+                    className={rowActionCls}
+                    onClick={() => toggleExpanded(it.key)}
+                  >
+                    View
+                  </button>
+                </>
+              )}
+            </div>
           )}
         </div>
         {mode === 'expand' && open && <div className={expandedCls} data-testid="row-expanded">{renderItemDetail(it)}</div>}
@@ -1340,7 +1872,12 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
     const tabKey = order.find(k => itemsFor(k).some(holds));
     if (!tabKey) { flash('That report is hidden by the plan / day / search filters here.'); return; }
     const it = itemsFor(tabKey).find(holds)!;
-    if (tabKey === 'filed') setShowFiled(true);
+    if (tabKey === 'filed') {
+      setShowFiled(true);
+      onStageChange?.('filed');
+    } else {
+      onStageChange?.('ready');
+    }
     setTab(tabKey);
     setListFilter('all');
     setExpandedKeys(prev => new Set(prev).add(it.key));
@@ -1619,23 +2156,63 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
     { key: 'filed', label: 'Filed', count: filedItems.length },
   ];
 
+  const kindChips: Array<{ key: ListFilter; label: string; count: number; testid: string }> = [
+    { key: 'all', label: 'All', count: allItems.length, testid: 'ready-filter-all' },
+    { key: 'tofile', label: 'New issue', count: toFileItems.length, testid: 'ready-filter-new' },
+    { key: 'reprod', label: "Repro'd", count: reproItems.length, testid: 'ready-filter-repro' },
+    { key: 'bundles', label: 'Bundle', count: bundleItems.length, testid: 'ready-filter-bundle' },
+    { key: 'waiting', label: 'Waiting for b/', count: waitItems.length, testid: 'ready-filter-waiting' },
+  ];
+
   return (
-    <div className="space-y-4" data-testid="buganizer-triage" data-layout={layout}>
-      {/* Header: status chips + layout switch + filters */}
-      <div className="flex flex-wrap items-center gap-2">
-        {renderStatusChips()}
-        <div className="flex-1" />
-        {layout === 'b' ? <>{planSelect}{dayInput}</> : renderFiltersPopover()}
-        {searchBox}
-      </div>
+    <div className="space-y-3" data-testid="buganizer-triage" data-layout={layout} data-pipeline-stage={pipelineStage || ''}>
+      {!pipelineStage && (
+        <div className="flex flex-wrap items-center gap-2">
+          {renderStatusChips()}
+          <div className="flex-1" />
+          {layout === 'b' ? <>{planSelect}{dayInput}</> : renderFiltersPopover()}
+          {searchBox}
+        </div>
+      )}
+
+      {pipelineStage === 'ready' && (
+        <div className="flex flex-wrap items-center gap-1.5 text-xs" data-testid="ready-kind-chips">
+          <span className="text-[11px] font-semibold text-slate-400 mr-1">Show:</span>
+          {kindChips.map(ch => {
+            const active = listFilter === ch.key;
+            return (
+              <button
+                key={ch.key}
+                type="button"
+                data-testid={ch.testid}
+                onClick={() => setListFilter(ch.key)}
+                className={`px-2.5 h-7 rounded-lg text-xs font-semibold border transition cursor-pointer inline-flex items-center gap-1.5 ${
+                  active
+                    ? 'bg-blue-600/20 border-blue-500/60 text-white'
+                    : 'bg-[#0f172a] border-slate-800 text-slate-300 hover:bg-slate-800/80'
+                }`}
+              >
+                <span>{ch.label}</span>
+                <span className={`font-mono text-[10.5px] px-1.5 py-0.2 rounded-full ${active ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'}`}>
+                  {ch.count}
+                </span>
+              </button>
+            );
+          })}
+          <span className="hidden xl:inline text-[11px] text-slate-500 ml-auto">
+            New issue = file a new Buganizer bug · Repro'd = add follow-up to an existing b/ · Bundle = N reports filed as one bug
+          </span>
+        </div>
+      )}
+
       {popupHelp}
 
-      {layout === 'b' && (
+      {!pipelineStage && layout === 'b' && (
         <TabBar tabs={tabDefs.map(t => ({ ...t, testid: `layout-tab-${t.key}` }))} active={tab} onChange={setTab} testid="buganizer-tabs" />
       )}
 
-      {/* Same-day bundle SUGGESTIONS live on the Bugs Feed (BundleSuggestionsPanel); this tab shows confirmed bundles only. */}
-      {renderBulkBar()}
+      {/* Same-day bundle SUGGESTIONS live in ① To review; ② Ready to file shows confirmed bundles. */}
+      {pipelineStage !== 'filed' && renderBulkBar()}
 
       {layout === 'c' ? (
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] gap-4 items-start">
@@ -1646,9 +2223,69 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
         </div>
       ) : (
         <div className={listBoxCls} data-testid="item-list">
-          {listItems.length === 0
-            ? emptyList((layout === 'b' ? tab : listFilter) === 'bundles' ? "No confirmed bundles yet. RX95's bundle suggestions are on the Bugs Feed." : undefined)
-            : listItems.map(it => renderCompactRow(it, 'expand'))}
+          {listItems.length === 0 ? (
+            emptyList(
+              pipelineStage === 'filed'
+                ? 'No filed bugs for these filters yet.'
+                : listFilter === 'bundles'
+                ? "No confirmed bundles yet. RX95's bundle suggestions are reviewed in ① To review."
+                : 'No reviewed bugs ready to file for these filters.'
+            )
+          ) : pipelineStage ? (
+            groupedListSections.map(sec => {
+              const isLongGroup = feedGroupBy !== 'time' && sec.rows.length > 3;
+              const isGroupExpanded = !!expandedGroups[sec.key];
+              const shownRows = isLongGroup && !isGroupExpanded ? sec.rows.slice(0, 3) : sec.rows;
+              const hiddenCount = sec.rows.length - shownRows.length;
+              return (
+                <div key={sec.key} data-testid="feed-group" data-group-key={sec.key}>
+                  <div
+                    data-testid="feed-group-header"
+                    className="px-3.5 py-2 bg-[#0b1120] border-b border-slate-800/80 flex items-center justify-between text-[10.5px] font-bold tracking-wider uppercase text-slate-400"
+                  >
+                    <span>
+                      <span className="text-slate-200">{sec.label}</span>{' '}
+                      <span className="text-slate-500">· {sec.count}</span>
+                    </span>
+                    {sec.rightMeta && (
+                      <span className="font-normal normal-case tracking-normal text-[11px] text-slate-400">
+                        {sec.rightMeta}
+                      </span>
+                    )}
+                  </div>
+                  {shownRows.map(it => renderCompactRow(it, 'expand'))}
+                  {isLongGroup && (
+                    <div className="px-3.5 py-2 bg-[#0b1120]/60 border-b border-slate-800/80 text-[11px] text-slate-400">
+                      {hiddenCount > 0 ? (
+                        <>
+                          <span>+{hiddenCount} more · </span>
+                          <button
+                            type="button"
+                            data-testid="feed-group-show-all"
+                            onClick={() => setExpandedGroups(prev => ({ ...prev, [sec.key]: true }))}
+                            className="text-blue-400 hover:text-blue-300 font-semibold cursor-pointer"
+                          >
+                            show all
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          data-testid="feed-group-collapse"
+                          onClick={() => setExpandedGroups(prev => ({ ...prev, [sec.key]: false }))}
+                          className="text-slate-400 hover:text-slate-200 font-semibold cursor-pointer"
+                        >
+                          show less
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          ) : (
+            listItems.map(it => renderCompactRow(it, 'expand'))
+          )}
         </div>
       )}
 

@@ -455,15 +455,27 @@ async function runE2ESmoke() {
     await testerFilterBtn.click();
     await new Promise(r => setTimeout(r, 100));
 
-    const buganizerTabBtn = await page.$('[data-testid="buganizer-tab"]');
-    assert.ok(buganizerTabBtn, 'Buganizer sub-tab [data-testid="buganizer-tab"] must exist');
-    await buganizerTabBtn.click();
+    // Verify 3-stage pipeline tabs (① To review -> R mark reviewed -> ② Ready to file -> ③ Filed)
+    const reviewTabBtn = await page.$('[data-testid="pipeline-tab-review"]');
+    const readyTabBtn = await page.$('[data-testid="pipeline-tab-ready"]');
+    const filedTabBtn = await page.$('[data-testid="pipeline-tab-filed"]');
+    assert.ok(
+      reviewTabBtn && readyTabBtn && filedTabBtn,
+      'Pipeline stage tabs ① To review, ② Ready to file, and ③ Filed must exist'
+    );
+
+    // Press R to mark the focused bug reviewed so it moves to ② Ready to file
+    await page.keyboard.press('r');
+    await new Promise(r => setTimeout(r, 150));
+
+    await readyTabBtn.click();
     await new Promise(r => setTimeout(r, 250));
 
     const buganizerText = await page.evaluate(() => document.body.innerText);
     assert.ok(
-      buganizerText.includes('E2E notification banner flicker on HUD'),
-      'Buganizer tab must render the logged bug'
+      buganizerText.includes('E2E notification banner flicker on HUD') &&
+        buganizerText.includes('NEW ISSUE'),
+      '② Ready to file stage must render the reviewed bug with NEW ISSUE badge'
     );
 
     // 8. Verify M4 Undo Delete toast (delete plan via ⋯ menu -> hidden + toast -> Undo -> restored in place)

@@ -159,14 +159,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
       plans: c.totalPlans,
       floor: floorBadgeLabel,
       cuj: cujBadgeLabel,
-      bugs: c.unreviewedBugsCount,
+      bugs: c.newFeedBugs.length,
     });
   }, [
     onTabCountsChange,
     c.totalPlans,
     floorBadgeLabel,
     cujBadgeLabel,
-    c.unreviewedBugsCount,
+    c.newFeedBugs.length,
   ]);
 
   return (
