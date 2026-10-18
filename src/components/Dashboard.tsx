@@ -499,7 +499,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const lastAutoCheckedReplyRef = useRef<string>('');
   const [selectedImagePreviewUrl, setSelectedImagePreviewUrl] = useState<string | null>(null);
 
-  // Google Sheets Integration & Smart Categorization Settings
+  // Smart Categorization Settings
   const [bugCategorizations, setBugCategorizations] = useState<Record<string, {
     bugType?: 'Bug' | 'Setup Issue' | 'Known Issue' | 'Feature Request' | 'Misc Issue';
     priority?: 'P0' | 'P1' | 'P2';
