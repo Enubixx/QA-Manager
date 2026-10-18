@@ -404,7 +404,7 @@ export function App() {
       }
       const todayStr = getLocalDateStr();
       const validArchivedRuns = normalizeRuns(cloudData.archivedRuns || []).filter(r => {
-        if (!r || !r.id || isArchivedRunDeleted(r.id) || isTestRunDeleted(r.id)) return false;
+        if (!r || !r.id || isArchivedRunDeleted(r.id)) return false;
         const stepEntries = Object.entries(r.results || {}).filter(
           ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
         );
@@ -422,7 +422,7 @@ export function App() {
 
       // Filter out empty ghost runs, already-archived runs, tombstoned runs, and prior-day orphaned in_progress runs
       const validTestRuns = normalizeRuns(cloudData.testRuns || []).filter(r => {
-        if (!r || !r.id || isTestRunDeleted(r.id)) return false;
+        if (!r || !r.id || isTestRunDeleted(r.id) || isArchivedRunDeleted(r.id)) return false;
         if (archivedIdSet.has(r.id) || r.status === 'completed') {
           safeDeleteTestRun(r.id);
           return false;

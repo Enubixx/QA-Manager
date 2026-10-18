@@ -236,7 +236,7 @@ export const fetchAllSupabaseData = async () => {
     const testRuns: TestRun[] = (runsRes.data || [])
       .filter((item: any) => {
         if (!item || typeof item.id !== 'string') return false;
-        if (deletedRunIds.has(item.id)) return false;
+        if (deletedRunIds.has(item.id) || deletedArchivedIds.has(item.id)) return false;
         if (archivedIdSet.has(item.id)) {
           // Clean up zombie row in test_runs that is already archived
           supabase!.from('test_runs').delete().eq('id', item.id).then(() => {}, () => {});
@@ -434,7 +434,8 @@ export const syncTestRunToSupabase = async (run: TestRun) => {
 };
 
 export const syncArchivedRunToSupabase = async (run: TestRun) => {
-  if (run?.id) markTestRunDeleted(run.id);
+  if (!run?.id || isArchivedRunDeleted(run.id)) return;
+  markTestRunDeleted(run.id);
   if (!supabase || !isSupabaseConfigured) return;
   try {
     const basePayload: any = {
@@ -459,6 +460,10 @@ export const syncArchivedRunToSupabase = async (run: TestRun) => {
     if (error && (run.deviceId !== undefined || run.durationMs !== undefined)) {
       const retry = await supabase.from('archived_runs').upsert(basePayload);
       error = retry.error;
+    }
+    if (isArchivedRunDeleted(run.id)) {
+      await supabase.from('archived_runs').delete().eq('id', run.id);
+      return;
     }
     if (error) {
       console.error('syncArchivedRunToSupabase error:', error);

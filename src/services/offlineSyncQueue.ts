@@ -139,7 +139,10 @@ const notifyQueueChange = (count: number) => {
 };
 
 export const enqueueOfflineMutation = (type: OfflineMutationType, payload: any) => {
-  if (type === 'syncTestRun' && (!payload?.id || isTestRunDeleted(payload.id) || payload.status === 'completed')) {
+  if (type === 'syncTestRun' && (!payload?.id || isTestRunDeleted(payload.id) || isArchivedRunDeleted(payload.id) || payload.status === 'completed')) {
+    return;
+  }
+  if (type === 'syncArchivedRun' && (!payload?.id || isArchivedRunDeleted(payload.id))) {
     return;
   }
   const queue = getOfflineQueue();
@@ -243,7 +246,10 @@ export const drainOfflineQueue = async () => {
             await syncTestRunToSupabase(mut.payload as TestRun);
             break;
           case 'syncArchivedRun':
-            if (mut.payload?.id) markTestRunDeleted(mut.payload.id);
+            if (!mut.payload?.id || isArchivedRunDeleted(mut.payload.id)) {
+              break;
+            }
+            markTestRunDeleted(mut.payload.id);
             await syncArchivedRunToSupabase(mut.payload as TestRun);
             break;
           case 'syncBugLog':
