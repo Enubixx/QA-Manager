@@ -4982,7 +4982,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           {BUGANIZER_ENABLED && (
                             <button type="button" data-testid="feed-open-buganizer" className={smallBtnCls} onClick={() => openInBuganizer(bug.id)}>Open in Buganizer tab ↗</button>
                           )}
-                          <button type="button" data-testid="feed-delete-bug" onClick={() => onDeleteBug(bug.id)}
+                          <button type="button" data-testid="feed-delete-bug" onClick={() => {
+                              const label = (bug.title || '').trim() || (bug.note || '').trim().slice(0, 80) || 'this bug';
+                              if (confirm(`Delete bug "${label}"? This can't be undone.`)) onDeleteBug(bug.id);
+                            }}
                             className="ml-auto px-2 h-7 rounded-xl text-[11px] font-semibold text-slate-400 hover:text-rose-300 hover:bg-rose-950/40" title="Delete Bug Log">
                             <Trash2 className="w-3.5 h-3.5 inline mr-1" />Delete
                           </button>
