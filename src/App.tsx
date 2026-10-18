@@ -281,41 +281,6 @@ export function App() {
     } catch {}
   };
 
-  // Run initial synchronous auto-release pass so stuck sessions from localStorage are released on frame 0
-  const initialSweepRef = useRef<{
-    testRuns: TestRun[];
-    devices: DeviceProfile[];
-    releasedRuns: { run: TestRun; reason: 'previous-day' | 'idle' }[];
-    releasedDevices: DeviceProfile[];
-  } | null>(null);
-  if (!initialSweepRef.current) {
-    let rawRuns: TestRun[] = [];
-    let rawDevices: DeviceProfile[] = [];
-    let rawBugs: BugLog[] = [];
-    try {
-      const savedRuns = localStorage.getItem('qa_test_runs');
-      if (savedRuns) rawRuns = normalizeRuns(JSON.parse(savedRuns));
-    } catch {}
-    try {
-      const savedDevices = localStorage.getItem('qa_devices_list');
-      if (savedDevices) rawDevices = normalizeDevices(JSON.parse(savedDevices));
-    } catch {}
-    try {
-      const savedBugs = localStorage.getItem('qa_bug_logs');
-      if (savedBugs) rawBugs = normalizeBugs(JSON.parse(savedBugs));
-    } catch {}
-    const combinedRuns = mergeLocalInProgressRuns(rawRuns);
-    const sweep = autoReleaseStuckSessions(combinedRuns, rawDevices, Date.now(), AUTO_RELEASE_IDLE_MINUTES, rawBugs);
-    if (sweep.releasedRuns.length > 0 || sweep.releasedDevices.length > 0) {
-      clearInProgressCacheForReleasedRuns(sweep.releasedRuns);
-      safeSetStorageItem('qa_test_runs', JSON.stringify(sweep.testRuns));
-      if (sweep.releasedDevices.length > 0) {
-        safeSetStorageItem('qa_devices_list', JSON.stringify(sweep.devices));
-      }
-    }
-    initialSweepRef.current = sweep;
-  }
-
   // App State with LocalStorage persistence (starts empty by default)
   const [testPlans, setTestPlans] = useState<TestPlan[]>(() => {
     try {
@@ -325,13 +290,15 @@ export function App() {
     return [];
   });
 
-  const [testRuns, setTestRuns] = useState<TestRun[]>(() => initialSweepRef.current?.testRuns || []);
-
-  const [autoReleaseToast, setAutoReleaseToast] = useState<string | null>(() => {
-    const count = initialSweepRef.current?.releasedRuns.length || 0;
-    if (count <= 0) return null;
-    return count === 1 ? 'Released 1 stuck session' : `Released ${count} stuck sessions`;
+  const [testRuns, setTestRuns] = useState<TestRun[]>(() => {
+    try {
+      const saved = localStorage.getItem('qa_test_runs');
+      if (saved) return mergeLocalInProgressRuns(normalizeRuns(JSON.parse(saved)));
+    } catch (e) {}
+    return mergeLocalInProgressRuns([]);
   });
+
+  const [autoReleaseToast, setAutoReleaseToast] = useState<string | null>(null);
 
   const [archivedRuns, setArchivedRuns] = useState<TestRun[]>(() => {
     try {
@@ -374,7 +341,13 @@ export function App() {
   });
 
   // User-populated device profiles list (with readiness & plan quotas)
-  const [devices, setDevices] = useState<DeviceProfile[]>(() => initialSweepRef.current?.devices || []);
+  const [devices, setDevices] = useState<DeviceProfile[]>(() => {
+    try {
+      const saved = localStorage.getItem('qa_devices_list');
+      if (saved) return normalizeDevices(JSON.parse(saved));
+    } catch (e) {}
+    return [];
+  });
 
   // User-populated QA tester profiles list
   const [testers, setTesters] = useState<TesterProfile[]>(() => {
@@ -540,62 +513,38 @@ export function App() {
     return () => clearTimeout(t);
   }, [autoReleaseToast]);
 
-  // Sync any runs/devices released during initial synchronous sweep to Supabase once mounted
-  useEffect(() => {
-    const init = initialSweepRef.current;
-    if (!init) return;
-    if (init.releasedRuns.length > 0) {
-      init.releasedRuns.forEach(({ run }) => safeSyncTestRun(run));
-    }
-    if (init.releasedDevices.length > 0) {
-      init.releasedDevices.forEach(d => syncDeviceToSupabase(d));
-      safeSyncDevices(init.devices);
-    }
-  }, []);
-
-  // Idempotent local auto-release check (runs on poll, focus, visibilitychange, and load)
+  // Idempotent local auto-release check (runs on mount, poll, focus, and visibilitychange)
   const runLocalAutoReleaseSweep = () => {
     const now = Date.now();
     const mergedRuns = mergeLocalInProgressRuns(testRunsRef.current);
     const currentBugs = bugLogsRef.current;
-    const sweep = autoReleaseStuckSessions(mergedRuns, devicesRef.current, now, AUTO_RELEASE_IDLE_MINUTES, currentBugs);
+    const sweep = autoReleaseStuckSessions(
+      mergedRuns,
+      devicesRef.current,
+      now,
+      AUTO_RELEASE_IDLE_MINUTES,
+      currentBugs
+    );
     if (sweep.releasedRuns.length === 0 && sweep.releasedDevices.length === 0) return;
 
-    const actuallyReleased: { run: TestRun; reason: 'previous-day' | 'idle' }[] = [];
-    setTestRuns(prev => {
-      const mergedPrev = mergeLocalInProgressRuns(prev);
-      let changed = false;
-      const next = mergedPrev.map(r => {
-        if (!r || r.status !== 'in_progress') return r;
-        const reason = getAutoReleaseReason(r, now, AUTO_RELEASE_IDLE_MINUTES, currentBugs);
-        if (!reason) return r;
-        changed = true;
-        const terminated = markRunAutoReleased(r, reason, now);
-        actuallyReleased.push({ run: terminated, reason });
-        safeSyncTestRun(terminated);
-        return terminated;
-      });
-      if (!changed) return prev;
-      testRunsRef.current = next;
-      return next;
-    });
-
-    if (actuallyReleased.length > 0) {
-      clearInProgressCacheForReleasedRuns(actuallyReleased);
-      const count = actuallyReleased.length;
-      setAutoReleaseToast(count === 1 ? 'Released 1 stuck session' : `Released ${count} stuck sessions`);
+    if (sweep.releasedRuns.length > 0) {
+      testRunsRef.current = sweep.testRuns;
+      setTestRuns(sweep.testRuns);
+      safeSetStorageItem('qa_test_runs', JSON.stringify(sweep.testRuns));
+      clearInProgressCacheForReleasedRuns(sweep.releasedRuns);
+      sweep.releasedRuns.forEach(({ run }) => safeSyncTestRun(run));
+      const count = sweep.releasedRuns.length;
+      setAutoReleaseToast(
+        count === 1 ? 'Released 1 stuck session' : `Released ${count} stuck sessions`
+      );
     }
 
     if (sweep.releasedDevices.length > 0) {
-      setDevices(prev => {
-        const devSweep = autoReleaseStuckSessions(testRunsRef.current, prev, now, AUTO_RELEASE_IDLE_MINUTES, currentBugs);
-        if (devSweep.releasedDevices.length === 0) return prev;
-        devicesRef.current = devSweep.devices;
-        safeSetStorageItem('qa_devices_list', JSON.stringify(devSweep.devices));
-        devSweep.releasedDevices.forEach(d => syncDeviceToSupabase(d));
-        safeSyncDevices(devSweep.devices);
-        return devSweep.devices;
-      });
+      devicesRef.current = sweep.devices;
+      setDevices(sweep.devices);
+      safeSetStorageItem('qa_devices_list', JSON.stringify(sweep.devices));
+      sweep.releasedDevices.forEach(d => syncDeviceToSupabase(d));
+      safeSyncDevices(sweep.devices);
     }
   };
 
@@ -818,6 +767,7 @@ export function App() {
 
   useEffect(() => {
     let disposed = false;
+    runLocalAutoReleaseSweep();
     loadCloudData();
     let debounceTimer: any = null;
     const unsubscribe = subscribeToSupabaseRealtime(() => {
