@@ -1,40 +1,28 @@
-import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { createPortal } from 'react-dom';
-import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota, RefinedBugText, ReproMatches } from '../types';
-import { REPROD, TRIAGE_STATUS_OPTIONS, currentReproMatches, effectiveFiled, effectiveStatus, filedPatch, filedStampLine, newFiled, normalizeIssueId } from '../utils/reproFollowUp';
-import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers, ExternalLink, MessageSquareText, ClipboardPaste, Bot } from 'lucide-react';
-import { exportAllQADataToJSON } from '../utils/exportUtils';
-import { TabBar, Rx95LiveChip, TAG_STYLE, chipCls, chipOff, chipOn, expandedCls, inputCls, labelCls, listBoxCls, priTagCls, rowActionCls, rowCls, rowOpenCls, smallBtnCls, tagCls } from './triageUi';
-import { isReviewed, isStronglyReviewed, reviewedNow } from '../utils/bugReview';
-import { currentRefinement } from '../utils/bugRefine';
-import { isRunFullyCompleted, buildStepFirstSeenIndex, computeLiveInProgressRuns, computeTodayRunsMap, computeFleetProgress } from '../utils/runUtils';
-import { toLocalHHMM, withBugTime } from '../utils/bugTime';
-import { APP_VERSION_OPTIONS } from '../constants';
-import { ALL_PLANS, ALL_DATES, mergeRunsById, getKnownCujNames, computeCujReport, listReportDates, buildTimelinePoints, getPlanPickerOptions, buildCujReportText, buildReportScopeKey, formatReportDateLabel } from '../utils/cujReportUtils';
-import type { CujMetric } from '../utils/cujReportUtils';
-import { summarizeFeatureBugsWithGemini, summarizeOverallBugsWithGemini, generateBatchExecutiveSummaryWithGemini, getBriefIssueSummarySync, nlpCleanReword, getStoredGeminiApiKey, saveGeminiApiKey, GEMINI_MODELS, getStoredGeminiModel, saveGeminiModel, discoverAvailableGeminiModels, rankModelsForSummaries, DEFAULT_GEMINI_MODEL, getGeminiKeyErrorHint, buildChatSummaryPrompt, applyChatSummaryReply, isChatSummaryPrompt, getChatReplyReportId } from '../services/geminiService';
-import { requestRx95Summary, isRx95Available } from '../services/rx95Service';
-import BuganizerTriage from './BuganizerTriage';
-import BundleSuggestionsPanel, { type GroupCategory } from './BundleSuggestionsPanel';
+import React from 'react';
+import { ListChecks, Bug, Smartphone, Activity, Sparkles, X } from 'lucide-react';
+import {
+  TestPlan,
+  TestRun,
+  BugLog,
+  DeviceProfile,
+  TesterProfile,
+  RefinedBugText,
+  ReproMatches
+} from '../types';
 import { TestPlansTab } from './dashboard/TestPlansTab';
 import { DevicesTestersTab } from './dashboard/DevicesTestersTab';
 import { CujReportTab } from './dashboard/CujReportTab';
-import { type ShownSuggestion, isBundleable, loadDismissed, newBundle, sameHotlist, shownSuggestions } from '../utils/bundleDraft';
+import { BugsFeedTab } from './dashboard/BugsFeedTab';
+import { DashboardModals } from './dashboard/DashboardModals';
+import {
+  useDashboardController,
+  makeBugsKey,
+  getLocalDateStr
+} from './dashboard/useDashboardController';
+import type { Rx95SuggestionsData } from '../services/supabaseService';
 
 /** Buganizer triage view: on by default; set VITE_BUGANIZER_ENABLED=0 to hide it. */
 const BUGANIZER_ENABLED = ((import.meta as any).env?.VITE_BUGANIZER_ENABLED || '') !== '0';
-import type { ExecutiveQAResult, SummaryScopeContext } from '../services/geminiService';
-import { toBlob } from 'html-to-image';
-import type { Rx95SuggestionsData } from '../services/supabaseService';
-
-/** Identifies an exact set of bugs and their notes, so a stored AI summary is invalidated when notes/titles change. */
-const makeBugsKey = (bugs: BugLog[]): string =>
-  bugs.map(b => `${b.id}:${b.stepTitle || ''}:${b.note || ''}`).sort().join('|');
-
-/** Gemini web app used by the "AI Chat" summary flow (no API key needed). */
-const GEMINI_CHAT_URL = 'https://gemini.google.com/app';
-/** localStorage flag: open Gemini in a new tab whenever the AI chat flow starts. */
-const CHAT_AUTO_OPEN_GEMINI_KEY = 'qa_chat_auto_open_gemini';
 
 interface DashboardProps {
   testPlans: TestPlan[];
@@ -63,11 +51,21 @@ interface DashboardProps {
   onEditPlan?: (plan: TestPlan) => void;
   onLoadSampleData: () => void;
   onClearAllData?: () => void;
-  onImportJSONData: (data: { testPlans?: TestPlan[]; testRuns?: TestRun[]; bugLogs?: BugLog[]; archivedRuns?: TestRun[] }) => void;
+  onImportJSONData: (data: {
+    testPlans?: TestPlan[];
+    testRuns?: TestRun[];
+    bugLogs?: BugLog[];
+    archivedRuns?: TestRun[];
+  }) => void;
   onAddFeature?: (featureName: string) => void;
   onDeleteFeature?: (featureName: string) => void;
   onDeleteTestRun?: (runId: string) => void;
-  onBootTester?: (runId: string, deviceId?: string, testerName?: string, deviceName?: string) => void;
+  onBootTester?: (
+    runId: string,
+    deviceId?: string,
+    testerName?: string,
+    deviceName?: string
+  ) => void;
   onDeleteTester?: (testerName: string) => void;
   onResetActiveDay?: (dateStr: string) => void;
   onResetDailyQuotas?: () => void;
@@ -80,19 +78,6 @@ interface DashboardProps {
   minAppVersion?: number;
   onUpdateMinAppVersion?: (versionCode: number) => void;
 }
-
-const getLocalDateStr = (dateInput?: string | Date) => {
-  if (dateInput === '') return '';
-  if (typeof dateInput === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateInput.trim())) {
-    return dateInput.trim();
-  }
-  const d = dateInput !== undefined ? new Date(dateInput) : new Date();
-  if (isNaN(d.getTime())) return '';
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
 
 export const Dashboard: React.FC<DashboardProps> = ({
   testPlans,
@@ -116,7 +101,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onClonePlan,
   onEditPlan,
   onLoadSampleData,
-  onClearAllData,
   onImportJSONData,
   onAddFeature,
   onDeleteFeature,
@@ -133,1590 +117,44 @@ export const Dashboard: React.FC<DashboardProps> = ({
   minAppVersion,
   onUpdateMinAppVersion
 }) => {
-  const defaultTodayStr = getLocalDateStr(new Date());
-  const [activeTab, setActiveTab] = useState<'overview' | 'devices' | 'testers' | 'features' | 'bugs'>('overview');
-  const [bugsView, setBugsView] = useState<'feed' | 'buganizer'>('feed');
-  const [selectedQaDate, setSelectedQaDate] = useState<string>(defaultTodayStr);
-  const [expandedTesters, setExpandedTesters] = useState<Record<string, boolean>>({});
-  const [expandedPlanSteps, setExpandedPlanSteps] = useState<Record<string, boolean>>({});
-  const [subagentToast, setSubagentToast] = useState<string | null>(null);
-  const [reportDisclaimer, setReportDisclaimer] = useState<string>(() => {
-    try {
-      return localStorage.getItem('qa_report_disclaimer') || '';
-    } catch (e) {
-      return '';
-    }
+  const c = useDashboardController({
+    testPlans,
+    testRuns,
+    bugLogs,
+    populatedFeatures,
+    devices,
+    testers,
+    archivedRuns,
+    onUpdateBugLog,
+    onPatchBugLog,
+    onPatchBugLogs,
+    rx95Suggestions,
+    onImportJSONData,
+    onAddFeature
   });
-
-  const [newDeviceName, setNewDeviceName] = useState('');
-  const [newPersonName, setNewPersonName] = useState('');
-  const [newPersonRole, setNewPersonRole] = useState('Mobile Tester');
-  const [quotaPlanMap, setQuotaPlanMap] = useState<Record<string, string>>({});
-  const [quotaRunsMap, setQuotaRunsMap] = useState<Record<string, number>>({});
-  const [showCreateTesterForm, setShowCreateTesterForm] = useState(false);
-  const [testerViewMode, setTesterViewMode] = useState<'tested' | 'active' | 'idle' | 'all'>('tested');
-  const [searchTesterQuery, setSearchTesterQuery] = useState('');
-  const [selectedInspectorTester, setSelectedInspectorTester] = useState<string>('');
-  const [showOffShiftTesters, setShowOffShiftTesters] = useState<boolean>(false);
-  const [quickActivateDeviceId, setQuickActivateDeviceId] = useState<string>('');
-  const [quickActivatePlanId, setQuickActivatePlanId] = useState<string>('');
-  const [quickActivateQuota, setQuickActivateQuota] = useState<number>(2);
-  const [inspectorTarget, setInspectorTarget] = useState<{ type: 'device' | 'tester'; id: string } | null>(null);
-  const [isFloorMenuOpen, setIsFloorMenuOpen] = useState<boolean>(false);
-  const [isActivateTileOpen, setIsActivateTileOpen] = useState<boolean>(false);
-  const floorMenuRef = useRef<HTMLDivElement>(null);
-
-  // Live ongoing test duration ticker (gated on active in-progress runs & relevant tabs to prevent 1Hz full-tree re-renders)
-  const [liveTickerTime, setLiveTickerTime] = useState(() => Date.now());
-  const hasActiveInProgressRun = useMemo(() => {
-    return testRuns.some(r => r && r.status === 'in_progress') || devices.some(d => Boolean(d.activeRunId || d.activeTesterName));
-  }, [testRuns, devices]);
-
-  useEffect(() => {
-    if (!hasActiveInProgressRun || (activeTab !== 'overview' && activeTab !== 'devices' && activeTab !== 'testers')) {
-      return;
-    }
-    setLiveTickerTime(Date.now());
-    const timer = setInterval(() => {
-      setLiveTickerTime(Date.now());
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [hasActiveInProgressRun, activeTab]);
-
-  const formatOngoingDuration = (startedAt?: string): string => {
-    if (!startedAt) return '0s';
-    const startMs = new Date(startedAt).getTime();
-    if (isNaN(startMs) || startMs <= 0) return '0s';
-    const diffMs = Math.max(0, liveTickerTime - startMs);
-    const totalSecs = Math.floor(diffMs / 1000);
-    const hrs = Math.floor(totalSecs / 3600);
-    const mins = Math.floor((totalSecs % 3600) / 60);
-    const secs = totalSecs % 60;
-    if (hrs > 0) {
-      return `${hrs}h ${mins}m ${secs.toString().padStart(2, '0')}s`;
-    }
-    if (mins > 0) {
-      return `${mins}m ${secs.toString().padStart(2, '0')}s`;
-    }
-    return `${secs}s`;
-  };
-
-  // Helper to determine real, effective run status
-  const getEffectiveRunStatus = (run: TestRun) => {
-    if ((run.status as any) === 'terminated') return 'terminated';
-    const plan = testPlans.find(p => p.id === run.planId);
-    const totalSteps = plan?.steps?.length || 0;
-    const stepEntries = Object.entries(run.results || {}).filter(
-      ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
-    );
-    const completedCount = stepEntries.length;
-
-    // A run with zero recorded step results has no data recorded and must NEVER be treated as completed
-    if (completedCount === 0) {
-      if (run.status === 'in_progress' || (run.testerName && run.deviceName && run.status !== 'not_started')) {
-        return 'in_progress';
-      }
-      return 'not_started';
-    }
-
-    if (run.status === 'completed' || (totalSteps > 0 && (completedCount >= totalSteps || (run.currentStepIndex !== undefined && run.currentStepIndex >= totalSteps)))) {
-      return 'completed';
-    }
-    if (run.status === 'in_progress' || (run.testerName && run.deviceName)) {
-      return 'in_progress';
-    }
-    if (run.status === 'not_started' || (!run.testerName && completedCount === 0)) {
-      return 'not_started';
-    }
-    return 'in_progress';
-  };
-
-  // Archived + active runs, one per id (completed archived copy protected from stale in_progress overwrites),
-  // and when each plan step was first recorded - the history-aware "finished run" rule judges runs against the steps that existed then.
-  const mergedRuns = useMemo(() => mergeRunsById(archivedRuns, testRuns), [archivedRuns, testRuns]);
-  const stepFirstSeen = useMemo(() => buildStepFirstSeenIndex(mergedRuns), [mergedRuns]);
-  const archivedIdSet = useMemo(() => new Set(archivedRuns.map(r => r.id)), [archivedRuns]);
-  const liveInProgressRuns = useMemo(
-    () => computeLiveInProgressRuns(testRuns, archivedIdSet, testPlans),
-    [testRuns, archivedIdSet, testPlans]
-  );
-
-  // Determine active testers currently running a test session on a device (with live step and status metrics)
-  const activeTesterMap = useMemo(() => {
-    const map = new Map<string, { 
-      deviceName: string; 
-      deviceId?: string;
-      planName?: string; 
-      runId?: string;
-      startedAt?: string;
-      currentStepIndex: number;
-      totalSteps: number;
-      currentStepTitle?: string;
-      greenCount: number;
-      yellowCount: number;
-      redCount: number;
-      progressPct: number;
-      isAway: boolean;
-    }>();
-
-    const computeMetrics = (testerName: string, devName: string, run: TestRun, devId?: string) => {
-      if (!testerName || !run) return;
-      const key = testerName.toLowerCase().trim();
-      const plan = testPlans.find(p => p.id === run.planId);
-      const totalSteps = Math.max(1, plan?.steps?.length || 1);
-      const stepEntries = Object.entries(run.results || {}).filter(
-        ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
-      );
-      const completedResults = stepEntries.map(([_, v]) => v as any);
-      const completedSteps = completedResults.length;
-      const progressPct = Math.min(100, Math.round((completedSteps / totalSteps) * 100));
-
-      const greenCount = completedResults.filter(r => r.status === 'green').length;
-      const yellowCount = completedResults.filter(r => r.status === 'yellow').length;
-      const redCount = completedResults.filter(r => r.status === 'red').length;
-
-      const currentStepIdx = (run.currentStepIndex !== undefined) ? run.currentStepIndex : completedSteps;
-      const currentStep = plan?.steps?.[Math.min(currentStepIdx, totalSteps - 1)];
-      const currentStepTitle = currentStep ? (currentStep.title || currentStep.feature || `Step ${currentStepIdx + 1}`) : undefined;
-
-      const lastResultTimestamp = completedResults
-        .map((r: any) => (r && r.timestamp) ? new Date(r.timestamp).getTime() : 0)
-        .filter((t: number) => t > 0 && !isNaN(t))
-        .sort((a: number, b: number) => b - a)[0];
-      const lastActivityTime = lastResultTimestamp || (run.startedAt ? new Date(run.startedAt).getTime() : 0);
-      const isAway = lastActivityTime > 0 && !isNaN(lastActivityTime) && (Date.now() - lastActivityTime > 3 * 60 * 1000);
-
-      map.set(key, {
-        deviceName: devName || run.deviceName || 'Mobile Device',
-        deviceId: devId || run.deviceId,
-        planName: plan?.name || run.planName || 'Test Plan',
-        runId: run.id,
-        startedAt: run.startedAt,
-        currentStepIndex: Math.min(currentStepIdx + 1, totalSteps),
-        totalSteps,
-        currentStepTitle,
-        greenCount,
-        yellowCount,
-        redCount,
-        progressPct,
-        isAway
-      });
-    };
-
-    // 1. Check devices that are currently locked by a tester WITH an actual live in_progress run on that device
-    devices.forEach(d => {
-      const activeTester = d.activeTesterName?.trim();
-      if (activeTester) {
-        const activeRun = liveInProgressRuns.find(r => 
-          (d.activeRunId && r.id === d.activeRunId) || 
-          (r.deviceId && r.deviceId.toLowerCase().trim() === d.id.toLowerCase().trim()) ||
-          (r.deviceName && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim())
-        );
-        if (activeRun) {
-          computeMetrics(activeRun.testerName || activeTester, d.name, activeRun, d.id);
-        }
-      }
-    });
-
-    // 2. Also check live in_progress runs directly so step changes sync with zero lag
-    liveInProgressRuns.forEach(r => {
-      if (r.testerName && r.testerName.trim()) {
-        const key = r.testerName.toLowerCase().trim();
-        const existing = map.get(key);
-        const currentEntriesCount = Object.entries(r.results || {}).filter(
-          ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
-        ).length;
-        const existingCount = existing ? (existing.greenCount + existing.yellowCount + existing.redCount) : -1;
-        if (!existing || currentEntriesCount >= existingCount) {
-          computeMetrics(r.testerName, r.deviceName || 'Mobile Device', r, r.deviceId);
-        }
-      }
-    });
-
-    return map;
-  }, [devices, liveInProgressRuns, testPlans]);
-
-  // Calculate completed runs today per device ID and plan ID (deduplicated by run.id using mergeRunsById)
-  const todayRunsMap = useMemo(
-    () => computeTodayRunsMap(mergedRuns, devices, testPlans, stepFirstSeen),
-    [mergedRuns, devices, testPlans, stepFirstSeen]
-  );
-
-  const fleetProgress = useMemo(
-    () => computeFleetProgress(devices, todayRunsMap, testPlans),
-    [devices, todayRunsMap, testPlans]
-  );
-
-  const toggleTesterExpand = (testerName: string) => {
-    setExpandedTesters(prev => ({
-      ...prev,
-      [testerName]: !prev[testerName]
-    }));
-  };
-
-  const [expandedBugIds, setExpandedBugIds] = useState<Record<string, boolean>>({});
-  // Bugs Feed tabs (New / Bundle Suggestions / Reviewed) and links to and from the Buganizer tab
-  const [feedTab, setFeedTab] = useState<'new' | 'suggestions' | 'reviewed'>('new');
-  // Keep expanded rows on the New tab visible while the user edits Type/Priority/Status/text until they close the row or switch tabs
-  const [stickyNewBugIds, setStickyNewBugIds] = useState<Set<string>>(new Set());
-  const [feedToast, setFeedToast] = useState<string | null>(null);
-  const flashFeed = (msg: string) => { setFeedToast(msg); setTimeout(() => setFeedToast(null), 4000); };
-  const [buganizerFocus, setBuganizerFocus] = useState<{ id: string; n: number } | null>(null);
-  const [feedNow, setFeedNow] = useState(() => Date.now());
-  useEffect(() => { const t = setInterval(() => setFeedNow(Date.now()), 10000); return () => clearInterval(t); }, []);
-  useEffect(() => { setStickyNewBugIds(new Set()); }, [feedTab, bugsView, activeTab]);
-  // Bugs Feed inline edit (title, time, description), always shown on an expanded row so bugs can be
-  // tidied before the Buganizer tab. A draft exists per bug only while it has unsaved changes.
-  type FeedDraft = { title: string; note: string; time: string };
-  const [feedDrafts, setFeedDrafts] = useState<Record<string, FeedDraft>>({});
-  const feedBase = (bug: BugLog): FeedDraft => ({ title: bug.title || '', note: bug.title && bug.note === bug.title ? '' : (bug.note || ''), time: toLocalHHMM(bug.timestamp) });
-  const feedDraftFor = (bug: BugLog): FeedDraft => feedDrafts[bug.id] || feedBase(bug);
-  const feedDirty = (bug: BugLog) => {
-    const d = feedDrafts[bug.id]; if (!d) return false;
-    const b = feedBase(bug);
-    return d.title !== b.title || d.note !== b.note || d.time !== b.time;
-  };
-  const setFeedDraft = (bug: BugLog, patch: Partial<FeedDraft>) =>
-    setFeedDrafts(prev => ({ ...prev, [bug.id]: { ...(prev[bug.id] || feedBase(bug)), ...patch } }));
-  const cancelFeedEdit = (bugId: string) => setFeedDrafts(prev => { const n = { ...prev }; delete n[bugId]; return n; });
-  const saveFeedEdit = (bug: BugLog) => {
-    const d = feedDrafts[bug.id];
-    if (!d || !onUpdateBugLog) return;
-    const title = d.title.replace(/\s+/g, ' ').trim().slice(0, 120);
-    const note = d.note.trim() || title;
-    if (!title && !note) return;
-    if (feedTab === 'new' && expandedBugIds[bug.id]) {
-      setStickyNewBugIds(prev => new Set(prev).add(bug.id));
-    }
-    onUpdateBugLog(withBugTime({ ...bug, title: title || undefined, note }, d.time));
-    markReviewed(bug.id);
-    cancelFeedEdit(bug.id);
-  };
-
-  // Bugs Feed review state (New / Reviewed). Written with the targeted patch (bug_logs.reviewed), never by RX95.
-  const markReviewed = (bugId: string) => onPatchBugLog?.(bugId, { reviewed: reviewedNow('reviewed') });
-  const moveToNew = (bugId: string) => onPatchBugLog?.(bugId, { reviewed: reviewedNow('new') });
-
-  const toggleBugExpand = (bugId: string) => {
-    setExpandedBugIds(prev => {
-      const willClose = !!prev[bugId];
-      if (willClose) {
-        setStickyNewBugIds(s => {
-          if (!s.has(bugId)) return s;
-          const next = new Set(s);
-          next.delete(bugId);
-          return next;
-        });
-      }
-      return {
-        ...prev,
-        [bugId]: !prev[bugId]
-      };
-    });
-  };
-
-  // Search & Filter State
-  const [searchBugQuery, setSearchBugQuery] = useState<string>('');
-  const [searchPlanQuery, setSearchPlanQuery] = useState<string>('');
-  const [selectedDeviceFilter, setSelectedDeviceFilter] = useState<string>('all');
-  const [selectedFeatureFilter, setSelectedFeatureFilter] = useState<string>('all');
-  const [selectedDateFilter, setSelectedDateFilter] = useState<string>('all');
-  const [selectedPlanFilter, setSelectedPlanFilter] = useState<string>('all');
-  const [customDateInput, setCustomDateInput] = useState<string>('');
-  const [sortByDevice, setSortByDevice] = useState<'newest' | 'oldest' | 'device-asc' | 'device-desc' | 'priority' | 'severity'>('newest');
-  
-  // Feature Creation, Report Expand, Copy Report & Bug Filter Menu state on Dashboard
-  const visualCardRef = useRef<HTMLDivElement>(null);
-  const modalCardRef = useRef<HTMLDivElement>(null);
-  const [newFeatureInput, setNewFeatureInput] = useState<string>('');
-  const [isFeatureReportExpanded, setIsFeatureReportExpanded] = useState<boolean>(false);
-  const [isBugFilterMenuOpen, setIsBugFilterMenuOpen] = useState<boolean>(false);
-  const [copiedReport, setCopiedReport] = useState<boolean>(false);
-  const [copiedImage, setCopiedImage] = useState<boolean>(false);
-  const [isGeneratingSummary, setIsGeneratingSummary] = useState<boolean>(false);
-  /** Seconds RX95 has been working on a summary, or null when idle. */
-  const [rx95Elapsed, setRx95Elapsed] = useState<number | null>(null);
-  const [generatedReport, setGeneratedReport] = useState<{
-    plainText: string;
-    htmlText: string;
-    generatedAt: number;
-    scopeKey: string;
-    modelUsed?: string;
-    aiError?: string;
-    featureSummaries?: Record<string, { summary: string; bugsKey: string }>;
-  } | null>(null);
-  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState<boolean>(false);
-  const [tempApiKey, setTempApiKey] = useState<string>(() => getStoredGeminiApiKey());
-  const [tempModel, setTempModel] = useState<string>(() => getStoredGeminiModel());
-  const [isTestingKey, setIsTestingKey] = useState<boolean>(false);
-  const [testKeyStatus, setTestKeyStatus] = useState<{ success: boolean; message: string; models?: string[] } | null>(null);
-  const [summaryToast, setSummaryToast] = useState<{ type: 'success' | 'warning' | 'error'; message: string } | null>(null);
-  const [isChatSummaryOpen, setIsChatSummaryOpen] = useState<boolean>(false);
-  const [chatReplyText, setChatReplyText] = useState<string>('');
-  const [chatPromptCopied, setChatPromptCopied] = useState<boolean>(false);
-  const [chatStatus, setChatStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-  const [chatNotice, setChatNotice] = useState<string | null>(null);
-  const [chatAutoOpenGemini, setChatAutoOpenGemini] = useState<boolean>(() => localStorage.getItem(CHAT_AUTO_OPEN_GEMINI_KEY) === '1');
-  const chatReplyHandlerRef = useRef<((text: string, source: 'auto' | 'paste') => void) | null>(null);
-  const lastAutoCheckedReplyRef = useRef<string>('');
-  const [selectedImagePreviewUrl, setSelectedImagePreviewUrl] = useState<string | null>(null);
-
-  // Smart Categorization Settings
-  const [bugCategorizations, setBugCategorizations] = useState<Record<string, {
-    bugType?: 'Bug' | 'Setup Issue' | 'Known Issue' | 'Feature Request' | 'Misc Issue';
-    priority?: 'P0' | 'P1' | 'P2';
-    status?: 'Filed' | 'New' | "Repro'd Issue";
-  }>>(() => {
-    try {
-      const saved = localStorage.getItem('qa_bug_categorizations');
-      if (saved) return JSON.parse(saved);
-    } catch (e) {}
-    return {};
-  });
-
-  // Stored bugs by id (the Filed stamp reads the stored status, not the categorization override)
-  const bugById = useMemo(() => new Map(bugLogs.map(b => [b.id, b])), [bugLogs]);
-  // Unsaved "b/ issue number" inputs next to the Filed switch (per bug)
-  const [filedIssueDrafts, setFiledIssueDrafts] = useState<Record<string, string>>({});
-
-  const handleUpdateBugCategorization = (bugId: string, field: 'bugType' | 'priority' | 'status', value: any) => {
-    const nextCat = { ...(bugCategorizations[bugId] || {}), [field]: value };
-    setBugCategorizations(prev => {
-      const updated = { ...prev, [bugId]: { ...(prev[bugId] || {}), [field]: value } };
-      try {
-        localStorage.setItem('qa_bug_categorizations', JSON.stringify(updated));
-      } catch (e) {}
-      return updated;
-    });
-    // Outside the state updater: updating App's state while React renders Dashboard is not allowed
-    const targetBug = bugLogs.find(b => b.id === bugId);
-    if (targetBug && onUpdateBugLog) {
-      // A status change on a bug with the legacy stored status 'Filed' keeps its Filed stamp as real data.
-      const keepLegacyFiled = field === 'status' && targetBug.status === 'Filed' && !targetBug.filed
-        ? { filed: { via: 'legacy' as const, at: targetBug.timestamp } }
-        : {};
-      // Setting type / priority / status is a review; keep expanded row open on the New tab until closed
-      if (feedTab === 'new' && expandedBugIds[bugId]) {
-        setStickyNewBugIds(prev => new Set(prev).add(bugId));
-        flashFeed('Marked reviewed · stays open until you close this row.');
-      }
-      markReviewed(bugId);
-      // filed is worker-owned: it can only change through the targeted patch handler
-      if (keepLegacyFiled.filed && onPatchBugLog) onPatchBugLog(bugId, keepLegacyFiled);
-      onUpdateBugLog({
-        ...targetBug,
-        bugType: nextCat.bugType || targetBug.bugType || 'Bug',
-        priority: nextCat.priority || targetBug.priority || (targetBug.severity === 'critical' ? 'P0' : targetBug.severity === 'high' ? 'P1' : 'P2'),
-        // No default: 'Filed' used to be written here even when only type/priority changed
-        status: nextCat.status || targetBug.status
-      });
-    }
-  };
-
-  // Global Escape key listener closes any active modal or popover
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (selectedImagePreviewUrl) setSelectedImagePreviewUrl(null);
-        if (isChatSummaryOpen) setIsChatSummaryOpen(false);
-        if (isApiKeyModalOpen) setIsApiKeyModalOpen(false);
-        if (isBugFilterMenuOpen) setIsBugFilterMenuOpen(false);
-        if (inspectorTarget) setInspectorTarget(null);
-        if (selectedInspectorTester) setSelectedInspectorTester('');
-        if (isFloorMenuOpen) setIsFloorMenuOpen(false);
-        if (isActivateTileOpen) setIsActivateTileOpen(false);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedImagePreviewUrl, isChatSummaryOpen, isApiKeyModalOpen, isBugFilterMenuOpen, inspectorTarget, selectedInspectorTester, isFloorMenuOpen, isActivateTileOpen]);
-
-  // Close floor ⋯ menu on outside click
-  useEffect(() => {
-    if (!isFloorMenuOpen) return;
-    const handleOutsideClick = (e: MouseEvent) => {
-      if (floorMenuRef.current && !floorMenuRef.current.contains(e.target as Node)) {
-        setIsFloorMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleOutsideClick);
-    return () => document.removeEventListener('mousedown', handleOutsideClick);
-  }, [isFloorMenuOpen]);
-
-  const handleCreateFeatureSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = newFeatureInput.trim();
-    if (!trimmed || trimmed.toLowerCase() === 'general' || trimmed.startsWith('__') || !onAddFeature) return;
-    onAddFeature(trimmed);
-    setNewFeatureInput('');
-  };
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleJSONFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const parsed = JSON.parse(event.target?.result as string);
-        onImportJSONData(parsed);
-        alert('QA Data successfully imported!');
-      } catch (err) {
-        alert('Failed to parse JSON file. Please ensure it is a valid QA backup JSON.');
-      }
-    };
-    reader.readAsText(file);
-    e.target.value = '';
-  };
-
-  // Filter runs to ONLY include fully finished test plan executions (100% of steps completed)
-  const completedRuns = useMemo(() => {
-    return mergedRuns.filter(run => isRunFullyCompleted(run, testPlans, stepFirstSeen));
-  }, [mergedRuns, testPlans, stepFirstSeen]);
-
-  // Unique devices populated across bug logs and completed test runs (memoized)
-  const uniqueDevices = useMemo(() => Array.from(
-    new Set(
-      bugLogs.map(b => b.deviceName).concat(completedRuns.map(r => r.deviceName)).filter(Boolean)
-    )
-  ) as string[], [bugLogs, completedRuns]);
-
-  // Unique features populated across test steps, bug logs, and populatedFeatures (excluding 'General' and '__*')
-  const uniqueFeatures = useMemo(() => Array.from(
-    new Set(
-      populatedFeatures
-        .concat(testPlans.flatMap(p => (p.steps || []).map(s => s.feature || '')))
-        .concat(bugLogs.map(b => b.feature || ''))
-        .filter(f => typeof f === 'string' && f.trim() !== '' && f.toLowerCase() !== 'general' && !f.startsWith('__'))
-    )
-  ) as string[], [populatedFeatures, testPlans, bugLogs]);
-
-  // Which test plan each bug belongs to. Uses the bug's own planId, falling back to the
-  // plan of the run it was logged in (older bugs may not carry a planId).
-  const bugPlanLookup = useMemo(() => {
-    const runPlan = new Map<string, { planId: string; planName: string }>();
-    mergedRuns.forEach(r => {
-      if (r && r.id) runPlan.set(r.id, { planId: r.planId || '', planName: r.planName || '' });
-    });
-    const planNames = new Map<string, string>();
-    testPlans.forEach(p => { if (p && p.id) planNames.set(p.id, p.name || 'Untitled Plan'); });
-    const resolve = (bug: BugLog): { planId: string; planName: string } => {
-      const fromRun = bug.testRunId ? runPlan.get(bug.testRunId) : undefined;
-      const planId = bug.planId || fromRun?.planId || '';
-      if (!planId) return { planId: '__none__', planName: 'No Test Plan' };
-      const planName = planNames.get(planId) || fromRun?.planName || 'Deleted Plan';
-      return { planId, planName };
-    };
-    return resolve;
-  }, [mergedRuns, testPlans]);
-
-  // Test plan options for the Bugs tab plan filter, with bug counts (sorted by name)
-  const bugPlanOptions = useMemo(() => {
-    const counts = new Map<string, { planId: string; planName: string; count: number }>();
-    testPlans.forEach(p => {
-      if (p && p.id) counts.set(p.id, { planId: p.id, planName: p.name || 'Untitled Plan', count: 0 });
-    });
-    bugLogs.forEach(b => {
-      const { planId, planName } = bugPlanLookup(b);
-      const entry = counts.get(planId) || { planId, planName, count: 0 };
-      entry.count += 1;
-      counts.set(planId, entry);
-    });
-    return Array.from(counts.values()).sort((a, b) =>
-      a.planName.localeCompare(b.planName, undefined, { sensitivity: 'base' })
-    );
-  }, [testPlans, bugLogs, bugPlanLookup]);
-
-  const selectedPlanFilterName = useMemo(() => {
-    if (selectedPlanFilter === 'all') return '';
-    return bugPlanOptions.find(o => o.planId === selectedPlanFilter)?.planName || '';
-  }, [selectedPlanFilter, bugPlanOptions]);
-
-  // If the selected plan disappears (deleted / data reset), fall back to all plans
-  useEffect(() => {
-    if (selectedPlanFilter !== 'all' && !bugPlanOptions.some(o => o.planId === selectedPlanFilter)) {
-      setSelectedPlanFilter('all');
-    }
-  }, [selectedPlanFilter, bugPlanOptions]);
-
-  // Today Local Date string (YYYY-MM-DD)
-  const todayStr = useMemo(() => getLocalDateStr(new Date()), [testRuns, archivedRuns, devices]);
-
-  // Selected Daily QA Session Date (defaults to Today, or specific saved day YYYY-MM-DD, or 'all')
-  const [selectedDailySessionDate, setSelectedDailySessionDate] = useState<string>(todayStr);
-
-  // Test plan the CUJ report is scoped to (always opens on "All plans"; not persisted).
-  const [selectedReportPlanId, setSelectedReportPlanId] = useState<string>(ALL_PLANS);
-  const reportPlanId = selectedReportPlanId === ALL_PLANS || testPlans.some(p => p.id === selectedReportPlanId)
-    ? selectedReportPlanId
-    : ALL_PLANS;
-  useEffect(() => {
-    if (reportPlanId !== selectedReportPlanId) setSelectedReportPlanId(ALL_PLANS);
-  }, [reportPlanId, selectedReportPlanId]);
-
-  // Days with data (counted steps or bugs) for the selected plan, newest first
-  const reportDates = useMemo(
-    () => listReportDates({ plans: testPlans, runs: mergedRuns, bugs: bugLogs, planId: reportPlanId, firstSeen: stepFirstSeen }),
-    [testPlans, mergedRuns, bugLogs, reportPlanId, stepFirstSeen]
-  );
-  const latestReportDate = reportDates.length > 0 ? reportDates[0].dateStr : '';
-
-  // List of Saved Historical Days with execution counts: Today, then the selected plan's days
-  const recordedDailySessions = useMemo(() => {
-    const todayLabel = `Today (${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })})`;
-
-    const formatDisplayLabel = (dStr: string) => {
-      const [y, m, d] = dStr.split('-').map(Number);
-      if (y && m && d) {
-        return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-      }
-      return dStr;
-    };
-
-    const todayEntry = reportDates.find(d => d.dateStr === todayStr);
-    const otherDays = reportDates
-      .filter(d => d.dateStr !== todayStr)
-      .map(d => ({ dateStr: d.dateStr, label: formatDisplayLabel(d.dateStr), stepCount: d.stepCount, bugCount: d.bugCount }));
-    if (selectedDailySessionDate !== ALL_DATES && selectedDailySessionDate !== todayStr && !otherDays.some(d => d.dateStr === selectedDailySessionDate)) {
-      otherDays.push({ dateStr: selectedDailySessionDate, label: formatDisplayLabel(selectedDailySessionDate), stepCount: 0, bugCount: 0 });
-      otherDays.sort((a, b) => b.dateStr.localeCompare(a.dateStr));
-    }
-
-    return [
-      { dateStr: todayStr, label: todayLabel, stepCount: todayEntry ? todayEntry.stepCount : 0, bugCount: todayEntry ? todayEntry.bugCount : 0 },
-      ...otherDays
-    ];
-  }, [reportDates, todayStr, selectedDailySessionDate]);
-
-  // Test Plan picker options for the selected day, most recently run plan first
-  const planPickerOptions = useMemo(
-    () => getPlanPickerOptions({ plans: testPlans, runs: mergedRuns, bugs: bugLogs, date: selectedDailySessionDate, firstSeen: stepFirstSeen }),
-    [testPlans, mergedRuns, bugLogs, selectedDailySessionDate, stepFirstSeen]
-  );
-  const allPlansRunCount = planPickerOptions.reduce((sum, o) => sum + o.runCount, 0);
-
-  // CUJ report for the selected plan + day
-  const reportScope = useMemo(() => ({ planId: reportPlanId, date: selectedDailySessionDate }), [reportPlanId, selectedDailySessionDate]);
-  const reportScopeKey = buildReportScopeKey(reportScope);
-  const knownCujNames = useMemo(() => getKnownCujNames(testPlans, bugLogs, populatedFeatures), [testPlans, bugLogs, populatedFeatures]);
-  const cujReport = useMemo(
-    () => computeCujReport({ plans: testPlans, runs: mergedRuns, bugs: bugLogs, scope: reportScope, knownCujNames, firstSeen: stepFirstSeen }),
-    [testPlans, mergedRuns, bugLogs, reportScope, knownCujNames, stepFirstSeen]
-  );
-  const reportPlanLabel = cujReport.planLabel;
-  const reportDateLabel = formatReportDateLabel(selectedDailySessionDate);
-  const reportDayDisplayLabel = selectedDailySessionDate === todayStr ? 'Today' : reportDateLabel;
-  const reportDayPhrase = selectedDailySessionDate === ALL_DATES ? 'across all days' : `on ${reportDayDisplayLabel}`;
-  const reportScopeContext: SummaryScopeContext = {
-    scopeKey: reportScopeKey,
-    scopeLabel: reportPlanId === ALL_PLANS ? `all test plans (${reportDateLabel})` : `the "${reportPlanLabel}" test plan (${reportDateLabel})`
-  };
-
-  // Invalidate stored report when scope, underlying CUJ report data, or disclaimer changes
-  const reportDataSignature = useMemo(() => {
-    const bugsSig = [...cujReport.testedMetrics, ...cujReport.bugOnlyMetrics]
-      .map(m => `${m.featureName}:${m.greenCount}/${m.yellowCount}/${m.redCount}:${makeBugsKey(m.associatedBugs)}`)
-      .join('||');
-    return `${reportScopeKey}::${cujReport.totals.stepsExecuted}::${cujReport.golden.goldenCount}/${cujReport.golden.totalCount}::${reportDisclaimer}::${bugsSig}`;
-  }, [reportScopeKey, cujReport, reportDisclaimer]);
-
-  const reportScopeKeyRef = useRef(reportScopeKey);
-  reportScopeKeyRef.current = reportScopeKey;
-  useEffect(() => {
-    setGeneratedReport(null);
-  }, [reportDataSignature]);
-  const hasCurrentReport = !!generatedReport && generatedReport.scopeKey === reportScopeKey;
-
-  // Historical Quality Evolution Timeline Points (Only fully finished runs of the selected plan)
-  const historicalTimelinePoints = useMemo(
-    () => buildTimelinePoints({ plans: testPlans, runs: mergedRuns, bugs: bugLogs, planId: reportPlanId, firstSeen: stepFirstSeen }),
-    [testPlans, mergedRuns, bugLogs, reportPlanId, stepFirstSeen]
-  );
-
-  const featureMetricsList = cujReport.testedMetrics;
-  const bugOnlyMetrics = cujReport.bugOnlyMetrics;
-  const untestedCujNames = cujReport.untestedCujNames;
-
-  // Compute QA Status metrics for individual tester profiles & daily tracking (case-insensitive grouping)
-  const testerProfilesMap = useMemo(() => {
-    const combinedRuns = mergedRuns;
-    const planTitleMap = new Map(testPlans.map(p => [p.id, p.name]));
-    const map = new Map<string, {
-      testerName: string;
-      devicesUsed: Set<string>;
-      allTimeCompletedCount: number;
-      dailyStats: Record<string, {
-        dateStr: string;
-        completedCount: number;
-        totalDurationMs: number;
-        devicesUsedOnDay: Set<string>;
-        completedRuns: {
-          runId: string;
-          planName: string;
-          deviceName: string;
-          completedAtFormatted: string;
-          durationMs: number;
-          durationFormatted: string;
-          greenCount: number;
-          yellowCount: number;
-          redCount: number;
-        }[];
-      }>;
-    }>();
-
-    combinedRuns.forEach(run => {
-      const displayTester = run.testerName?.trim() || 'Unassigned Tester';
-      const normKey = displayTester.toLowerCase();
-      if (!map.has(normKey)) {
-        map.set(normKey, {
-          testerName: displayTester,
-          devicesUsed: new Set<string>(),
-          allTimeCompletedCount: 0,
-          dailyStats: {}
-        });
-      }
-      const profile = map.get(normKey)!;
-      if (run.deviceName) profile.devicesUsed.add(run.deviceName);
-
-      const effectiveStatus = getEffectiveRunStatus(run);
-      const stepEntries = Object.entries(run.results || {}).filter(
-        ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
-      );
-      const isCompleted = effectiveStatus === 'completed' && stepEntries.length > 0;
-
-      if (isCompleted) {
-        profile.allTimeCompletedCount++;
-
-        const resultsArray = stepEntries.map(([_, v]) => v as any);
-        const stepTimestamps = resultsArray
-          .map(r => (r && r.timestamp) ? new Date(r.timestamp).getTime() : NaN)
-          .filter(t => !isNaN(t) && t > 0)
-          .sort((a, b) => a - b);
-
-        const maxStepTime = stepTimestamps.length > 0 ? stepTimestamps[stepTimestamps.length - 1] : 0;
-        const minStepTime = stepTimestamps.length > 0 ? stepTimestamps[0] : 0;
-
-        const runDate = run.completedAt
-          ? new Date(run.completedAt)
-          : (maxStepTime > 0 ? new Date(maxStepTime) : (run.startedAt ? new Date(run.startedAt) : new Date()));
-        const dateStr = getLocalDateStr(runDate) || defaultTodayStr;
-        const timeFormatted = !isNaN(runDate.getTime())
-          ? runDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          : '';
-
-        let durationMs = (typeof run.durationMs === 'number' && !isNaN(run.durationMs) && run.durationMs > 0) ? run.durationMs : 0;
-        if (!durationMs) {
-          const startMs = run.startedAt ? new Date(run.startedAt).getTime() : 0;
-          const endMs = run.completedAt ? new Date(run.completedAt).getTime() : (maxStepTime || startMs);
-
-          if (startMs > 0 && endMs > startMs) {
-            durationMs = endMs - startMs;
-          } else if (maxStepTime > minStepTime) {
-            durationMs = maxStepTime - minStepTime;
-          }
-        }
-
-        // Cap multi-hour overnight idle gaps between steps so average run time isn't skewed
-        const MAX_STEP_GAP_MS = 30 * 60 * 1000;
-        if (durationMs > 2 * 3600 * 1000 && stepTimestamps.length > 1) {
-          let cappedSum = 0;
-          for (let i = 1; i < stepTimestamps.length; i++) {
-            const delta = Math.max(0, stepTimestamps[i] - stepTimestamps[i - 1]);
-            cappedSum += Math.min(delta, MAX_STEP_GAP_MS);
-          }
-          if (cappedSum > 0) durationMs = cappedSum;
-        }
-
-        const durationSecs = Math.max(1, Math.round(durationMs / 1000));
-        const mins = Math.floor(durationSecs / 60);
-        const secs = durationSecs % 60;
-        const durationFormatted = mins > 0 
-          ? `${mins}m ${secs < 10 ? '0' : ''}${secs}s` 
-          : `${secs}s`;
-
-        const greenCount = resultsArray.filter(r => r.status === 'green').length;
-        const yellowCount = resultsArray.filter(r => r.status === 'yellow').length;
-        const redCount = resultsArray.filter(r => r.status === 'red').length;
-        const deviceNameStr = run.deviceName?.trim() || 'Mobile Device';
-        const latestPlanName = planTitleMap.get(run.planId) || run.planName || 'Test Plan';
-
-        if (!profile.dailyStats[dateStr]) {
-          profile.dailyStats[dateStr] = {
-            dateStr,
-            completedCount: 0,
-            totalDurationMs: 0,
-            devicesUsedOnDay: new Set<string>(),
-            completedRuns: []
-          };
-        }
-
-        profile.dailyStats[dateStr].completedCount++;
-        profile.dailyStats[dateStr].totalDurationMs += durationMs;
-        profile.dailyStats[dateStr].devicesUsedOnDay.add(deviceNameStr);
-        profile.dailyStats[dateStr].completedRuns.push({
-          runId: run.id,
-          planName: latestPlanName,
-          deviceName: deviceNameStr,
-          completedAtFormatted: timeFormatted,
-          durationMs,
-          durationFormatted,
-          greenCount,
-          yellowCount,
-          redCount
-        });
-      }
-    });
-
-    return Array.from(map.values());
-  }, [testRuns, archivedRuns, testPlans, defaultTodayStr]);
-
-  // Extract all unique dates for QA Status dropdown
-  const allQaDatesList = useMemo(() => {
-    const set = new Set<string>();
-    testerProfilesMap.forEach(p => {
-      Object.keys(p.dailyStats).forEach(d => set.add(d));
-    });
-    return Array.from(set).sort().reverse();
-  }, [testerProfilesMap]);
-
-  // Unified list combining registered tester profiles with live performance tracking data
-  const unifiedTesters = useMemo(() => {
-    const map = new Map<string, {
-      id?: string;
-      name: string;
-      role: string;
-      performanceProfile?: typeof testerProfilesMap[0];
-    }>();
-
-    // 1. Add all registered testers
-    testers.forEach(t => {
-      if (!t || !t.name) return;
-      map.set(t.name.toLowerCase().trim(), {
-        id: t.id,
-        name: t.name,
-        role: t.role || 'Mobile Tester'
-      });
-    });
-
-    // 2. Attach performance data from runs and include any extra testers found in runs
-    testerProfilesMap.forEach(p => {
-      const key = p.testerName.toLowerCase().trim();
-      if (map.has(key)) {
-        map.get(key)!.performanceProfile = p;
-      } else {
-        map.set(key, {
-          name: p.testerName,
-          role: 'QA Tester',
-          performanceProfile: p
-        });
-      }
-    });
-
-    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [testers, testerProfilesMap]);
-
-  const reportTotals = cujReport.totals;
-  const totalFeaturesCount = reportTotals.testedCujCount;
-  const criticalFeaturesCount = reportTotals.criticalCount;
-  const warningFeaturesCount = reportTotals.warningCount;
-  const healthyFeaturesCount = reportTotals.healthyCount;
-
-  const criticalPct = reportTotals.criticalPct;
-  const warningPct = reportTotals.warningPct;
-  const healthyPct = reportTotals.healthyPct;
-
-  const avgHealthScore = reportTotals.avgHealthScore;
-
-  const totalStepsAcrossFeatures = reportTotals.stepsExecuted;
-  const totalBugsAcrossFeatures = reportTotals.bugCount;
-
-  const goldenRunsAnalysis = cujReport.golden;
-
-  const buildDailySummaryPayload = () => {
-    const featuresPayload = [...cujReport.testedMetrics, ...cujReport.bugOnlyMetrics].map(m => ({
-      featureName: m.featureName,
-      status: m.status,
-      healthScorePct: m.healthScorePct,
-      greenCount: m.greenCount,
-      totalStepsExecuted: m.totalStepsExecuted,
-      bugCount: m.associatedBugs.length,
-      bugs: m.associatedBugs
-    }));
-
-    const allBugs = featuresPayload.flatMap(f => f.bugs);
-    return { featuresPayload, allBugs, scopeContext: reportScopeContext };
-  };
-
-  /**
-   * Builds the CUJ report. Pass `precomputedResult` (a pasted AI-chat reply) to skip
-   * the Gemini API entirely - no key needed. When 0 bugs exist in scope, generates immediately without requiring an API key.
-   */
-  const handleExecuteCopyReport = async (
-    skipKeyCheck: boolean = false,
-    precomputedResult?: ExecutiveQAResult
-  ): Promise<{ plainText: string; htmlText: string } | null> => {
-    const { featuresPayload, allBugs, scopeContext } = buildDailySummaryPayload();
-
-    // No API key: if there are bugs with notes to summarize, open AI Chat; if 0 bugs, generate directly!
-    if (!skipKeyCheck && !precomputedResult && !getStoredGeminiApiKey() && allBugs.some(b => b.note && b.note.trim())) {
-      openChatSummary();
-      return null;
-    }
-
-    if (isGeneratingSummary) return null;
-    setIsGeneratingSummary(true);
-
-    const requestScopeKey = reportScopeKey;
-
-    try {
-      const result = precomputedResult ?? await generateBatchExecutiveSummaryWithGemini(featuresPayload, allBugs, scopeContext);
-
-      if (reportScopeKeyRef.current !== requestScopeKey) {
-        setSummaryToast({
-          type: 'warning',
-          message: '⚠️ The test plan or day changed while the summary was being generated, so it was discarded. Click "Generate Summary" again for the current view.'
-        });
-        setTimeout(() => setSummaryToast(null), 7000);
-        return null;
-      }
-
-      const rejectedKeyHint = !precomputedResult && !skipKeyCheck && !result.modelUsed && allBugs.length > 0
-        ? getGeminiKeyErrorHint(result.error)
-        : null;
-      if (rejectedKeyHint) {
-        openChatSummary(`Your saved Gemini API key didn't work, so an AI chat is used instead. ${rejectedKeyHint}`);
-        return null;
-      }
-
-      const overallGeminiSummary = result.overallSummary;
-      const featureSummaryMap = result.featureSummaries;
-
-      const getFeatureSummary = (metric: CujMetric): string => {
-        const bugs = metric.associatedBugs;
-        if (bugs.length === 0) {
-          if (metric.redCount > 0 || metric.yellowCount > 0) {
-            const count = metric.redCount + metric.yellowCount;
-            return `${count} step failure${count > 1 ? 's' : ''}`;
-          }
-          return '';
-        }
-
-        let summary = featureSummaryMap[metric.featureName];
-        if (!summary) {
-          const match = Object.entries(featureSummaryMap).find(
-            ([k]) => k.trim().toLowerCase() === metric.featureName.trim().toLowerCase()
-          );
-          if (match && match[1]) summary = match[1];
-        }
-        if (!summary) {
-          summary = nlpCleanReword(bugs.map(b => b.note).filter(Boolean), metric.featureName);
-        }
-        return summary || '';
-      };
-
-      if (result.error && getStoredGeminiApiKey()) {
-        console.warn('Gemini executive summary notice:', result.error);
-      }
-
-      const lookupByCuj = <T,>(map: Record<string, T> | undefined, name: string): T | undefined => {
-        if (!map) return undefined;
-        if (map[name] !== undefined) return map[name];
-        const key = name.trim().toLowerCase();
-        const match = Object.entries(map).find(([k]) => k.trim().toLowerCase() === key);
-        return match ? match[1] : undefined;
-      };
-
-      const { plainText, htmlText } = buildCujReportText(cujReport, {
-        dateLabel: reportDateLabel,
-        disclaimer: reportDisclaimer,
-        overallSummary: overallGeminiSummary,
-        getSummary: getFeatureSummary,
-        getIssues: metric => (metric.associatedBugs.length > 0 ? lookupByCuj(result.featureIssues, metric.featureName) : undefined),
-        getFiledBugs: metric => lookupByCuj(result.featureFiledBugs, metric.featureName),
-        otherFiledBugs: result.otherFiledBugs
-      });
-
-      const aiFeatureSummaries: Record<string, { summary: string; bugsKey: string }> = {};
-      if (result.modelUsed) {
-        [...cujReport.testedMetrics, ...cujReport.bugOnlyMetrics].forEach(m => {
-          const summary = m.associatedBugs.length > 0 ? getFeatureSummary(m) : '';
-          if (summary) aiFeatureSummaries[m.featureName] = { summary, bugsKey: makeBugsKey(m.associatedBugs) };
-        });
-      }
-
-      setGeneratedReport({
-        plainText,
-        htmlText,
-        generatedAt: Date.now(),
-        scopeKey: requestScopeKey,
-        modelUsed: result.modelUsed,
-        aiError: result.modelUsed ? undefined : result.error,
-        featureSummaries: aiFeatureSummaries
-      });
-
-      const cacheNote = result.fromCache ? ' (instant, cached)' : '';
-      const hasApiKey = !!getStoredGeminiApiKey();
-      const aiFailed = !result.modelUsed && !!result.error && hasApiKey;
-
-      if (result.modelUsed) {
-        setSummaryToast({
-          type: 'success',
-          message: `✨ AI Executive Summary generated with ${result.modelUsed}${cacheNote}. Click "Copy Report" when you're ready.`
-        });
-      } else if (aiFailed) {
-        const keyHint = getGeminiKeyErrorHint(result.error);
-        const shortError = result.error!.length > 180 ? `${result.error!.slice(0, 177)}...` : result.error;
-        setSummaryToast({
-          type: 'error',
-          message: keyHint
-            ? `⚠️ AI summary failed: ${keyHint} A basic offline summary was used - or click "AI Chat" to summarize without a key.`
-            : `⚠️ AI summary failed (${shortError}). A basic offline summary was used instead - check your key and model in Gemini AI settings.`
-        });
-      } else if (!hasApiKey) {
-        setSummaryToast({
-          type: 'success',
-          message: `📋 Synthesized CUJ report is ready to copy!`
-        });
-      } else {
-        setSummaryToast({
-          type: 'success',
-          message: `📋 Clean synthesized CUJ report is ready to copy!`
-        });
-      }
-      setTimeout(() => setSummaryToast(null), aiFailed ? 9000 : 5000);
-      return { plainText, htmlText };
-    } finally {
-      setIsGeneratingSummary(false);
-    }
-  };
-
-  const handleGenerateSummary = () => {
-    handleExecuteCopyReport(false);
-  };
-
-  /** Has RX95 (the user's Jetski agent on their Cloudtop) write the executive summary. */
-  const handleAskRx95 = async () => {
-    if (rx95Elapsed !== null || isGeneratingSummary) return;
-    const { featuresPayload, allBugs, scopeContext } = buildDailySummaryPayload();
-    if (!allBugs.some(b => b.note && b.note.trim())) {
-      // Nothing for an AI to summarize - build the clean report directly.
-      await handleExecuteCopyReport(true);
-      return;
-    }
-    const scopeAtStart = reportScopeKey;
-    setRx95Elapsed(0);
-    try {
-      const { reply } = await requestRx95Summary(featuresPayload, scopeContext, s => setRx95Elapsed(s), undefined, { planId: reportScope.planId, date: reportScope.date });
-      if (reportScopeKeyRef.current !== scopeAtStart) {
-        setSummaryToast({ type: 'warning', message: '⚠️ The test plan or day changed while RX95 was writing, so its summary was discarded. Ask RX95 again for the current view.' });
-        setTimeout(() => setSummaryToast(null), 7000);
-        return;
-      }
-      const result = applyChatSummaryReply(featuresPayload, allBugs, reply, scopeContext);
-      result.modelUsed = 'RX95';
-      const report = await handleExecuteCopyReport(true, result);
-      if (report) {
-        setSummaryToast({ type: 'success', message: '🤖 RX95 wrote the executive summary. Click "Copy" when you\'re ready.' });
-        setTimeout(() => setSummaryToast(null), 6000);
-      }
-    } catch (e: any) {
-      setSummaryToast({ type: 'error', message: `⚠️ ${e?.message || 'RX95 could not write the summary.'} You can still use "AI Chat".` });
-      setTimeout(() => setSummaryToast(null), 9000);
-    } finally {
-      setRx95Elapsed(null);
-    }
-  };
-
-  /** Copies plain text, falling back to a hidden textarea when the async clipboard API is blocked. */
-  const copyPlainText = async (text: string): Promise<boolean> => {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch (e) {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      let ok = false;
-      try { ok = document.execCommand('copy'); } catch (err) {}
-      document.body.removeChild(ta);
-      return ok;
-    }
-  };
-
-  const openChatSummary = (notice?: string) => {
-    setChatStatus(null);
-    setChatNotice(notice || null);
-    setChatPromptCopied(false);
-    setChatReplyText('');
-    lastAutoCheckedReplyRef.current = '';
-    setIsChatSummaryOpen(true);
-    void handleCopyChatPrompt().then(copied => {
-      if (copied && chatAutoOpenGemini) openGeminiChat();
-    });
-  };
-
-  const openGeminiChat = () => {
-    try {
-      const tab = window.open(GEMINI_CHAT_URL, '_blank');
-      if (tab) tab.opener = null;
-    } catch (e) {}
-  };
-
-  const toggleChatAutoOpenGemini = (on: boolean) => {
-    setChatAutoOpenGemini(on);
-    try {
-      localStorage.setItem(CHAT_AUTO_OPEN_GEMINI_KEY, on ? '1' : '0');
-    } catch (e) {}
-  };
-
-  const handleCopyChatPrompt = async (): Promise<boolean> => {
-    const { featuresPayload, allBugs, scopeContext } = buildDailySummaryPayload();
-    const built = buildChatSummaryPrompt(featuresPayload, allBugs, scopeContext);
-    if (!built) {
-      setChatStatus({ type: 'error', message: `No bug notes were logged for ${scopeContext.scopeLabel}, so there is nothing for the AI to summarize.` });
-      return false;
-    }
-    const copied = await copyPlainText(built.prompt);
-    setChatPromptCopied(copied);
-    setChatStatus(copied
-      ? { type: 'success', message: `Prompt copied - ${built.bugCount} bug${built.bugCount === 1 ? '' : 's'} across ${built.cujCount} CUJ${built.cujCount === 1 ? '' : 's'} from ${scopeContext.scopeLabel}. Paste it into Gemini or Antigravity and send it.` }
-      : { type: 'error', message: 'Your browser blocked the copy. Click "Copy prompt" again.' });
-    return copied;
-  };
-
-  const handlePasteChatReplyFromClipboard = async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text && text.trim()) {
-        setChatReplyText(text);
-        setChatStatus(null);
-        void handleChatReplyText(text, 'paste');
-      } else {
-        setChatStatus({ type: 'error', message: "Your clipboard is empty - copy the AI's reply first." });
-      }
-    } catch (e) {
-      setChatStatus({ type: 'error', message: 'Your browser blocked clipboard access - click in the box and paste (⌘V / Ctrl+V) instead.' });
-    }
-  };
-
-  const handleChatReplyText = async (text: string, source: 'auto' | 'paste') => {
-    if (!text || !text.trim()) return;
-    const { featuresPayload, allBugs, scopeContext } = buildDailySummaryPayload();
-
-    if (source === 'auto') {
-      if (text === lastAutoCheckedReplyRef.current) return;
-      lastAutoCheckedReplyRef.current = text;
-      if (isChatSummaryPrompt(text)) return;
-      const replyId = getChatReplyReportId(text);
-      if (!replyId) return;
-      const current = buildChatSummaryPrompt(featuresPayload, allBugs, scopeContext);
-      if (!current) return;
-      if (replyId !== current.reportId) {
-        setChatStatus({ type: 'error', message: 'The reply on your clipboard is for an older prompt - the test plan, day or bugs changed since it was copied. Copy the prompt again (step 1) and send the new one to the AI.' });
-        return;
-      }
-    }
-
-    let result: ExecutiveQAResult;
-    try {
-      result = applyChatSummaryReply(featuresPayload, allBugs, text, scopeContext);
-    } catch (e: any) {
-      setChatStatus({ type: 'error', message: e?.message || "Couldn't read the AI's reply." });
-      return;
-    }
-
-    setIsChatSummaryOpen(false);
-    setChatReplyText('');
-    setChatStatus(null);
-    setChatPromptCopied(false);
-    const report = await handleExecuteCopyReport(true, result);
-    if (report && await writeReportToClipboard(report.plainText, report.htmlText)) {
-      setCopiedReport(true);
-      setTimeout(() => setCopiedReport(false), 2500);
-      setSummaryToast({ type: 'success', message: '✨ AI summary built from the chat reply and copied to your clipboard - paste it anywhere.' });
-    }
-  };
-  chatReplyHandlerRef.current = handleChatReplyText;
-
-  const handleBuildReportFromChatReply = () => {
-    void handleChatReplyText(chatReplyText, 'paste');
-  };
-
-  useEffect(() => {
-    if (!isChatSummaryOpen) return;
-    const checkClipboard = async () => {
-      if (document.visibilityState !== 'visible' || !document.hasFocus()) return;
-      if (!navigator.clipboard || typeof navigator.clipboard.readText !== 'function') return;
-      try {
-        const text = await navigator.clipboard.readText();
-        if (text) chatReplyHandlerRef.current?.(text, 'auto');
-      } catch (e) {}
-    };
-    const onPaste = (e: ClipboardEvent) => {
-      const text = e.clipboardData?.getData('text') || '';
-      if (text.trim()) setTimeout(() => chatReplyHandlerRef.current?.(text, 'paste'), 0);
-    };
-    window.addEventListener('focus', checkClipboard);
-    document.addEventListener('visibilitychange', checkClipboard);
-    document.addEventListener('paste', onPaste);
-    return () => {
-      window.removeEventListener('focus', checkClipboard);
-      document.removeEventListener('visibilitychange', checkClipboard);
-      document.removeEventListener('paste', onPaste);
-    };
-  }, [isChatSummaryOpen]);
-
-  const writeReportToClipboard = async (plainText: string, htmlText: string): Promise<boolean> => {
-    try {
-      if (navigator.clipboard && window.ClipboardItem) {
-        const textBlob = new Blob([plainText], { type: 'text/plain' });
-        const htmlBlob = new Blob([htmlText], { type: 'text/html' });
-        await navigator.clipboard.write([
-          new ClipboardItem({
-            'text/plain': textBlob,
-            'text/html': htmlBlob,
-          })
-        ]);
-      } else {
-        await navigator.clipboard.writeText(plainText);
-      }
-      return true;
-    } catch (clipboardErr) {
-      try {
-        await navigator.clipboard.writeText(plainText);
-        return true;
-      } catch (fallbackErr) {
-        const ta = document.createElement('textarea');
-        ta.value = plainText;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        let ok = false;
-        try { ok = document.execCommand('copy'); } catch (e) {}
-        document.body.removeChild(ta);
-        return ok;
-      }
-    }
-  };
-
-  const handleCopyGeneratedReport = async () => {
-    if (!generatedReport || generatedReport.scopeKey !== reportScopeKey) {
-      handleGenerateSummary();
-      return;
-    }
-
-    await writeReportToClipboard(generatedReport.plainText, generatedReport.htmlText);
-    setCopiedReport(true);
-    setTimeout(() => setCopiedReport(false), 2500);
-  };
-
-  const handleCopyVisualImageToClipboard = async () => {
-    if (!isFeatureReportExpanded) {
-      setIsFeatureReportExpanded(true);
-      await new Promise(resolve => setTimeout(resolve, 120));
-    }
-    if (!visualCardRef.current) return;
-    try {
-      const blob = await toBlob(visualCardRef.current, {
-        pixelRatio: 2,
-        cacheBust: true,
-        width: 1400,
-        style: {
-          width: '1400px',
-          maxWidth: '1400px',
-          padding: '40px',
-          borderRadius: '32px',
-          backgroundColor: '#111827',
-        },
-        filter: (node) => {
-          if (node instanceof HTMLElement && node.classList.contains('no-capture')) {
-            return false;
-          }
-          return true;
-        }
-      });
-
-      if (!blob) return;
-
-      // Download PNG file directly (append to DOM for cross-browser compatibility)
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `QA_Quality_Profile_${getLocalDateStr(new Date())}.png`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-
-      // Also copy PNG blob to clipboard if browser allows
-      try {
-        if (navigator.clipboard && window.ClipboardItem) {
-          await navigator.clipboard.write([
-            new ClipboardItem({ 'image/png': blob })
-          ]);
-        }
-      } catch (err) {}
-
-      setCopiedImage(true);
-      setTimeout(() => setCopiedImage(false), 2500);
-    } catch (err) {
-      console.error('Failed to export PNG image:', err);
-    }
-  };
-
-  // Filter & Sort Bug Logs (memoized and null-safe)
-  const processedBugs = useMemo(() => {
-    let list = bugLogs.map(b => {
-      const cat = bugCategorizations[b.id];
-      return {
-        ...b,
-        bugType: cat?.bugType || b.bugType || 'Bug',
-        priority: cat?.priority || b.priority || (b.severity === 'critical' ? 'P0' : b.severity === 'high' ? 'P1' : 'P2'),
-        status: cat?.status || b.status
-      };
-    });
-
-    if (selectedPlanFilter !== 'all') {
-      list = list.filter(b => bugPlanLookup(b).planId === selectedPlanFilter);
-    }
-
-    if (selectedDeviceFilter !== 'all') {
-      list = list.filter(
-        b => (b.deviceName || 'Unspecified').toLowerCase() === selectedDeviceFilter.toLowerCase()
-      );
-    }
-
-    if (selectedFeatureFilter !== 'all') {
-      list = list.filter(
-        b => (b.feature || 'General').toLowerCase() === selectedFeatureFilter.toLowerCase()
-      );
-    }
-
-    if (selectedDateFilter !== 'all') {
-      const now = new Date();
-      const todayDateStr = getLocalDateStr(now);
-      const yesterday = new Date(now);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayDateStr = getLocalDateStr(yesterday);
-
-      list = list.filter(b => {
-        if (!b.timestamp) return false;
-        const bugDate = new Date(b.timestamp);
-        if (isNaN(bugDate.getTime())) return false;
-        const bugLocalDay = getLocalDateStr(bugDate);
-
-        if (selectedDateFilter === 'today') {
-          return bugLocalDay === todayDateStr;
-        }
-        if (selectedDateFilter === 'yesterday') {
-          return bugLocalDay === yesterdayDateStr;
-        }
-        if (selectedDateFilter === '7days') {
-          const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 3600 * 1000);
-          return bugDate >= sevenDaysAgo;
-        }
-        if (selectedDateFilter === '30days') {
-          const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 3600 * 1000);
-          return bugDate >= thirtyDaysAgo;
-        }
-        if (selectedDateFilter === 'custom' && customDateInput) {
-          return bugLocalDay === customDateInput.trim();
-        }
-        return true;
-      });
-    }
-
-    if (searchBugQuery.trim()) {
-      const q = searchBugQuery.toLowerCase();
-      list = list.filter(b =>
-        (b.title || '').toLowerCase().includes(q) ||
-        (b.note || '').toLowerCase().includes(q) ||
-        (b.stepTitle || '').toLowerCase().includes(q) ||
-        (b.testerName || '').toLowerCase().includes(q) ||
-        (b.feature || '').toLowerCase().includes(q) ||
-        (b.deviceName || '').toLowerCase().includes(q)
-      );
-    }
-
-    list.sort((a, b) => {
-      if (sortByDevice === 'device-asc') {
-        return (a.deviceName || 'Unspecified').localeCompare(b.deviceName || 'Unspecified');
-      }
-      if (sortByDevice === 'device-desc') {
-        return (b.deviceName || 'Unspecified').localeCompare(a.deviceName || 'Unspecified');
-      }
-      const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-      const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-      const safeATime = isNaN(aTime) ? 0 : aTime;
-      const safeBTime = isNaN(bTime) ? 0 : bTime;
-      if (sortByDevice === 'oldest') {
-        return safeATime - safeBTime;
-      }
-      if (sortByDevice === 'priority' || (sortByDevice as any) === 'severity') {
-        const prioMap: Record<string, number> = { P0: 3, '0': 3, P1: 2, '1': 2, P2: 1, '2': 1 };
-        const aPrio = bugCategorizations[a.id]?.priority || a.priority || (a.severity === 'critical' ? 'P0' : a.severity === 'high' ? 'P1' : 'P2');
-        const bPrio = bugCategorizations[b.id]?.priority || b.priority || (b.severity === 'critical' ? 'P0' : b.severity === 'high' ? 'P1' : 'P2');
-        return (prioMap[bPrio] || 0) - (prioMap[aPrio] || 0);
-      }
-      return safeBTime - safeATime;
-    });
-
-    return list;
-  }, [bugLogs, bugCategorizations, selectedPlanFilter, bugPlanLookup, selectedDeviceFilter, selectedFeatureFilter, selectedDateFilter, customDateInput, searchBugQuery, sortByDevice]);
-
-  // ---------- RX95 same-day duplicate groups (Bugs Feed) ----------
-  const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(() => loadDismissed());
-  const [expandedFeedBundles, setExpandedFeedBundles] = useState<Set<string>>(new Set());
-  const [suggestionsCollapsed, setSuggestionsCollapsed] = useState(false);
-  // Bug ids being bundled right now (guards a fast double-click before React re-renders)
-  const bundlingIdsRef = useRef<Set<string>>(new Set());
-  const planNameById = (id?: string) => testPlans.find(p => p.id === id)?.name;
-
-  /** Suggestions limited to the reports the feed currently shows (plan/date/search filters), hotlist-safe. */
-  const feedSuggestions = useMemo<ShownSuggestion[]>(() => {
-    const visibleIds = new Set(processedBugs.map(b => b.id));
-    return shownSuggestions(rx95Suggestions?.sets || [], bugLogs.filter(b => visibleIds.has(b.id)), dismissedSuggestions, planNameById);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rx95Suggestions, bugLogs, dismissedSuggestions, processedBugs, testPlans]);
-  const processedBugById = useMemo(() => new Map<string, BugLog>(processedBugs.map(b => [b.id, b as BugLog])), [processedBugs]);
-  /** Buganizer tab gets the feed's Bug Type / Priority / Status (this browser's choices win), so mega-bug drafts and Repro'd status use them. */
-  const buganizerBugs = useMemo(() => bugLogs.map(b => {
-    const cat = bugCategorizations[b.id];
-    if (!cat || (!cat.bugType && !cat.priority && !cat.status)) return b;
-    return { ...b, bugType: cat.bugType || b.bugType, priority: cat.priority || b.priority, status: cat.status || b.status };
-  }), [bugLogs, bugCategorizations]);
-  const suggestionByBugId = useMemo(() => {
-    const m = new Map<string, ShownSuggestion>();
-    feedSuggestions.forEach(x => x.members.forEach(b => m.set(b.id, x)));
-    return m;
-  }, [feedSuggestions]);
-
-  const jumpToSuggestion = (sugId: string) => {
-    const go = () => {
-      const el = document.getElementById(`feed-sug-${sugId}`);
-      if (!el) return;
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      el.classList.add('ring-2', 'ring-violet-400');
-      setTimeout(() => el.classList.remove('ring-2', 'ring-violet-400'), 1400);
-    };
-    setFeedTab('suggestions');
-    if (suggestionsCollapsed) setSuggestionsCollapsed(false);
-    setTimeout(go, 80);
-  };
-
-  /** Option A: one category for every ticked report, then bundle them into one bug. */
-  const handleCategorizeAndBundle = (members: BugLog[], title: string, summary: string | undefined, cat: GroupCategory) => {
-    const current = members.map(m => bugById.get(m.id) || m).filter(isBundleable);
-    if (current.some(m => bundlingIdsRef.current.has(m.id))) return; // second click of a double-click
-    if (current.length < 2) return flashFeed('Pick at least two unfiled reports to bundle.');
-    if (!sameHotlist(current, planNameById)) return flashFeed("Can't bundle these: they're from test plans linked to different hotlists.");
-    current.forEach(m => bundlingIdsRef.current.add(m.id));
-    setTimeout(() => current.forEach(m => bundlingIdsRef.current.delete(m.id)), 3000);
-    const bundle = newBundle(current.map(m => m.id), title, summary, 'rx95');
-    setBugCategorizations(prev => {
-      const updated = { ...prev };
-      current.forEach(m => { updated[m.id] = { ...(prev[m.id] || {}), bugType: cat.bugType, priority: cat.priority, status: cat.status }; });
-      try { localStorage.setItem('qa_bug_categorizations', JSON.stringify(updated)); } catch (e) {}
-      return updated;
-    });
-    const patch = { bugType: cat.bugType, priority: cat.priority, status: cat.status, bundle, reviewed: reviewedNow('reviewed') };
-    if (onPatchBugLogs) onPatchBugLogs(Object.fromEntries(current.map(m => [m.id, patch])));
-    else if (onUpdateBugLog) onUpdateBugLog(current.map(m => ({ ...m, ...patch })));
-    flashFeed(`Set ${cat.bugType} · ${cat.priority} · ${cat.status} on ${current.length} reports and bundled them into one bug.`);
-  };
-
-  const unbundleFromFeed = (bundleId: string) => {
-    const members = bugLogs.filter(b => b.bundle?.id === bundleId);
-    if (!members.length) return;
-    if (onPatchBugLogs) onPatchBugLogs(Object.fromEntries(members.map(m => [m.id, { bundle: undefined }])));
-    else if (onUpdateBugLog) onUpdateBugLog(members.map(m => ({ ...m, bundle: undefined })));
-    flashFeed(`Unbundled ${members.length} reports. Their categories stay as set.`);
-  };
-
-  type FeedBug = (typeof processedBugs)[number];
-  type FeedRow = { kind: 'bug'; bug: FeedBug } | { kind: 'bundle'; id: string; members: FeedBug[] };
-  const reviewedOf = (b: BugLog) => isReviewed(bugById.get(b.id) || b, bugCategorizations[b.id]);
-  /** Bundled reports collapse into one row (placed where the first visible member would be). */
-  const buildFeedRows = (list: FeedBug[]): FeedRow[] => {
-    const rows: FeedRow[] = [];
-    const bundleRows = new Map<string, { kind: 'bundle'; id: string; members: FeedBug[] }>();
-    list.forEach(b => {
-      const bid = b.bundle?.id;
-      if (!bid) { rows.push({ kind: 'bug', bug: b }); return; }
-      let row = bundleRows.get(bid);
-      if (!row) { row = { kind: 'bundle', id: bid, members: [] }; bundleRows.set(bid, row); rows.push(row); }
-      row.members.push(b);
-    });
-    // A bundle with only one visible member (others filtered out) shows as a normal row
-    return rows.map(r => (r.kind === 'bundle' && r.members.length === 1 ? { kind: 'bug', bug: r.members[0] } as FeedRow : r));
-  };
-  const newFeedBugs = useMemo(() => processedBugs.filter(b => !reviewedOf(b)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [processedBugs, bugById, bugCategorizations]);
-  const reviewedFeedBugs = useMemo(() => processedBugs.filter(b => reviewedOf(b)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [processedBugs, bugById, bugCategorizations]);
-  const feedRows = useMemo<FeedRow[]>(() => {
-    if (feedTab === 'reviewed') return buildFeedRows(reviewedFeedBugs);
-    const visibleNew = processedBugs.filter(b => !reviewedOf(b) || (stickyNewBugIds.has(b.id) && !!expandedBugIds[b.id]));
-    return buildFeedRows(visibleNew);
-  },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [feedTab, newFeedBugs, reviewedFeedBugs, processedBugs, stickyNewBugIds, expandedBugIds]);
-
-  /** Opens a report on the Bugs Feed (from the Buganizer tab): its tab, expanded, scrolled into view. */
-  const openInFeed = (bugId?: string) => {
-    setBugsView('feed');
-    if (!bugId) { setFeedTab('suggestions'); setSuggestionsCollapsed(false); return; }
-    const b = bugById.get(bugId);
-    if (!b) return;
-    if (!processedBugs.some(x => x.id === bugId)) flashFeed('That report is hidden by the current plan / day / search filters.');
-    setFeedTab(reviewedOf(b) ? 'reviewed' : 'new');
-    setExpandedBugIds(prev => ({ ...prev, [bugId]: true }));
-    if (b.bundle?.id) setExpandedFeedBundles(prev => new Set(prev).add(b.bundle!.id));
-    setTimeout(() => {
-      const el = document.getElementById(`feed-row-${bugId}`);
-      if (!el) return;
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      el.classList.add('ring-2', 'ring-blue-400');
-      setTimeout(() => el.classList.remove('ring-2', 'ring-blue-400'), 1600);
-    }, 120);
-  };
-  const openInBuganizer = (bugId: string) => {
-    setBugsView('buganizer');
-    setBuganizerFocus({ id: bugId, n: Date.now() });
-  };
-
-  const renderFeedBundle = (row: { id: string; members: FeedBug[] }, renderBug: (b: FeedBug) => React.ReactNode) => {
-    const open = expandedFeedBundles.has(row.id);
-    const first = row.members[0];
-    const bd = first.bundle!;
-    const total = bd.memberIds?.length || row.members.length;
-    // Header sums up all visible members: highest priority, most common type, Repro'd if any member is
-    const rank = (p?: string) => (p === 'P0' || p === '0' ? 0 : p === 'P1' || p === '1' ? 1 : 2);
-    const pri = ['P0', 'P1', 'P2'][Math.min(...row.members.map(m => rank(String(m.priority || 'P2'))))];
-    const typeCounts = new Map<string, number>();
-    row.members.forEach(m => { const t = m.bugType || 'Bug'; typeCounts.set(t, (typeCounts.get(t) || 0) + 1); });
-    const bugTypeLabel = Array.from(typeCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Bug';
-    const anyReprod = row.members.some(m => effectiveStatus(m.status) === REPROD);
-    const testersN = new Set(row.members.map(m => (m.testerName || '').trim()).filter(Boolean)).size;
-    const allFiled = row.members.every(m => effectiveFiled(bugById.get(m.id) || m));
-    const waiting = !allFiled && row.members.some(m => (bugById.get(m.id) || m).filePending);
-    return (
-      <div key={`bundle-${row.id}`} data-testid="feed-bundle-row" id={`feed-bundle-${row.id}`}>
-        <div onClick={() => setExpandedFeedBundles(prev => { const n = new Set(prev); n.has(row.id) ? n.delete(row.id) : n.add(row.id); return n; })}
-          className={`${rowCls} flex-wrap ${open ? rowOpenCls : ''}`}>
-          <span className={`${tagCls} ${TAG_STYLE.bundle}`}>Bundle ×{total}</span>
-          <span className="flex-1 min-w-0 truncate text-slate-100 font-semibold">{bd.title}</span>
-          <span className={`font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold uppercase ${pri === 'P0' || pri === '0' ? 'bg-rose-500/20 text-rose-300 border-rose-500/40' : pri === 'P1' || pri === '1' ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' : 'bg-slate-800 text-slate-300 border-slate-700'}`}>{pri}</span>
-          <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border border-slate-700 bg-slate-800 text-slate-300">{bugTypeLabel}</span>
-          {anyReprod && <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold bg-violet-500/15 text-violet-200 border-violet-500/40">REPRO'D</span>}
-          {allFiled && <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-black tracking-wider bg-green-500/15 text-green-300 border-green-500/40">FILED</span>}
-          {waiting && <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full border font-bold bg-amber-500/15 text-amber-200 border-amber-500/40">⏳ WAITING</span>}
-          <span className="text-xs text-slate-400">{testersN} tester{testersN === 1 ? '' : 's'}{row.members.length < total ? ` · ${row.members.length} shown` : ''}</span>
-          <button type="button" className={rowActionCls}>{open ? 'Close' : 'Open'}</button>
-        </div>
-        {open && (
-          <div className={`${expandedCls} space-y-3`} data-testid="feed-bundle-expanded">
-            <div className="flex flex-wrap items-center gap-2 pt-3">
-              {!allFiled && !waiting && (
-                <button type="button" data-testid="feed-unbundle" onClick={() => unbundleFromFeed(row.id)}
-                  className="px-2.5 h-7 rounded-xl text-xs font-semibold border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700">Unbundle</button>
-              )}
-              <span className="text-[11px] text-slate-500">Shows on the Buganizer tab as one bug. Change a single report's category below if needed.</span>
-            </div>
-            {row.members.map(m => renderBug(m))}
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // Filter plans by search query (memoized and null-safe)
-  const filteredPlans = useMemo(() => {
-    const q = searchPlanQuery.trim().toLowerCase();
-    if (!q) return testPlans;
-    return testPlans.filter(p =>
-      (p.name || '').toLowerCase().includes(q) ||
-      (p.description || '').toLowerCase().includes(q) ||
-      (p.steps || []).some(s =>
-        (s?.title || '').toLowerCase().includes(q) ||
-        (s?.feature || '').toLowerCase().includes(q) ||
-        (s?.description || '').toLowerCase().includes(q) ||
-        (s?.expectedOutcome || (s as any)?.expectedResult || '').toLowerCase().includes(q)
-      )
-    );
-  }, [testPlans, searchPlanQuery]);
-
-  // Stats calculation
-  const totalPlans = testPlans.length;
-  const activeRuns = liveInProgressRuns.length;
-  const totalBugs = bugLogs.length;
-
-  const assignedDevices = useMemo(
-    () =>
-      devices.filter(
-        d =>
-          d.quotas &&
-          d.quotas.some(
-            q => q.planId && (q.targetRunsPerDay || 0) > 0 && testPlans.some(p => p.id === q.planId)
-          )
-      ),
-    [devices, testPlans]
-  );
-  const unassignedDevices = useMemo(
-    () =>
-      devices.filter(
-        d =>
-          !d.quotas ||
-          !d.quotas.some(
-            q => q.planId && (q.targetRunsPerDay || 0) > 0 && testPlans.some(p => p.id === q.planId)
-          )
-      ),
-    [devices, testPlans]
-  );
-  const activeOrTestedTodayCount = useMemo(() => {
-    return unifiedTesters.filter(t => {
-      const testerKey = t.name.toLowerCase().trim();
-      if (activeTesterMap.has(testerKey)) return true;
-      const profile = t.performanceProfile;
-      const dayRuns = selectedQaDate === 'all'
-        ? (profile?.allTimeCompletedCount || 0)
-        : (profile?.dailyStats[selectedQaDate]?.completedCount || 0);
-      if (dayRuns > 0) return true;
-      return bugLogs.some(b => {
-        const bTester = ((b.testerName || (b as any).reporter || '') as string).toLowerCase().trim();
-        if (bTester !== testerKey) return false;
-        return selectedQaDate === 'all' ? true : getLocalDateStr(b.timestamp) === selectedQaDate;
-      });
-    }).length;
-  }, [unifiedTesters, activeTesterMap, selectedQaDate, bugLogs]);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
       {/* Hidden File Input for JSON Backup Import */}
       <input
         type="file"
-        ref={fileInputRef}
-        onChange={handleJSONFileImport}
+        ref={c.fileInputRef}
+        onChange={c.handleJSONFileImport}
         accept=".json"
         className="hidden"
       />
 
       {/* Subagent Execution Toast / Banner */}
-      {subagentToast && (
+      {c.subagentToast && (
         <div className="bg-[#111827] border border-blue-500/40 p-4 rounded-3xl backdrop-blur-xl flex items-center justify-between text-xs font-semibold text-slate-100 animate-in fade-in slide-in-from-top-2 duration-300 shadow-lg">
           <div className="flex items-center gap-2.5">
             <Sparkles className="w-4 h-4 text-blue-400 flex-shrink-0" />
-            <span>{subagentToast}</span>
+            <span>{c.subagentToast}</span>
           </div>
-          <button onClick={() => setSubagentToast(null)} className="text-slate-400 hover:text-white p-1">
+          <button
+            onClick={() => c.setSubagentToast(null)}
+            className="text-slate-400 hover:text-white p-1"
+          >
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -1724,165 +162,197 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       {/* Unified Top Navigation KPI Cards Row (4 Cards) */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        
         {/* Card 1: Overview / Test Plans */}
         <div
-          onClick={() => setActiveTab('overview')}
+          onClick={() => c.setActiveTab('overview')}
           className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-200 ${
-            activeTab === 'overview'
+            c.activeTab === 'overview'
               ? '!bg-[#162033] !border-blue-500 ring-1 ring-blue-500/30 shadow-md'
               : 'hover:border-slate-700'
           }`}
           title="Click to view Configured Test Plans & Active Runs"
         >
           <div>
-            <div className={`text-xs font-semibold ${activeTab === 'overview' ? 'text-slate-200' : 'text-slate-400'} flex items-center gap-1.5`}>
+            <div
+              className={`text-xs font-semibold ${
+                c.activeTab === 'overview' ? 'text-slate-200' : 'text-slate-400'
+              } flex items-center gap-1.5`}
+            >
               <span>Test Plans</span>
-              {activeTab === 'overview' && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
+              {c.activeTab === 'overview' && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
             </div>
-            <div className="text-xl font-bold text-slate-50 mt-1 font-mono tracking-tight">{totalPlans}</div>
+            <div className="text-xl font-bold text-slate-50 mt-1 font-mono tracking-tight">
+              {c.totalPlans}
+            </div>
           </div>
-          <div className={`p-2.5 rounded-2xl border transition-all ${
-            activeTab === 'overview'
-              ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
-              : 'bg-slate-800/90 text-slate-400 border-slate-700/80'
-          }`}>
+          <div
+            className={`p-2.5 rounded-2xl border transition-all ${
+              c.activeTab === 'overview'
+                ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
+                : 'bg-slate-800/90 text-slate-400 border-slate-700/80'
+            }`}
+          >
             <ListChecks className="w-4 h-4" />
           </div>
         </div>
 
         {/* Card 2: Unified Devices & Testers */}
         <div
-          onClick={() => setActiveTab('devices')}
+          onClick={() => c.setActiveTab('devices')}
           className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-200 ${
-            activeTab === 'devices' || activeTab === 'testers'
+            c.activeTab === 'devices' || c.activeTab === 'testers'
               ? '!bg-[#162033] !border-blue-500 ring-1 ring-blue-500/30 shadow-md'
               : 'hover:border-slate-700'
           }`}
           title="Click to manage Active Devices, Daily Quotas & QA Testers"
         >
           <div>
-            <div className={`text-xs font-semibold ${activeTab === 'devices' || activeTab === 'testers' ? 'text-slate-200' : 'text-slate-400'} flex items-center gap-1.5`}>
+            <div
+              className={`text-xs font-semibold ${
+                c.activeTab === 'devices' || c.activeTab === 'testers'
+                  ? 'text-slate-200'
+                  : 'text-slate-400'
+              } flex items-center gap-1.5`}
+            >
               <span>Devices &amp; Testers</span>
-              {(activeTab === 'devices' || activeTab === 'testers') && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
+              {(c.activeTab === 'devices' || c.activeTab === 'testers') && (
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+              )}
             </div>
             <div className="text-xl font-bold text-slate-50 mt-1 font-mono tracking-tight">
-              {`${activeOrTestedTodayCount} Tester${activeOrTestedTodayCount === 1 ? '' : 's'}`}
+              {`${c.activeOrTestedTodayCount} Tester${c.activeOrTestedTodayCount === 1 ? '' : 's'}`}
             </div>
           </div>
-          <div className={`p-2.5 rounded-2xl border transition-all ${
-            activeTab === 'devices' || activeTab === 'testers'
-              ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
-              : 'bg-slate-800/90 text-slate-400 border-slate-700/80'
-          }`}>
+          <div
+            className={`p-2.5 rounded-2xl border transition-all ${
+              c.activeTab === 'devices' || c.activeTab === 'testers'
+                ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
+                : 'bg-slate-800/90 text-slate-400 border-slate-700/80'
+            }`}
+          >
             <Smartphone className="w-4 h-4" />
           </div>
         </div>
 
         {/* Card 3: CUJ Quality Report */}
         <div
-          onClick={() => setActiveTab('features')}
+          onClick={() => c.setActiveTab('features')}
           className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-200 ${
-            activeTab === 'features'
+            c.activeTab === 'features'
               ? '!bg-[#162033] !border-blue-500 ring-1 ring-blue-500/30 shadow-md'
               : 'hover:border-slate-700'
           }`}
           title="Click to view CUJ Quality Report"
         >
           <div>
-            <div className={`text-xs font-semibold ${activeTab === 'features' ? 'text-slate-200' : 'text-slate-400'} flex items-center gap-1.5`}>
+            <div
+              className={`text-xs font-semibold ${
+                c.activeTab === 'features' ? 'text-slate-200' : 'text-slate-400'
+              } flex items-center gap-1.5`}
+            >
               <span>CUJ Report</span>
-              {activeTab === 'features' && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
+              {c.activeTab === 'features' && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
             </div>
-            <div className="text-xl font-bold text-slate-50 mt-1 font-mono tracking-tight">{featureMetricsList.length} CUJs</div>
-            {goldenRunsAnalysis.totalCount > 0 && (
+            <div className="text-xl font-bold text-slate-50 mt-1 font-mono tracking-tight">
+              {c.featureMetricsList.length} CUJs
+            </div>
+            {c.goldenRunsAnalysis.totalCount > 0 && (
               <div className="text-[11px] text-slate-400 font-mono font-medium mt-0.5">
-                {goldenRunsAnalysis.goldenCount} Golden
+                {c.goldenRunsAnalysis.goldenCount} Golden
               </div>
             )}
           </div>
-          <div className={`p-2.5 rounded-2xl border transition-all ${
-            activeTab === 'features'
-              ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
-              : 'bg-slate-800/90 text-slate-400 border-slate-700/80'
-          }`}>
+          <div
+            className={`p-2.5 rounded-2xl border transition-all ${
+              c.activeTab === 'features'
+                ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
+                : 'bg-slate-800/90 text-slate-400 border-slate-700/80'
+            }`}
+          >
             <Activity className="w-4 h-4" />
           </div>
         </div>
 
         {/* Card 4: Bugs Feed */}
         <div
-          onClick={() => setActiveTab('bugs')}
+          onClick={() => c.setActiveTab('bugs')}
           className={`liquid-glass-card rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all duration-200 ${
-            activeTab === 'bugs'
+            c.activeTab === 'bugs'
               ? '!bg-[#162033] !border-blue-500 ring-1 ring-blue-500/30 shadow-md'
               : 'hover:border-slate-700'
           }`}
           title="Click to view Reported Bugs"
         >
           <div>
-            <div className={`text-xs font-semibold ${activeTab === 'bugs' ? 'text-slate-200' : 'text-slate-400'} flex items-center gap-1.5`}>
+            <div
+              className={`text-xs font-semibold ${
+                c.activeTab === 'bugs' ? 'text-slate-200' : 'text-slate-400'
+              } flex items-center gap-1.5`}
+            >
               <span>Bugs Feed</span>
-              {activeTab === 'bugs' && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
+              {c.activeTab === 'bugs' && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
             </div>
-            <div className="text-xl font-bold text-slate-50 mt-1 font-mono tracking-tight">{totalBugs} Bugs</div>
+            <div className="text-xl font-bold text-slate-50 mt-1 font-mono tracking-tight">
+              {c.totalBugs} Bugs
+            </div>
           </div>
-          <div className={`p-2.5 rounded-2xl border transition-all ${
-            activeTab === 'bugs'
-              ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
-              : 'bg-slate-800/90 text-slate-400 border-slate-700/80'
-          }`}>
+          <div
+            className={`p-2.5 rounded-2xl border transition-all ${
+              c.activeTab === 'bugs'
+                ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
+                : 'bg-slate-800/90 text-slate-400 border-slate-700/80'
+            }`}
+          >
             <Bug className="w-4 h-4" />
           </div>
         </div>
-
       </div>
 
       {/* Unified Tab: Single-Screen Devices & Testers */}
-      {(activeTab === 'devices' || activeTab === 'testers') && (
+      {(c.activeTab === 'devices' || c.activeTab === 'testers') && (
         <DevicesTestersTab
           testPlans={testPlans}
           testRuns={testRuns}
           archivedRuns={archivedRuns}
           bugLogs={bugLogs}
           devices={devices}
-          unassignedDevices={unassignedDevices}
-          unifiedTesters={unifiedTesters}
-          activeTesterMap={activeTesterMap}
-          todayRunsMap={todayRunsMap}
-          fleetProgress={fleetProgress}
-          liveInProgressRuns={liveInProgressRuns}
-          selectedQaDate={selectedQaDate}
-          setSelectedQaDate={setSelectedQaDate}
-          todayStr={todayStr}
-          allQaDatesList={allQaDatesList}
-          testerViewMode={testerViewMode}
-          setTesterViewMode={setTesterViewMode}
-          showOffShiftTesters={showOffShiftTesters}
-          setShowOffShiftTesters={setShowOffShiftTesters}
-          newDeviceName={newDeviceName}
-          setNewDeviceName={setNewDeviceName}
-          newPersonName={newPersonName}
-          setNewPersonName={setNewPersonName}
-          newPersonRole={newPersonRole}
-          setNewPersonRole={setNewPersonRole}
-          quickActivateDeviceId={quickActivateDeviceId}
-          setQuickActivateDeviceId={setQuickActivateDeviceId}
-          quickActivatePlanId={quickActivatePlanId}
-          setQuickActivatePlanId={setQuickActivatePlanId}
-          quickActivateQuota={quickActivateQuota}
-          setQuickActivateQuota={setQuickActivateQuota}
-          inspectorTarget={inspectorTarget}
-          setInspectorTarget={setInspectorTarget}
-          selectedInspectorTester={selectedInspectorTester}
-          setSelectedInspectorTester={setSelectedInspectorTester}
-          isFloorMenuOpen={isFloorMenuOpen}
-          setIsFloorMenuOpen={setIsFloorMenuOpen}
-          floorMenuRef={floorMenuRef}
-          isActivateTileOpen={isActivateTileOpen}
-          setIsActivateTileOpen={setIsActivateTileOpen}
-          setActiveTab={setActiveTab}
-          formatOngoingDuration={formatOngoingDuration}
+          unassignedDevices={c.unassignedDevices}
+          unifiedTesters={c.unifiedTesters}
+          activeTesterMap={c.activeTesterMap}
+          todayRunsMap={c.todayRunsMap}
+          fleetProgress={c.fleetProgress}
+          liveInProgressRuns={c.liveInProgressRuns}
+          selectedQaDate={c.selectedQaDate}
+          setSelectedQaDate={c.setSelectedQaDate}
+          todayStr={c.todayStr}
+          allQaDatesList={c.allQaDatesList}
+          testerViewMode={c.testerViewMode}
+          setTesterViewMode={c.setTesterViewMode}
+          showOffShiftTesters={c.showOffShiftTesters}
+          setShowOffShiftTesters={c.setShowOffShiftTesters}
+          newDeviceName={c.newDeviceName}
+          setNewDeviceName={c.setNewDeviceName}
+          newPersonName={c.newPersonName}
+          setNewPersonName={c.setNewPersonName}
+          newPersonRole={c.newPersonRole}
+          setNewPersonRole={c.setNewPersonRole}
+          quickActivateDeviceId={c.quickActivateDeviceId}
+          setQuickActivateDeviceId={c.setQuickActivateDeviceId}
+          quickActivatePlanId={c.quickActivatePlanId}
+          setQuickActivatePlanId={c.setQuickActivatePlanId}
+          quickActivateQuota={c.quickActivateQuota}
+          setQuickActivateQuota={c.setQuickActivateQuota}
+          inspectorTarget={c.inspectorTarget}
+          setInspectorTarget={c.setInspectorTarget}
+          selectedInspectorTester={c.selectedInspectorTester}
+          setSelectedInspectorTester={c.setSelectedInspectorTester}
+          isFloorMenuOpen={c.isFloorMenuOpen}
+          setIsFloorMenuOpen={c.setIsFloorMenuOpen}
+          floorMenuRef={c.floorMenuRef}
+          isActivateTileOpen={c.isActivateTileOpen}
+          setIsActivateTileOpen={c.setIsActivateTileOpen}
+          setActiveTab={c.setActiveTab}
+          formatOngoingDuration={c.formatOngoingDuration}
           getLocalDateStr={getLocalDateStr}
           minAppVersion={minAppVersion}
           onUpdateMinAppVersion={onUpdateMinAppVersion}
@@ -1899,17 +369,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
       )}
 
       {/* Tab 1: Overview - Test Plans & Active Runs */}
-      {activeTab === 'overview' && (
+      {c.activeTab === 'overview' && (
         <TestPlansTab
           testPlans={testPlans}
-          filteredPlans={filteredPlans}
+          filteredPlans={c.filteredPlans}
           testRuns={testRuns}
-          liveInProgressRuns={liveInProgressRuns}
-          activeRuns={activeRuns}
-          searchPlanQuery={searchPlanQuery}
-          setSearchPlanQuery={setSearchPlanQuery}
-          expandedPlanSteps={expandedPlanSteps}
-          setExpandedPlanSteps={setExpandedPlanSteps}
+          liveInProgressRuns={c.liveInProgressRuns}
+          activeRuns={c.activeRuns}
+          searchPlanQuery={c.searchPlanQuery}
+          setSearchPlanQuery={c.setSearchPlanQuery}
+          expandedPlanSteps={c.expandedPlanSteps}
+          setExpandedPlanSteps={c.setExpandedPlanSteps}
           onSelectPlanToBuild={onSelectPlanToBuild}
           onEditPlan={onEditPlan}
           onClonePlan={onClonePlan}
@@ -1918,1085 +388,193 @@ export const Dashboard: React.FC<DashboardProps> = ({
           onRunSubagentTest={onRunSubagentTest}
           onBootTester={onBootTester}
           onDeleteTestRun={onDeleteTestRun}
-          setSelectedDailySessionDate={setSelectedDailySessionDate}
-          setSelectedReportPlanId={setSelectedReportPlanId}
-          setActiveTab={setActiveTab}
-          setSubagentToast={setSubagentToast}
-          formatOngoingDuration={formatOngoingDuration}
+          setSelectedDailySessionDate={c.setSelectedDailySessionDate}
+          setSelectedReportPlanId={c.setSelectedReportPlanId}
+          setActiveTab={c.setActiveTab}
+          setSubagentToast={c.setSubagentToast}
+          formatOngoingDuration={c.formatOngoingDuration}
         />
       )}
 
-
-
       {/* Tab 4: Feature Health Metrics & CUJ Quality Report */}
-      {activeTab === 'features' && (
+      {c.activeTab === 'features' && (
         <CujReportTab
           testPlans={testPlans}
-          selectedDailySessionDate={selectedDailySessionDate}
-          setSelectedDailySessionDate={setSelectedDailySessionDate}
-          recordedDailySessions={recordedDailySessions}
-          todayStr={todayStr}
-          reportPlanId={reportPlanId}
-          setSelectedReportPlanId={setSelectedReportPlanId}
-          reportPlanLabel={reportPlanLabel}
-          allPlansRunCount={allPlansRunCount}
-          planPickerOptions={planPickerOptions}
-          newFeatureInput={newFeatureInput}
-          setNewFeatureInput={setNewFeatureInput}
-          handleCreateFeatureSubmit={handleCreateFeatureSubmit}
+          selectedDailySessionDate={c.selectedDailySessionDate}
+          setSelectedDailySessionDate={c.setSelectedDailySessionDate}
+          recordedDailySessions={c.recordedDailySessions}
+          todayStr={c.todayStr}
+          reportPlanId={c.reportPlanId}
+          setSelectedReportPlanId={c.setSelectedReportPlanId}
+          reportPlanLabel={c.reportPlanLabel}
+          allPlansRunCount={c.allPlansRunCount}
+          planPickerOptions={c.planPickerOptions}
+          newFeatureInput={c.newFeatureInput}
+          setNewFeatureInput={c.setNewFeatureInput}
+          handleCreateFeatureSubmit={c.handleCreateFeatureSubmit}
           onRunSubagentTest={onRunSubagentTest}
           onLoadSampleData={onLoadSampleData}
-          setSubagentToast={setSubagentToast}
+          setSubagentToast={c.setSubagentToast}
           onResetActiveDay={onResetActiveDay}
           onDeleteFeature={onDeleteFeature}
-          featureMetricsList={featureMetricsList}
-          bugOnlyMetrics={bugOnlyMetrics}
-          untestedCujNames={untestedCujNames}
-          visualCardRef={visualCardRef}
-          reportDayDisplayLabel={reportDayDisplayLabel}
-          reportDayPhrase={reportDayPhrase}
-          latestReportDate={latestReportDate}
-          hasCurrentReport={hasCurrentReport}
-          generatedReport={generatedReport}
-          isGeneratingSummary={isGeneratingSummary}
-          handleGenerateSummary={handleGenerateSummary}
-          handleCopyGeneratedReport={handleCopyGeneratedReport}
-          copiedReport={copiedReport}
-          handleCopyVisualImageToClipboard={handleCopyVisualImageToClipboard}
-          copiedImage={copiedImage}
-          setTempApiKey={setTempApiKey}
-          setTempModel={setTempModel}
-          setIsApiKeyModalOpen={setIsApiKeyModalOpen}
-          openChatSummary={openChatSummary}
-          handleAskRx95={handleAskRx95}
-          rx95Elapsed={rx95Elapsed}
-          avgHealthScore={avgHealthScore}
-          totalFeaturesCount={totalFeaturesCount}
-          totalStepsAcrossFeatures={totalStepsAcrossFeatures}
-          criticalFeaturesCount={criticalFeaturesCount}
-          criticalPct={criticalPct}
-          warningFeaturesCount={warningFeaturesCount}
-          warningPct={warningPct}
-          healthyFeaturesCount={healthyFeaturesCount}
-          healthyPct={healthyPct}
-          totalBugsAcrossFeatures={totalBugsAcrossFeatures}
-          goldenRunsAnalysis={goldenRunsAnalysis}
-          isFeatureReportExpanded={isFeatureReportExpanded}
-          setIsFeatureReportExpanded={setIsFeatureReportExpanded}
-          historicalTimelinePoints={historicalTimelinePoints}
+          featureMetricsList={c.featureMetricsList}
+          bugOnlyMetrics={c.bugOnlyMetrics}
+          untestedCujNames={c.untestedCujNames}
+          visualCardRef={c.visualCardRef}
+          reportDayDisplayLabel={c.reportDayDisplayLabel}
+          reportDayPhrase={c.reportDayPhrase}
+          latestReportDate={c.latestReportDate}
+          hasCurrentReport={c.hasCurrentReport}
+          generatedReport={c.generatedReport}
+          isGeneratingSummary={c.isGeneratingSummary}
+          handleGenerateSummary={c.handleGenerateSummary}
+          handleCopyGeneratedReport={c.handleCopyGeneratedReport}
+          copiedReport={c.copiedReport}
+          handleCopyVisualImageToClipboard={c.handleCopyVisualImageToClipboard}
+          copiedImage={c.copiedImage}
+          setTempApiKey={c.setTempApiKey}
+          setTempModel={c.setTempModel}
+          setIsApiKeyModalOpen={c.setIsApiKeyModalOpen}
+          openChatSummary={c.openChatSummary}
+          handleAskRx95={c.handleAskRx95}
+          rx95Elapsed={c.rx95Elapsed}
+          avgHealthScore={c.avgHealthScore}
+          totalFeaturesCount={c.totalFeaturesCount}
+          totalStepsAcrossFeatures={c.totalStepsAcrossFeatures}
+          criticalFeaturesCount={c.criticalFeaturesCount}
+          criticalPct={c.criticalPct}
+          warningFeaturesCount={c.warningFeaturesCount}
+          warningPct={c.warningPct}
+          healthyFeaturesCount={c.healthyFeaturesCount}
+          healthyPct={c.healthyPct}
+          totalBugsAcrossFeatures={c.totalBugsAcrossFeatures}
+          goldenRunsAnalysis={c.goldenRunsAnalysis}
+          isFeatureReportExpanded={c.isFeatureReportExpanded}
+          setIsFeatureReportExpanded={c.setIsFeatureReportExpanded}
+          historicalTimelinePoints={c.historicalTimelinePoints}
           makeBugsKey={makeBugsKey}
         />
       )}
 
-      {/* Bugs Feed / Buganizer toggle (hidden only when VITE_BUGANIZER_ENABLED=0) */}
-      {activeTab === 'bugs' && BUGANIZER_ENABLED && (
-        <div className="inline-flex items-center bg-[#0f172a] border border-slate-800 rounded-2xl p-0.5 gap-0.5 h-8">
-          <button type="button" onClick={() => setBugsView('feed')}
-            className={`px-3 h-7 rounded-xl text-xs font-semibold ${bugsView === 'feed' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}>Bugs Feed</button>
-          <button type="button" data-testid="buganizer-tab" onClick={() => setBugsView('buganizer')}
-            className={`px-3 h-7 rounded-xl text-xs font-semibold ${bugsView === 'buganizer' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}>Buganizer</button>
-        </div>
-      )}
-      {activeTab === 'bugs' && BUGANIZER_ENABLED && (
-        <div className={bugsView === 'buganizer' ? '' : 'hidden'}>
-          <BuganizerTriage bugs={buganizerBugs} bugCategorizations={bugCategorizations} dismissed={dismissedSuggestions} onDismissedChange={setDismissedSuggestions} nowMs={feedNow} plans={testPlans} onApplyRefinements={onApplyBugRefinements} onPatchBugLog={onPatchBugLog} onPatchBugLogs={onPatchBugLogs} onApplyReproMatches={onApplyReproMatches} rx95Suggestions={rx95Suggestions} onOpenBugsFeed={openInFeed} focusBug={buganizerFocus} onFocused={() => setBuganizerFocus(null)} />
-        </div>
-      )}
-
-      {/* Tab 3: Bugs Feed (Layout B look: status chips + plan/day/search, tabs New / Bundle Suggestions / Reviewed, one-line rows) */}
-      {activeTab === 'bugs' && (!BUGANIZER_ENABLED || bugsView === 'feed') && (() => {
-        const fmtT = (iso?: string) => {
-          const d = new Date(iso || '');
-          return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-        };
-        const renderFeedBug = (bug: FeedBug) => {
-          const isBugExpanded = !!expandedBugIds[bug.id];
-          const raw = (bugById.get(bug.id) || bug) as BugLog;
-          const filed = effectiveFiled(raw);
-          const pending = !filed && raw.filePending;
-          const reprod = !filed && effectiveStatus(bug.status) === REPROD;
-          const refined = currentRefinement(raw);
-          const rowTitle = (refined?.title || bug.title || (bug.note || '').replace(/\s+/g, ' ').trim() || 'No description').slice(0, 200);
-          const reviewed = reviewedOf(bug);
-          const strong = isStronglyReviewed(raw);
-          const sg = suggestionByBugId.get(bug.id);
-          return (
-            <div key={bug.id} id={`feed-row-${bug.id}`}>
-              <div data-testid="feed-row" data-bug-id={bug.id} role="button" tabIndex={0}
-                onClick={() => toggleBugExpand(bug.id)} onKeyDown={e => { if (e.key === 'Enter') toggleBugExpand(bug.id); }}
-                className={`${rowCls} ${isBugExpanded ? rowOpenCls : ''}`}>
-                <span className="text-[10.5px] text-slate-400 w-[58px] whitespace-nowrap">{fmtT(bug.timestamp)}</span>
-                <span className="hidden md:inline text-[11.5px] text-slate-400 truncate max-w-[150px]">{bug.testerName || 'Unknown'} · {bug.deviceName || '?'}</span>
-                <span className="flex-1 min-w-0 truncate text-slate-100" title={bug.note}>{rowTitle}</span>
-                {bug.imageUrl && /^(data:image\/|https?:\/\/|blob:|\/)/i.test(bug.imageUrl) && <ImageIcon className="w-3.5 h-3.5 text-blue-300 flex-shrink-0" />}
-                <span className="hidden lg:inline text-[11.5px] text-slate-400 truncate max-w-[170px]">{bug.feature || 'General'}</span>
-                <span className={`${tagCls} ${TAG_STYLE.new}`}>{bug.bugType || 'Bug'}</span>
-                <span className={priTagCls(String(bug.priority || 'P2'))}>{bug.priority || 'P2'}</span>
-                {feedTab === 'new' && reviewed && <span data-testid="feed-reviewed-chip" className={`${tagCls} ${TAG_STYLE.filed}`}>✓ REVIEWED</span>}
-                {filed && <span data-testid="feed-filed-chip" className={`${tagCls} ${TAG_STYLE.filed} font-black`}>FILED</span>}
-                {pending && (
-                  <span data-testid="feed-waiting-chip" title="Opened in Buganizer - RX95 stamps it FILED once it finds it there" className={`${tagCls} ${raw.filePending!.expired ? TAG_STYLE.expired : TAG_STYLE.waiting}`}>
-                    {raw.filePending!.expired ? '⚠ NOT FOUND' : '⏳ WAITING'}
-                  </span>
-                )}
-                {reprod && <span data-testid="feed-reprod-chip" className={`${tagCls} ${TAG_STYLE.repro}`}>REPRO'D</span>}
-                {raw.bundle && <span className={`${tagCls} ${TAG_STYLE.bundle}`}>BUNDLED</span>}
-                {sg && (
-                  <button type="button" data-testid="feed-dupe-chip" onClick={e => { e.stopPropagation(); jumpToSuggestion(sg.suggestion.id); }}
-                    className={`${tagCls} border border-violet-500/50 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20`}
-                    title="RX95 thinks this is the same issue as other reports - review it in Bundle Suggestions">
-                    🧩 dupe of {sg.members.length - 1}
-                  </button>
-                )}
-                <button type="button" className={rowActionCls} onClick={e => { e.stopPropagation(); toggleBugExpand(bug.id); }}>{isBugExpanded ? 'Close' : 'Open'}</button>
-              </div>
-              {isBugExpanded && (
-                <div data-testid="feed-row-expanded" className={expandedCls}>
-                  {(() => {
-                    const d = feedDraftFor(bug);
-                    const dirty = feedDirty(bug);
-                    const canEditText = !!onUpdateBugLog;
-                    const loggedAt = new Date(bug.timestamp);
-                    const meta = [bug.testerName, bug.deviceName, bug.stepTitle, bug.feature && bug.feature !== 'General' ? bug.feature : ''].filter(Boolean);
-                    const hasPhoto = !!(bug.imageUrl && /^(data:image\/|https?:\/\/|blob:|\/)/i.test(bug.imageUrl));
-                    const fieldCls = 'w-full bg-[#0f172a] border border-slate-700 rounded-xl px-2.5 py-1.5 text-slate-100 focus:outline-none focus:border-blue-500 read-only:opacity-80 placeholder:text-slate-500 placeholder:font-normal';
-                    return (
-                      <>
-                        <div className="flex flex-wrap items-center gap-2 mb-2">
-                          {!strong && (reviewed ? (
-                            <button type="button" data-testid="move-to-new" className={smallBtnCls} onClick={() => { moveToNew(bug.id); flashFeed('Moved back to New.'); }}>↩ Move back to New</button>
-                          ) : (
-                            <button type="button" data-testid="mark-reviewed" className="px-2.5 h-7 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white" onClick={() => {
-                              setStickyNewBugIds(prev => { if (!prev.has(bug.id)) return prev; const n = new Set(prev); n.delete(bug.id); return n; });
-                              markReviewed(bug.id);
-                              flashFeed('Marked reviewed.');
-                            }}>✓ Mark reviewed</button>
-                          ))}
-                          {BUGANIZER_ENABLED && (
-                            <button type="button" data-testid="feed-open-buganizer" className={smallBtnCls} onClick={() => openInBuganizer(bug.id)}>Open in Buganizer tab ↗</button>
-                          )}
-                          <button type="button" data-testid="feed-delete-bug" onClick={() => {
-                              const label = (bug.title || '').trim() || (bug.note || '').trim().slice(0, 80) || 'this bug';
-                              if (confirm(`Delete bug "${label}"? This can't be undone.`)) onDeleteBug(bug.id);
-                            }}
-                            className="ml-auto px-2 h-7 rounded-xl text-[11px] font-semibold text-slate-400 hover:text-rose-300 hover:bg-rose-950/40" title="Delete Bug Log">
-                            <Trash2 className="w-3.5 h-3.5 inline mr-1" />Delete
-                          </button>
-                        </div>
-                        <p data-testid="feed-meta" className="text-[11px] text-slate-400 mb-3">
-                          {meta.join(' · ')}{meta.length ? ' · ' : ''}Logged {fmtT(bug.timestamp)} {loggedAt.toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                          {bug.originalTimestamp ? ` (first logged ${new Date(bug.originalTimestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})` : ''}
-                          {refined ? ' · title cleaned up by RX95' : ''}
-                        </p>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-              <div className="md:col-span-2 space-y-3">
-                <div className="space-y-2.5" data-testid="feed-edit-form">
-                  <div className="flex gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <label className={labelCls}>Title</label>
-                        <span className="text-[10px] text-slate-500 mb-1">{d.title.length}/120</span>
-                      </div>
-                      <input
-                        data-testid="feed-edit-title"
-                        value={d.title}
-                        maxLength={120}
-                        readOnly={!canEditText}
-                        onChange={e => setFeedDraft(bug, { title: e.target.value })}
-                        placeholder="Short summary of the bug"
-                        className={`${fieldCls} text-sm font-semibold`}
-                      />
-                    </div>
-                    <div className="w-28 flex-shrink-0">
-                      <label className={labelCls} title="Same day only">Time</label>
-                      <input
-                        type="time"
-                        data-testid="feed-edit-time"
-                        value={d.time}
-                        max={getLocalDateStr(bug.originalTimestamp || bug.timestamp) === todayStr ? toLocalHHMM(new Date().toISOString()) : undefined}
-                        readOnly={!canEditText}
-                        onChange={e => setFeedDraft(bug, { time: e.target.value })}
-                        className={`${fieldCls} text-xs [color-scheme:dark]`}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className={labelCls}>Description</label>
-                    <textarea
-                      data-testid="feed-edit-description"
-                      rows={4}
-                      value={d.note}
-                      readOnly={!canEditText}
-                      onChange={e => setFeedDraft(bug, { note: e.target.value })}
-                      placeholder="Steps to reproduce, expected vs. actual"
-                      className={`${fieldCls} text-xs leading-relaxed`}
-                    />
-                  </div>
-                  {dirty && (
-                    <div className="flex items-center justify-end gap-2">
-                      <span className="text-[10px] text-slate-400 mr-auto">Unsaved changes · save to carry over to the Buganizer tab.</span>
-                      <button type="button" data-testid="feed-edit-cancel" onClick={() => cancelFeedEdit(bug.id)} className="px-3 h-7 rounded-xl text-xs font-semibold text-slate-300 hover:bg-slate-800">Cancel</button>
-                      <button type="button" data-testid="feed-edit-save" disabled={!d.title.trim() && !d.note.trim()} onClick={() => saveFeedEdit(bug)} className="px-3 h-7 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40">Save</button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Bug Triage Controls */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                  <div>
-                    <label className={labelCls}>Bug Type</label>
-                    <select
-                      value={bugCategorizations[bug.id]?.bugType || bug.bugType || 'Bug'}
-                      onChange={e => handleUpdateBugCategorization(bug.id, 'bugType', e.target.value)}
-                      className={`${inputCls} cursor-pointer`}
-                    >
-                      {(['Bug', 'Setup Issue', 'Known Issue', 'Feature Request', 'Misc Issue'] as const).map(opt => (
-                        <option key={opt} value={opt} className="bg-slate-900">{opt}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className={labelCls}>Priority</label>
-                    <select
-                      value={bugCategorizations[bug.id]?.priority || bug.priority || 'P2'}
-                      onChange={e => handleUpdateBugCategorization(bug.id, 'priority', e.target.value)}
-                      className={`${inputCls} cursor-pointer`}
-                    >
-                      {(['P0', 'P1', 'P2'] as const).map(opt => (
-                        <option key={opt} value={opt} className="bg-slate-900">{opt}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className={labelCls}>Status</label>
-                    <select
-                      data-testid="feed-status"
-                      value={effectiveStatus(bugCategorizations[bug.id]?.status || bug.status)}
-                      onChange={e => handleUpdateBugCategorization(bug.id, 'status', e.target.value)}
-                      className={`w-full bg-[#0f172a] border rounded-xl px-2.5 py-1.5 text-xs focus:outline-none focus:border-blue-500 cursor-pointer ${effectiveStatus(bugCategorizations[bug.id]?.status || bug.status) === REPROD ? 'border-violet-500/70 text-violet-200 bg-violet-500/10' : 'border-slate-700 text-slate-100'}`}
-                    >
-                      {TRIAGE_STATUS_OPTIONS.map(opt => (
-                        <option key={opt} value={opt} className="bg-slate-900">{opt}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-                {effectiveStatus(bugCategorizations[bug.id]?.status || bug.status) === REPROD && (
-                  <p className="text-[11px] text-slate-400" data-testid="feed-repro-hint">
-                    💡 "Repro'd Issue" tells RX95 to look for an existing Buganizer bug in this plan's hotlist (shown on the Buganizer tab).
-                  </p>
-                )}
-              </div>
-
-              {/* Evidence photo + Filed */}
-              <div className="space-y-3">
-                <div>
-                  <label className={labelCls}>Photo</label>
-                  {hasPhoto ? (
-                    <div
-                      data-testid="feed-photo"
-                      onClick={() => setSelectedImagePreviewUrl(bug.imageUrl!)}
-                      className="relative group rounded-xl overflow-hidden border border-slate-700 cursor-pointer bg-slate-900 max-h-32 flex items-center justify-center"
-                      title="Click for full image"
-                    >
-                      <img src={bug.imageUrl} alt="Bug screenshot" className="w-full object-cover max-h-32" />
-                      <div className="absolute inset-0 bg-slate-950/60 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
-                        <span className="px-2.5 py-1 bg-slate-900/95 text-slate-100 border border-slate-600 rounded-xl text-[11px] font-semibold flex items-center gap-1.5">
-                          <ImageIcon className="w-3.5 h-3.5 text-blue-400" /> Full image
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <p data-testid="feed-no-photo" className="text-[11px] text-slate-500">No photo</p>
-                  )}
-                </div>
-                {(() => {
-                  // Filed stamp: from the stored bug (a legacy stored status 'Filed' counts as filed)
-                  const rawBug = bugById.get(bug.id) || bug;
-                  const filed = effectiveFiled(rawBug);
-                  const canEdit = !!(onPatchBugLog || onUpdateBugLog);
-                  const setFiled = (next: ReturnType<typeof effectiveFiled>) => {
-                    const patch = { ...filedPatch(rawBug, next), reviewed: reviewedNow('reviewed') };
-                    if (onPatchBugLog) onPatchBugLog(bug.id, patch);
-                    else if (onUpdateBugLog) onUpdateBugLog({ ...rawBug, ...patch });
-                  };
-                  const draftId = filedIssueDrafts[bug.id] ?? '';
-                  const normalizedDraftId = normalizeIssueId(draftId);
-                  const isReprod = effectiveStatus(bugCategorizations[bug.id]?.status || rawBug.status) === REPROD;
-                  // RX95's likely existing bugs, offered as one-click picks for the b/ field
-                  const followUpPicks = isReprod
-                    ? (currentReproMatches(rawBug as BugLog)?.candidates || []).filter(c => c.verdict !== 'unlikely').slice(0, 3)
-                    : [];
-                  return (
-                    <div data-testid="feed-filed" className={`rounded-2xl border p-3 ${filed ? 'border-green-500/40 bg-green-500/[0.05]' : 'border-slate-800 bg-[#111827]'}`}>
-                      {filed && (
-                        <div data-testid="feed-filed-stamp" className="mb-2.5 border-4 border-green-500 text-green-500 rounded-[14px] py-2.5 text-center font-black text-[28px] tracking-[0.25em] -rotate-3 bg-green-500/[0.08] shadow-[0_0_30px_rgba(34,197,94,0.25)] select-none">
-                          FILED
-                          {filedStampLine(filed) && <small className="block text-[11px] tracking-normal font-bold text-green-300 mt-0.5">{filedStampLine(filed)}</small>}
-                        </div>
-                      )}
-                      {/* Not a <label>: a label would re-dispatch the click to the switch and toggle it twice */}
-                      <div className={`flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-200 ${canEdit ? '' : 'opacity-60'}`}>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={!!filed}
-                          data-testid="feed-filed-toggle"
-                          disabled={!canEdit}
-                          onClick={() => {
-                            if (filed) setFiled(undefined);
-                            else {
-                              // A b/ on a Repro'd bug is the existing bug it was followed up on (summary: "(KI, updated)")
-                              setFiled(newFiled(isReprod && normalizedDraftId ? 'follow-up' : 'manual', normalizedDraftId));
-                              setFiledIssueDrafts(prev => { const n = { ...prev }; delete n[bug.id]; return n; });
-                            }
-                          }}
-                          className={`relative w-10 h-[22px] rounded-full transition flex-shrink-0 ${filed ? 'bg-green-500' : 'bg-slate-700'}`}
-                        >
-                          <span className={`absolute top-[3px] w-4 h-4 rounded-full bg-white transition-all ${filed ? 'right-[3px]' : 'left-[3px]'}`} />
-                        </button>
-                        {filed ? <>Filed <span className="text-[11px] font-medium text-slate-400">(hidden from the Buganizer tab)</span></> : 'Mark as filed'}
-                        {!filed && canEdit && (
-                          <input
-                            data-testid="feed-filed-issue"
-                            aria-label="Filed b/ issue number"
-                            value={draftId}
-                            inputMode="numeric"
-                            onChange={e => setFiledIssueDrafts(prev => ({ ...prev, [bug.id]: e.target.value }))}
-                            onBlur={e => setFiledIssueDrafts(prev => ({ ...prev, [bug.id]: normalizeIssueId(e.target.value) }))}
-                            placeholder={isReprod ? 'b/ followed up on' : 'b/ (optional)'}
-                            className="ml-auto w-36 bg-[#0f172a] border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-100 font-mono font-normal focus:outline-none focus:border-green-500"
-                          />
-                        )}
-                      </div>
-                      {!filed && canEdit && isReprod && followUpPicks.length > 0 && (
-                        <div data-testid="feed-filed-picks" className="mt-1.5 flex flex-wrap gap-1.5 items-center">
-                          <span className="text-[10px] text-slate-400">Followed up on:</span>
-                          {followUpPicks.map(c => (
-                            <button
-                              key={c.id}
-                              type="button"
-                              data-testid="feed-filed-pick"
-                              title={c.title}
-                              onClick={() => setFiledIssueDrafts(prev => ({ ...prev, [bug.id]: normalizeIssueId(String(c.id)) }))}
-                              className={`max-w-full truncate text-[10px] px-2 py-0.5 rounded-full border font-mono ${normalizedDraftId === String(c.id) ? 'border-green-500 bg-green-500/15 text-green-200' : 'border-slate-600 bg-slate-800 text-slate-200 hover:border-green-500/60'}`}
-                            >
-                              b/{c.id} · {(c.title || '').replace(/^(\[[^\]]*\]\s*)+/, '').slice(0, 48)}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-                      </>
-                    );
-                  })()}
-                </div>
-              )}
-            </div>
-          );
-        };
-
-        const dayValue = selectedDateFilter === 'custom' ? customDateInput : '';
-        const moreActive = selectedFeatureFilter !== 'all' || selectedDeviceFilter !== 'all' || sortByDevice !== 'newest' || (selectedDateFilter !== 'all' && selectedDateFilter !== 'custom');
-        const feedTabs = [
-          { key: 'new' as const, label: 'New', count: newFeedBugs.length, testid: 'feed-tab-new' },
-          { key: 'suggestions' as const, label: 'Bundle Suggestions', count: feedSuggestions.length, testid: 'feed-tab-suggestions' },
-          { key: 'reviewed' as const, label: 'Reviewed', count: reviewedFeedBugs.length, testid: 'feed-tab-reviewed' },
-        ];
-        return (
-          <div className="space-y-4" data-testid="bugs-feed">
-            {/* Header: status chips + plan / day / search (same look as the Buganizer tab) */}
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex flex-wrap items-center gap-2" data-testid="feed-status-chips">
-                <Rx95LiveChip
-                  heartbeatAt={rx95Suggestions?.heartbeat?.at}
-                  nowMs={feedNow}
-                  jobsInProgress={(rx95Suggestions?.heartbeat?.queues?.refine || 0) + (rx95Suggestions?.heartbeat?.queues?.match || 0) + (rx95Suggestions?.heartbeat?.queues?.bundle || 0)}
-                  testid="feed-rx95-chip"
-                />
-                <button type="button" data-testid="feed-chip-new" className={`${chipCls} ${feedTab === 'new' ? chipOn : chipOff}`} onClick={() => setFeedTab('new')}>🆕 <b className="text-white">{newFeedBugs.length}</b> new</button>
-                <button type="button" data-testid="feed-chip-suggestions" className={`${chipCls} ${feedTab === 'suggestions' ? chipOn : chipOff}`} onClick={() => setFeedTab('suggestions')}>🧩 <b className="text-white">{feedSuggestions.length}</b> suggestion{feedSuggestions.length === 1 ? '' : 's'}</button>
-                <button type="button" data-testid="feed-chip-reviewed" className={`${chipCls} ${feedTab === 'reviewed' ? chipOn : chipOff}`} onClick={() => setFeedTab('reviewed')}>✓ <b className="text-white">{reviewedFeedBugs.length}</b> reviewed</button>
-              </div>
-              <div className="flex-1" />
-              <select aria-label="Plan filter" data-testid="feed-plan" className={`${inputCls} !w-auto max-w-[170px]`} value={selectedPlanFilter} onChange={e => setSelectedPlanFilter(e.target.value)}>
-                <option value="all">All plans ({bugLogs.length})</option>
-                {bugPlanOptions.map(opt => <option key={opt.planId} value={opt.planId}>{opt.planName} ({opt.count})</option>)}
-              </select>
-              <input aria-label="Day filter" data-testid="feed-day" type="date" className={`${inputCls} !w-[132px] [color-scheme:dark]`} value={dayValue}
-                onChange={e => { const v = e.target.value; if (v) { setSelectedDateFilter('custom'); setCustomDateInput(v); } else { setSelectedDateFilter('all'); setCustomDateInput(''); } }} />
-              <div className="relative">
-                <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2" />
-                <input aria-label="Search bugs" data-testid="feed-search" className={`${inputCls} pl-7 !w-32`} value={searchBugQuery} onChange={e => setSearchBugQuery(e.target.value)} placeholder="Search…" />
-              </div>
-              <div className="relative">
-                <button type="button" data-testid="feed-more-toggle" className={`${chipCls} ${isBugFilterMenuOpen || moreActive ? chipOn : chipOff}`} onClick={() => setIsBugFilterMenuOpen(!isBugFilterMenuOpen)}>
-                  <Filter className="w-3.5 h-3.5" /> More ▾
-                </button>
-                {isBugFilterMenuOpen && (
-                  <div data-testid="feed-more-popover" className="absolute right-0 z-30 mt-2 w-72 max-w-[calc(100vw-2rem)] rounded-2xl border border-slate-700 bg-[#0f172a] p-3 space-y-2.5 shadow-2xl">
-                    <div>
-                      <label className="block text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1">Date range</label>
-                      <select className={inputCls} value={selectedDateFilter} onChange={e => setSelectedDateFilter(e.target.value)}>
-                        <option value="all">All dates</option>
-                        <option value="today">Today</option>
-                        <option value="yesterday">Yesterday</option>
-                        <option value="7days">Last 7 days</option>
-                        <option value="30days">Last 30 days</option>
-                        <option value="custom">Specific date (header)</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1">CUJ</label>
-                      <select className={inputCls} value={selectedFeatureFilter} onChange={e => setSelectedFeatureFilter(e.target.value)}>
-                        <option value="all">All CUJs</option>
-                        {uniqueFeatures.map(feat => <option key={feat} value={feat}>{feat}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1">Device</label>
-                      <select className={inputCls} value={selectedDeviceFilter} onChange={e => setSelectedDeviceFilter(e.target.value)}>
-                        <option value="all">All devices</option>
-                        {uniqueDevices.map(dev => <option key={dev} value={dev}>{dev}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1">Sort</label>
-                      <select className={inputCls} value={sortByDevice} onChange={e => setSortByDevice(e.target.value as any)}>
-                        <option value="newest">Newest first</option>
-                        <option value="oldest">Oldest first</option>
-                        <option value="priority">Priority (P0 first)</option>
-                        <option value="device-asc">Device (A → Z)</option>
-                        <option value="device-desc">Device (Z → A)</option>
-                      </select>
-                    </div>
-                    <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-800">
-                      <button type="button" className={smallBtnCls} onClick={() => { setSelectedDateFilter('all'); setSelectedFeatureFilter('all'); setSelectedDeviceFilter('all'); setSelectedPlanFilter('all'); setSortByDevice('newest'); setCustomDateInput(''); }}>Reset filters</button>
-                      {bugLogs.length > 0 && onWipeAllBugs && (
-                        <button type="button" className="px-2.5 h-7 rounded-xl text-xs font-semibold border border-rose-500/30 bg-rose-500/15 text-rose-300 hover:bg-rose-500/25"
-                          onClick={() => { if (window.confirm(`Are you sure you want to wipe all ${bugLogs.length} logged bug(s)? This will permanently remove all defect logs.`)) onWipeAllBugs(); }}>
-                          <Trash2 className="w-3.5 h-3.5 inline mr-1" />Wipe all bugs
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <TabBar tabs={feedTabs} active={feedTab} onChange={setFeedTab} testid="feed-tabs" />
-
-            {feedTab === 'suggestions' ? (
-              feedSuggestions.length === 0 ? (
-                <div className={`${listBoxCls} p-8 text-center text-sm text-slate-400`}>No bundle suggestions for these filters. RX95 suggests them as same-day duplicates come in.</div>
-              ) : (
-                <BundleSuggestionsPanel
-                  shown={feedSuggestions}
-                  bugsById={processedBugById}
-                  plans={testPlans}
-                  dismissed={dismissedSuggestions}
-                  onDismissedChange={setDismissedSuggestions}
-                  onApply={handleCategorizeAndBundle}
-                  collapsed={suggestionsCollapsed}
-                  onCollapsedChange={setSuggestionsCollapsed}
-                />
-              )
-            ) : (
-              <div className={listBoxCls} data-testid="feed-list">
-                {feedRows.length === 0 ? (
-                  <div className="p-8 text-center text-sm text-slate-400">
-                    {feedTab === 'new' ? (processedBugs.length ? 'Nothing new - every report here has been reviewed.' : 'No matching bugs for these filters.') : 'No reviewed reports for these filters yet.'}
-                  </div>
-                ) : feedRows.map(row => (row.kind === 'bundle' ? renderFeedBundle(row, renderFeedBug) : renderFeedBug(row.bug)))}
-              </div>
-            )}
-          </div>
-        );
-      })()}
-
-      {feedToast && activeTab === 'bugs' && (
-        <div data-testid="feed-toast" className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] px-4 py-2.5 rounded-2xl bg-slate-800 border border-slate-600 text-xs text-slate-100 shadow-2xl">
-          {feedToast}
-        </div>
+      {/* Tab 3: Bugs Feed & Buganizer Triage */}
+      {c.activeTab === 'bugs' && (
+        <BugsFeedTab
+          buganizerEnabled={BUGANIZER_ENABLED}
+          bugsView={c.bugsView}
+          setBugsView={c.setBugsView}
+          testPlans={testPlans}
+          bugLogs={bugLogs}
+          bugById={c.bugById}
+          processedBugs={c.processedBugs}
+          processedBugById={c.processedBugById}
+          buganizerBugs={c.buganizerBugs}
+          newFeedBugs={c.newFeedBugs}
+          reviewedFeedBugs={c.reviewedFeedBugs}
+          feedRows={c.feedRows}
+          feedSuggestions={c.feedSuggestions}
+          suggestionByBugId={c.suggestionByBugId}
+          bugCategorizations={c.bugCategorizations}
+          dismissedSuggestions={c.dismissedSuggestions}
+          setDismissedSuggestions={c.setDismissedSuggestions}
+          expandedFeedBundles={c.expandedFeedBundles}
+          setExpandedFeedBundles={c.setExpandedFeedBundles}
+          suggestionsCollapsed={c.suggestionsCollapsed}
+          setSuggestionsCollapsed={c.setSuggestionsCollapsed}
+          feedNow={c.feedNow}
+          feedTab={c.feedTab}
+          setFeedTab={c.setFeedTab}
+          expandedBugIds={c.expandedBugIds}
+          toggleBugExpand={c.toggleBugExpand}
+          setStickyNewBugIds={c.setStickyNewBugIds}
+          feedToast={c.feedToast}
+          flashFeed={c.flashFeed}
+          buganizerFocus={c.buganizerFocus}
+          setBuganizerFocus={c.setBuganizerFocus}
+          rx95Suggestions={rx95Suggestions}
+          onApplyBugRefinements={onApplyBugRefinements}
+          onPatchBugLog={onPatchBugLog}
+          onPatchBugLogs={onPatchBugLogs}
+          onApplyReproMatches={onApplyReproMatches}
+          onUpdateBugLog={onUpdateBugLog}
+          onDeleteBug={onDeleteBug}
+          onWipeAllBugs={onWipeAllBugs}
+          openInFeed={c.openInFeed}
+          openInBuganizer={c.openInBuganizer}
+          jumpToSuggestion={c.jumpToSuggestion}
+          handleCategorizeAndBundle={c.handleCategorizeAndBundle}
+          unbundleFromFeed={c.unbundleFromFeed}
+          reviewedOf={c.reviewedOf}
+          feedDraftFor={c.feedDraftFor}
+          feedDirty={c.feedDirty}
+          setFeedDraft={c.setFeedDraft}
+          cancelFeedEdit={c.cancelFeedEdit}
+          saveFeedEdit={c.saveFeedEdit}
+          markReviewed={c.markReviewed}
+          moveToNew={c.moveToNew}
+          handleUpdateBugCategorization={c.handleUpdateBugCategorization}
+          filedIssueDrafts={c.filedIssueDrafts}
+          setFiledIssueDrafts={c.setFiledIssueDrafts}
+          setSelectedImagePreviewUrl={c.setSelectedImagePreviewUrl}
+          todayStr={c.todayStr}
+          getLocalDateStr={getLocalDateStr}
+          selectedPlanFilter={c.selectedPlanFilter}
+          setSelectedPlanFilter={c.setSelectedPlanFilter}
+          bugPlanOptions={c.bugPlanOptions}
+          selectedDateFilter={c.selectedDateFilter}
+          setSelectedDateFilter={c.setSelectedDateFilter}
+          customDateInput={c.customDateInput}
+          setCustomDateInput={c.setCustomDateInput}
+          searchBugQuery={c.searchBugQuery}
+          setSearchBugQuery={c.setSearchBugQuery}
+          isBugFilterMenuOpen={c.isBugFilterMenuOpen}
+          setIsBugFilterMenuOpen={c.setIsBugFilterMenuOpen}
+          selectedFeatureFilter={c.selectedFeatureFilter}
+          setSelectedFeatureFilter={c.setSelectedFeatureFilter}
+          uniqueFeatures={c.uniqueFeatures}
+          selectedDeviceFilter={c.selectedDeviceFilter}
+          setSelectedDeviceFilter={c.setSelectedDeviceFilter}
+          uniqueDevices={c.uniqueDevices}
+          sortByDevice={c.sortByDevice}
+          setSortByDevice={c.setSortByDevice}
+        />
       )}
 
-      {/* Image Lightbox Preview Modal via Dedicated Portal */}
-      {selectedImagePreviewUrl && createPortal(
-        <div
-          onClick={() => setSelectedImagePreviewUrl(null)}
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            width: '100vw',
-            height: '100vh',
-            zIndex: 9999999,
-            backgroundColor: 'rgba(2, 6, 23, 0.96)',
-            backdropFilter: 'blur(24px)',
-            WebkitBackdropFilter: 'blur(24px)'
-          }}
-        >
-          {/* Top Bar - ALWAYS Visible at Top of Screen Viewport */}
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{
-              position: 'absolute',
-              top: '1.25rem',
-              left: '50%',
-              transform: 'translateX(-50%)',
-              width: 'calc(100vw - 2.5rem)',
-              maxWidth: '1000px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              backgroundColor: 'rgba(15, 23, 42, 0.95)',
-              border: '1px solid rgba(51, 65, 85, 0.8)',
-              borderRadius: '1rem',
-              padding: '0.75rem 1.25rem',
-              boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)',
-              zIndex: 10
-            }}
-          >
-            <button
-              type="button"
-              onClick={() => setSelectedImagePreviewUrl(null)}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-sm active:scale-95 transition-all"
-            >
-              <span>← Back to Dashboard</span>
-            </button>
-
-            <span className="text-xs font-bold text-slate-200 flex items-center gap-2">
-              <ImageIcon className="w-4 h-4 text-blue-400" /> Bug Screenshot Preview
-            </span>
-
-            <button
-              type="button"
-              onClick={() => setSelectedImagePreviewUrl(null)}
-              className="p-2 text-slate-400 hover:text-white rounded-xl bg-slate-800 hover:bg-slate-700 transition cursor-pointer"
-              title="Close Preview (Esc)"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          {/* Center Image Container - Absolutely positioned to prevent ANY auto-expansion */}
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{
-              position: 'absolute',
-              top: '6rem',
-              bottom: '6rem',
-              left: '50%',
-              transform: 'translateX(-50%)',
-              width: 'calc(100vw - 2.5rem)',
-              maxWidth: '1000px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: '#030712',
-              borderRadius: '1.25rem',
-              border: '1px solid rgba(255, 255, 255, 0.15)',
-              padding: '0.75rem',
-              overflow: 'hidden',
-              boxShadow: '0 20px 40px -10px rgba(0,0,0,0.9)'
-            }}
-          >
-            <img
-              src={selectedImagePreviewUrl}
-              alt="Evidence Screenshot"
-              style={{
-                maxWidth: '100%',
-                maxHeight: '100%',
-                width: 'auto',
-                height: 'auto',
-                objectFit: 'contain',
-                borderRadius: '0.75rem',
-                boxShadow: '0 10px 30px rgba(0,0,0,0.9)'
-              }}
-            />
-          </div>
-
-          {/* Bottom Bar - Pinned at Bottom of Screen Viewport */}
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{
-              position: 'absolute',
-              bottom: '1.25rem',
-              left: '50%',
-              transform: 'translateX(-50%)',
-              width: 'calc(100vw - 2.5rem)',
-              maxWidth: '1000px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              backgroundColor: 'rgba(15, 23, 42, 0.95)',
-              border: '1px solid rgba(51, 65, 85, 0.8)',
-              borderRadius: '1rem',
-              padding: '0.75rem 1.25rem',
-              boxShadow: '0 10px 25px -5px rgba(0,0,0,0.8)',
-              zIndex: 10
-            }}
-          >
-            <span className="text-xs text-slate-400 font-mono hidden sm:inline">
-              Tap anywhere outside image or press Esc to close
-            </span>
-            <div className="flex items-center gap-2 ml-auto">
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    const img = new Image();
-                    img.crossOrigin = 'anonymous';
-                    img.src = selectedImagePreviewUrl;
-                    await new Promise((resolve, reject) => {
-                      img.onload = resolve;
-                      img.onerror = reject;
-                    });
-                    const canvas = document.createElement('canvas');
-                    canvas.width = img.naturalWidth || img.width;
-                    canvas.height = img.naturalHeight || img.height;
-                    const ctx = canvas.getContext('2d');
-                    ctx?.drawImage(img, 0, 0);
-                    canvas.toBlob(async (blob) => {
-                      if (!blob) {
-                        console.warn('Could not export image blob for clipboard.');
-                        return;
-                      }
-                      if (navigator.clipboard && window.ClipboardItem) {
-                        await navigator.clipboard.write([
-                          new ClipboardItem({ 'image/png': blob })
-                        ]);
-                        setCopiedImage(true);
-                        setTimeout(() => setCopiedImage(false), 2000);
-                      }
-                    }, 'image/png');
-                  } catch (err) {
-                    console.error('Failed to copy image to clipboard:', err);
-                  }
-                }}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl border border-blue-500 cursor-pointer transition active:scale-95 flex items-center gap-1.5 shadow-sm"
-                title="Copy raw image to clipboard"
-              >
-                {copiedImage ? (
-                  <>
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-300" />
-                    <span className="text-emerald-200">Image Copied!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5 text-white" />
-                    <span>Copy Image</span>
-                  </>
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedImagePreviewUrl(null)}
-                className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl border border-slate-700 cursor-pointer transition active:scale-95"
-              >
-                ← Back
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.getElementById('modal-portal') || document.body
-      )}
-
-      {/* Gemini AI Key Configuration Modal Portal */}
-      {isApiKeyModalOpen && createPortal(
-        <div
-          onClick={() => setIsApiKeyModalOpen(false)}
-          className="fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md"
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            className="liquid-glass-panel rounded-3xl p-6 max-w-md w-full border border-slate-700 shadow-2xl bg-[#111827] space-y-4 text-left animate-in fade-in zoom-in-95 duration-200"
-          >
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-blue-500/15 text-blue-300 rounded-xl border border-blue-500/30">
-                  <Sparkles className="w-4 h-4 text-blue-400" />
-                </div>
-                <div>
-                  <h4 className="text-sm font-bold text-white">Gemini AI Summarization Key</h4>
-                  <p className="text-[11px] text-slate-400 font-medium">Power executive QA summaries with Gemini</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsApiKeyModalOpen(false)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg transition"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="text-xs text-slate-300 leading-relaxed space-y-2">
-              <p>
-                To generate accurate executive defect summaries without conversational noise, enter your Gemini API Key.
-              </p>
-              <p className="text-[11px] text-slate-400">
-                Keys are stored locally in your browser (<code className="text-blue-300 font-mono">localStorage</code>). You can generate a free key at{' '}
-                <a
-                  href="https://aistudio.google.com/"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-blue-400 underline font-semibold hover:text-blue-300"
-                >
-                  Google AI Studio
-                </a>.
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsApiKeyModalOpen(false);
-                  openChatSummary();
-                }}
-                className="text-[11px] text-blue-300 hover:text-blue-200 font-semibold underline underline-offset-2 transition"
-              >
-                Can't get a key? Summarize with an AI chat instead →
-              </button>
-            </div>
-
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <label className="text-[11px] font-bold text-slate-300">Gemini API Key</label>
-                <button
-                  type="button"
-                  disabled={isTestingKey || !tempApiKey.trim()}
-                  onClick={async () => {
-                    if (!tempApiKey.trim()) return;
-                    setIsTestingKey(true);
-                    setTestKeyStatus(null);
-                    try {
-                      const res = await discoverAvailableGeminiModels(tempApiKey.trim());
-                      if (res.success && res.models.length > 0) {
-                        // Only text models that can write summaries, best first (no TTS/image/retired models)
-                        const ranked = rankModelsForSummaries(res.models);
-                        const keepCurrent = ranked.includes(tempModel.trim());
-                        const chosen = keepCurrent ? tempModel.trim() : ranked[0];
-                        setTestKeyStatus({
-                          success: true,
-                          message: chosen
-                            ? `✅ Key verified! ${ranked.length} summary-capable model(s) available - using ${chosen}.`
-                            : `✅ Key verified, but no text model suitable for summaries was found (${res.models.slice(0, 3).join(', ')}${res.models.length > 3 ? '...' : ''}).`,
-                          models: ranked.length > 0 ? ranked : res.models
-                        });
-                        if (chosen) setTempModel(chosen);
-                      } else {
-                        const keyHint = getGeminiKeyErrorHint(res.error);
-                        setTestKeyStatus({
-                          success: false,
-                          message: keyHint
-                            ? `❌ ${keyHint} (Google said: ${res.error})`
-                            : `❌ ${res.error || 'No supported models found for this key.'}`
-                        });
-                      }
-                    } catch (e: any) {
-                      setTestKeyStatus({
-                        success: false,
-                        message: `❌ ${e?.message || 'Connection test failed.'}`
-                      });
-                    } finally {
-                      setIsTestingKey(false);
-                    }
-                  }}
-                  className="text-[10px] text-blue-400 hover:text-blue-300 font-semibold flex items-center gap-1 disabled:opacity-50 transition cursor-pointer"
-                >
-                  <RefreshCw className={`w-3 h-3 ${isTestingKey ? 'animate-spin text-blue-300' : ''}`} />
-                  <span>{isTestingKey ? 'Testing...' : 'Test Key & Detect Models'}</span>
-                </button>
-              </div>
-              <input
-                type="password"
-                placeholder="AIzaSy..."
-                value={tempApiKey}
-                onChange={e => {
-                  setTempApiKey(e.target.value);
-                  setTestKeyStatus(null);
-                }}
-                className="w-full bg-[#0f172a] border border-slate-700 focus:border-blue-500 rounded-xl px-3 py-2 text-xs text-white font-mono placeholder-slate-500 focus:outline-none"
-              />
-              {testKeyStatus && (
-                <div className={`p-2 rounded-lg text-[10.5px] border leading-relaxed ${
-                  testKeyStatus.success
-                    ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
-                    : 'bg-rose-950/60 border-rose-500/40 text-rose-300'
-                }`}>
-                  {testKeyStatus.message}
-                </div>
-              )}
-            </div>
-
-            {/* Model Selector */}
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-bold text-slate-300 flex items-center justify-between">
-                <span>Gemini Model</span>
-                <span className="text-[10px] text-blue-400 font-semibold">Customizable</span>
-              </label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder={`e.g. ${DEFAULT_GEMINI_MODEL}`}
-                  value={tempModel}
-                  onChange={e => setTempModel(e.target.value)}
-                  className="flex-1 bg-[#0f172a] border border-slate-700 focus:border-blue-500 rounded-xl px-3 py-2 text-xs text-white font-mono placeholder-slate-500 focus:outline-none"
-                />
-                <select
-                  value={tempModel}
-                  onChange={e => setTempModel(e.target.value)}
-                  className="bg-slate-900 border border-slate-700 focus:border-blue-500 rounded-xl px-2.5 py-2 text-xs text-blue-300 font-medium focus:outline-none cursor-pointer max-w-[150px] truncate"
-                >
-                  {testKeyStatus?.models && testKeyStatus.models.length > 0 ? (
-                    testKeyStatus.models.map(m => (
-                      <option key={m} value={m} className="bg-slate-900 text-slate-200">
-                        {m}
-                      </option>
-                    ))
-                  ) : (
-                    GEMINI_MODELS.map(m => (
-                      <option key={m.id} value={m.id} className="bg-slate-900 text-slate-200">
-                        {m.id}
-                      </option>
-                    ))
-                  )}
-                </select>
-              </div>
-              <p className="text-[10.5px] text-slate-400">
-                Default: <code className="text-blue-300 font-mono">{DEFAULT_GEMINI_MODEL}</code>. You can select an auto-detected model or type any model ID. Retired models (Gemini 1.5 / 2.0) are switched to the default automatically.
-              </p>
-            </div>
-
-            {/* Optional Disclaimer / Test Notes */}
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-bold text-slate-300">Test Context / Disclaimer (Optional)</label>
-              <input
-                type="text"
-                placeholder="e.g. During these tests, we removed local flag overrides for Maps and Instacart."
-                value={reportDisclaimer}
-                onChange={e => {
-                  setReportDisclaimer(e.target.value);
-                  localStorage.setItem('qa_report_disclaimer', e.target.value);
-                }}
-                className="w-full bg-[#0f172a] border border-slate-700 focus:border-blue-500 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none"
-              />
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
-              <button
-                type="button"
-                onClick={() => {
-                  setIsApiKeyModalOpen(false);
-                  handleExecuteCopyReport(true); // run standard summary without key
-                }}
-                className="px-3.5 py-2 text-xs font-semibold text-slate-400 hover:text-white transition"
-              >
-                Skip / Use Standard
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  saveGeminiApiKey(tempApiKey.trim());
-                  saveGeminiModel(tempModel);
-                  setIsApiKeyModalOpen(false);
-                  handleExecuteCopyReport(false);
-                }}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-sm border border-blue-500 active:scale-95 transition"
-              >
-                Save & Run AI Summary
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.getElementById('modal-portal') || document.body
-      )}
-
-      {/* AI Chat (no API key) Modal Portal */}
-      {isChatSummaryOpen && createPortal(
-        <div
-          onClick={() => setIsChatSummaryOpen(false)}
-          className="fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md"
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            className="liquid-glass-panel rounded-3xl p-6 max-w-lg w-full border border-slate-700 shadow-2xl bg-[#111827] space-y-4 text-left animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto"
-          >
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-blue-500/15 text-blue-300 rounded-xl border border-blue-500/30">
-                  <MessageSquareText className="w-4 h-4 text-blue-400" />
-                </div>
-                <div>
-                  <h4 className="text-sm font-bold text-white">Summarize with an AI chat</h4>
-                  <p className="text-[11px] text-slate-400 font-medium">No API key needed - use any AI chat you're allowed to use</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsChatSummaryOpen(false)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg transition"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {chatNotice && (
-              <div className="p-2 rounded-lg text-[10.5px] border leading-relaxed bg-amber-950/50 border-amber-500/40 text-amber-200">
-                {chatNotice}
-              </div>
-            )}
-
-            <div className="space-y-1.5">
-              <p className="text-[11px] font-bold text-slate-300">1. The prompt is already on your clipboard (the bugs in this report plus instructions)</p>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleCopyChatPrompt}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition active:scale-95 ${
-                    chatPromptCopied
-                      ? 'bg-emerald-500/15 text-emerald-200 border-emerald-400/40'
-                      : 'bg-blue-600/20 hover:bg-blue-600/30 text-blue-200 border-blue-500/40'
-                  }`}
-                >
-                  {chatPromptCopied ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{chatPromptCopied ? 'Prompt copied - copy again' : 'Copy prompt'}</span>
-                </button>
-                <a
-                  href={GEMINI_CHAT_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 border bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700 transition active:scale-95"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  <span>Open Gemini</span>
-                </a>
-                <label className="flex items-center gap-1.5 text-[10.5px] text-slate-400 hover:text-slate-200 cursor-pointer select-none transition">
-                  <input
-                    type="checkbox"
-                    checked={chatAutoOpenGemini}
-                    onChange={e => toggleChatAutoOpenGemini(e.target.checked)}
-                    className="accent-blue-500 w-3.5 h-3.5 cursor-pointer"
-                  />
-                  <span>Open Gemini automatically</span>
-                </label>
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <p className="text-[11px] font-bold text-slate-300">2. Paste it into Gemini or Antigravity and send it</p>
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                Then copy the AI's whole reply - it's a block of JSON.
-              </p>
-            </div>
-
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <p className="text-[11px] font-bold text-slate-300">3. Come back to this tab - the report builds itself</p>
-                <button
-                  type="button"
-                  onClick={handlePasteChatReplyFromClipboard}
-                  className="text-[10px] text-blue-300 hover:text-blue-200 font-semibold flex items-center gap-1 transition"
-                >
-                  <ClipboardPaste className="w-3 h-3" />
-                  <span>Paste from clipboard</span>
-                </button>
-              </div>
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                It's copied for you as soon as it's built. If Chrome asks, allow clipboard access - or just press ⌘V (Ctrl+V) on this page.
-              </p>
-              <textarea
-                value={chatReplyText}
-                onChange={e => {
-                  setChatReplyText(e.target.value);
-                  setChatStatus(null);
-                }}
-                placeholder='Or paste the reply here: {"reportId": "QA-...", "features": [...], "overallSummary": "..."}'
-                rows={4}
-                className="w-full bg-[#0f172a] border border-slate-700 focus:border-blue-500 rounded-xl px-3 py-2 text-[11px] text-white font-mono placeholder-slate-500 focus:outline-none resize-y"
-              />
-            </div>
-
-            {chatStatus && (
-              <div className={`p-2 rounded-lg text-[10.5px] border leading-relaxed ${
-                chatStatus.type === 'success'
-                  ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
-                  : 'bg-rose-950/60 border-rose-500/40 text-rose-300'
-              }`}>
-                {chatStatus.message}
-              </div>
-            )}
-
-            <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-800">
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsChatSummaryOpen(false);
-                    handleExecuteCopyReport(true); // basic offline summary, no AI
-                  }}
-                  className="text-[10.5px] font-semibold text-slate-500 hover:text-slate-200 transition"
-                >
-                  Use basic summary
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsChatSummaryOpen(false);
-                    setTempApiKey(getStoredGeminiApiKey());
-                    setTempModel(getStoredGeminiModel());
-                    setIsApiKeyModalOpen(true);
-                  }}
-                  className="text-[10.5px] font-semibold text-slate-500 hover:text-slate-200 transition"
-                >
-                  {getStoredGeminiApiKey() ? 'Change API key' : 'Add API key'}
-                </button>
-              </div>
-              <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setIsChatSummaryOpen(false)}
-                className="px-3.5 py-2 text-xs font-semibold text-slate-400 hover:text-white transition"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={!chatReplyText.trim() || isGeneratingSummary}
-                onClick={handleBuildReportFromChatReply}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-sm border border-blue-500 active:scale-95 transition disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Build Report
-              </button>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.getElementById('modal-portal') || document.body
-      )}
-
-      {/* Summary Status Toast */}
-      {summaryToast && createPortal(
-        <div className="fixed top-5 left-1/2 transform -translate-x-1/2 z-[9999999] max-w-lg w-full px-4 pointer-events-none animate-in fade-in slide-in-from-top-4 duration-300">
-          <div className={`p-3.5 rounded-2xl border shadow-2xl backdrop-blur-md flex items-center gap-3 text-xs font-semibold ${
-            summaryToast.type === 'success'
-              ? 'bg-emerald-950/95 text-emerald-200 border-emerald-500/40 shadow-emerald-950/50'
-              : summaryToast.type === 'error'
-              ? 'bg-rose-950/95 text-rose-200 border-rose-500/40 shadow-rose-950/50'
-              : 'bg-amber-950/95 text-amber-200 border-amber-500/40 shadow-amber-950/50'
-          }`}>
-            <Sparkles className={`w-4 h-4 flex-shrink-0 ${
-              summaryToast.type === 'success' ? 'text-emerald-400' : summaryToast.type === 'error' ? 'text-rose-400' : 'text-amber-400'
-            }`} />
-            <span className="leading-snug">{summaryToast.message}</span>
-          </div>
-        </div>,
-        document.getElementById('modal-portal') || document.body
-      )}
-
+      {/* Portal Modals & Summary Toast */}
+      <DashboardModals
+        selectedImagePreviewUrl={c.selectedImagePreviewUrl}
+        setSelectedImagePreviewUrl={c.setSelectedImagePreviewUrl}
+        copiedImage={c.copiedImage}
+        setCopiedImage={c.setCopiedImage}
+        isApiKeyModalOpen={c.isApiKeyModalOpen}
+        setIsApiKeyModalOpen={c.setIsApiKeyModalOpen}
+        tempApiKey={c.tempApiKey}
+        setTempApiKey={c.setTempApiKey}
+        tempModel={c.tempModel}
+        setTempModel={c.setTempModel}
+        isTestingKey={c.isTestingKey}
+        setIsTestingKey={c.setIsTestingKey}
+        testKeyStatus={c.testKeyStatus}
+        setTestKeyStatus={c.setTestKeyStatus}
+        reportDisclaimer={c.reportDisclaimer}
+        setReportDisclaimer={c.setReportDisclaimer}
+        openChatSummary={c.openChatSummary}
+        handleExecuteCopyReport={c.handleExecuteCopyReport}
+        isChatSummaryOpen={c.isChatSummaryOpen}
+        setIsChatSummaryOpen={c.setIsChatSummaryOpen}
+        chatNotice={c.chatNotice}
+        chatPromptCopied={c.chatPromptCopied}
+        handleCopyChatPrompt={c.handleCopyChatPrompt}
+        chatAutoOpenGemini={c.chatAutoOpenGemini}
+        toggleChatAutoOpenGemini={c.toggleChatAutoOpenGemini}
+        handlePasteChatReplyFromClipboard={c.handlePasteChatReplyFromClipboard}
+        chatReplyText={c.chatReplyText}
+        setChatReplyText={c.setChatReplyText}
+        chatStatus={c.chatStatus}
+        setChatStatus={c.setChatStatus}
+        isGeneratingSummary={c.isGeneratingSummary}
+        handleBuildReportFromChatReply={c.handleBuildReportFromChatReply}
+        summaryToast={c.summaryToast}
+      />
     </div>
   );
 };
