@@ -228,6 +228,8 @@ interface CountingContext {
   firstSeen: StepFirstSeenIndex;
   /** `${runId}::${stepId}` -> bugs logged on that run + step */
   stepBugsByRunStep: Map<string, BugLog[]>;
+  /** `runId` -> all bugs logged on that run (with or without stepId) */
+  runBugsByRunId: Map<string, BugLog[]>;
 }
 
 const isCriticalBug = (b: BugLog): boolean =>
@@ -263,8 +265,9 @@ const buildContext = (
     if (r.id && !runPlanIds.has(r.id)) runPlanIds.set(r.id, r.planId);
   });
 
-  // Index bugs by (runId, stepId) across both global bugLogs and run.bugLogs
+  // Index bugs by (runId, stepId) and by runId across both global bugLogs and run.bugLogs
   const stepBugsByRunStep = new Map<string, BugLog[]>();
+  const runBugsByRunId = new Map<string, BugLog[]>();
   const seenBugIds = new Set<string>();
   const registerBug = (b: BugLog | undefined | null, fallbackRunId?: string) => {
     if (!b) return;
@@ -274,6 +277,14 @@ const buildContext = (
     }
     const runId = b.testRunId || fallbackRunId || '';
     const stepId = b.stepId || '';
+    if (runId) {
+      let runList = runBugsByRunId.get(runId);
+      if (!runList) {
+        runList = [];
+        runBugsByRunId.set(runId, runList);
+      }
+      runList.push(b);
+    }
     if (!runId || !stepId) return;
     const key = `${runId}::${stepId}`;
     let list = stepBugsByRunStep.get(key);
@@ -287,11 +298,7 @@ const buildContext = (
   safeRuns.forEach(r => (r.bugLogs || []).forEach(b => registerBug(b, r.id)));
 
   // Include completed runs AND active/partial non-terminated runs that have recorded steps or bugs
-  const runsWithBugs = new Set<string>();
-  stepBugsByRunStep.forEach((_, key) => {
-    const runId = key.split('::')[0];
-    if (runId) runsWithBugs.add(runId);
-  });
+  const runsWithBugs = new Set<string>(runBugsByRunId.keys());
 
   const finishedRuns = safeRuns.filter(r => {
     if (!r || r.status === 'terminated') return false;
@@ -309,7 +316,8 @@ const buildContext = (
     runPlanIds,
     finishedRuns,
     firstSeen: index,
-    stepBugsByRunStep
+    stepBugsByRunStep,
+    runBugsByRunId
   };
 };
 
@@ -623,16 +631,11 @@ export function computeCujReport(input: {
   const testedMetrics: CujMetric[] = [];
   const bugOnlyMetrics: CujMetric[] = [];
   metricsByKey.forEach(metric => {
-    // If a feature has bugs logged on it, it can never have 0 executed steps or 100% green passes:
-    // 1) If no step results were matched (e.g. standalone bug), each bug counts as a yellow/red step execution.
-    // 2) If all matched step results were green, downgrade up to `bugCount` green steps to yellow/red.
-    if (metric.bugCount >= 1) {
+    // If a feature has executed steps AND bugs logged on it, it cannot stay 100% green:
+    // When all matched step results were green, downgrade up to `bugCount` green steps to yellow/red.
+    if (metric.totalStepsExecuted >= 1 && metric.bugCount >= 1) {
       const criticalBugCount = metric.associatedBugs.filter(isCriticalBug).length;
-      if (metric.totalStepsExecuted === 0) {
-        metric.redCount = criticalBugCount;
-        metric.yellowCount = Math.max(0, metric.bugCount - criticalBugCount);
-        metric.totalStepsExecuted = metric.redCount + metric.yellowCount;
-      } else if (metric.yellowCount === 0 && metric.redCount === 0 && metric.greenCount > 0) {
+      if (metric.yellowCount === 0 && metric.redCount === 0 && metric.greenCount > 0) {
         const toDowngrade = Math.min(metric.greenCount, metric.bugCount);
         const newRed = Math.min(toDowngrade, criticalBugCount);
         const newYellow = toDowngrade - newRed;
@@ -646,9 +649,10 @@ export function computeCujReport(input: {
       metric.healthScorePct = Math.round((100 * metric.greenCount) / metric.totalStepsExecuted);
       let status: CujStatus =
         metric.healthScorePct <= 59 ? 'critical' : metric.healthScorePct <= 94 ? 'warning' : 'healthy';
-      if (metric.bugCount > 0 && status === 'healthy') {
-        const hasCriticalBug = metric.associatedBugs.some(isCriticalBug);
-        status = hasCriticalBug ? 'critical' : 'warning';
+      if (metric.associatedBugs.some(isCriticalBug)) {
+        status = 'critical';
+      } else if (metric.bugCount > 0 && status === 'healthy') {
+        status = 'warning';
       }
       metric.status = status;
       testedMetrics.push(metric);
@@ -701,18 +705,22 @@ export function computeCujReport(input: {
     bugCount: testedMetrics.concat(bugOnlyMetrics).reduce((sum, m) => sum + m.bugCount, 0)
   };
 
-  // S12 golden runs: session runs judged on everything they recorded
+  // S12 golden runs: completed session runs judged on effective steps matching scope.date
+  const completedScopedRuns = scopedRuns.filter(run => isRunFullyCompleted(run, ctx.plans, ctx.firstSeen));
   const sessionRuns = scope.date === ALL_DATES
-    ? scopedRuns
-    : scopedRuns.filter(run => {
-        const recorded = getRecordedResults(run);
+    ? completedScopedRuns
+    : completedScopedRuns.filter(run => {
+        const recorded = getEffectiveStepResults(ctx, run);
         if (recorded.length > 0) {
           return recorded.some(([, res]) => resultDateOf(res, run) === scope.date);
         }
         return (localDateStr(run.completedAt) || localDateStr(run.startedAt)) === scope.date;
       });
   const goldenRows: GoldenRunRow[] = sessionRuns.map(run => {
-    const recorded = getRecordedResults(run);
+    const allEffective = getEffectiveStepResults(ctx, run);
+    const recorded = scope.date === ALL_DATES
+      ? allEffective
+      : allEffective.filter(([, res]) => matchesDate(resultDateOf(res, run), scope.date));
     let greenCount = 0;
     let yellowCount = 0;
     let redCount = 0;
@@ -721,11 +729,29 @@ export function computeCujReport(input: {
       else if (res.status === 'yellow') yellowCount += 1;
       else if (res.status === 'red') redCount += 1;
     });
+    const runBugs = (run.id ? ctx.runBugsByRunId.get(run.id) || [] : []).filter(b => {
+      const bDate = localDateStr(b.timestamp) || localDateStr(run.completedAt) || localDateStr(run.startedAt);
+      return matchesDate(bDate, scope.date);
+    });
+    const unattachedBugs = runBugs.filter(b => !b.stepId);
+    if (unattachedBugs.length > 0 && greenCount > 0) {
+      const critCount = unattachedBugs.filter(isCriticalBug).length;
+      const toDowngrade = Math.min(greenCount, unattachedBugs.length);
+      const newRed = Math.min(toDowngrade, critCount);
+      const newYellow = toDowngrade - newRed;
+      greenCount -= toDowngrade;
+      redCount += newRed;
+      yellowCount += newYellow;
+    }
     const totalSteps = recorded.length;
     return {
       run,
       plan: ctx.planById.get(run.planId),
-      isGolden: redCount === 0 && yellowCount <= 1 && hasAllLiveStepsRecorded(run, ctx.plans, ctx.firstSeen),
+      isGolden:
+        redCount === 0 &&
+        yellowCount <= 1 &&
+        runBugs.length === 0 &&
+        hasAllLiveStepsRecorded(run, ctx.plans, ctx.firstSeen),
       greenCount,
       yellowCount,
       redCount,
@@ -773,7 +799,7 @@ export function computeCujReport(input: {
 // Days, timeline and plan picker
 // ---------------------------------------------------------------------------
 
-interface DayBucket { dateStr: string; stepCount: number; green: number; yellow: number; red: number; bugCount: number; runIds: Set<string> }
+interface DayBucket { dateStr: string; stepCount: number; green: number; yellow: number; red: number; bugCount: number; criticalBugs: number; runIds: Set<string> }
 
 /** Per-day counted results (non-empty date) and bugs (valid date) for one plan scope. */
 const aggregateDays = (input: { plans: TestPlan[]; runs: TestRun[]; bugs: BugLog[]; planId: string; firstSeen?: StepFirstSeenIndex }): Map<string, DayBucket> => {
@@ -782,7 +808,7 @@ const aggregateDays = (input: { plans: TestPlan[]; runs: TestRun[]; bugs: BugLog
   const dayFor = (dateStr: string): DayBucket => {
     let bucket = days.get(dateStr);
     if (!bucket) {
-      bucket = { dateStr, stepCount: 0, green: 0, yellow: 0, red: 0, bugCount: 0, runIds: new Set<string>() };
+      bucket = { dateStr, stepCount: 0, green: 0, yellow: 0, red: 0, bugCount: 0, criticalBugs: 0, runIds: new Set<string>() };
       days.set(dateStr, bucket);
     }
     return bucket;
@@ -796,9 +822,11 @@ const aggregateDays = (input: { plans: TestPlan[]; runs: TestRun[]; bugs: BugLog
     else if (res.status === 'red') bucket.red += 1;
     bucket.runIds.add(run.id);
   });
-  collectScopedBugs(ctx, input.bugs, input.planId).forEach(({ date }) => {
+  collectScopedBugs(ctx, input.bugs, input.planId).forEach(({ bug, date }) => {
     if (!date) return;
-    dayFor(date).bugCount += 1;
+    const bucket = dayFor(date);
+    bucket.bugCount += 1;
+    if (isCriticalBug(bug)) bucket.criticalBugs += 1;
   });
   return days;
 };
@@ -816,15 +844,30 @@ export function buildTimelinePoints(input: { plans: TestPlan[]; runs: TestRun[];
     .sort((a, b) => a.dateStr.localeCompare(b.dateStr))
     .map(d => {
       const parsed = parseLocalDate(d.dateStr);
+      let green = d.green;
+      let yellow = d.yellow;
+      let red = d.red;
+      if (d.bugCount > 0 && d.stepCount > 0) {
+        const unaccountedBugs = Math.max(0, d.bugCount - (yellow + red));
+        if (unaccountedBugs > 0 && green > 0) {
+          const toDowngrade = Math.min(green, unaccountedBugs);
+          const unaccountedCrit = Math.max(0, d.criticalBugs - red);
+          const newRed = Math.min(toDowngrade, unaccountedCrit);
+          const newYellow = toDowngrade - newRed;
+          green -= toDowngrade;
+          red += newRed;
+          yellow += newYellow;
+        }
+      }
       return {
         dateStr: d.dateStr,
         displayDate: parsed ? parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : d.dateStr,
         totalSteps: d.stepCount,
-        green: d.green,
-        yellow: d.yellow,
-        red: d.red,
+        green,
+        yellow,
+        red,
         bugs: d.bugCount,
-        scorePct: d.stepCount > 0 ? Math.round((100 * d.green) / d.stepCount) : d.bugCount > 0 ? 0 : 100
+        scorePct: d.stepCount > 0 ? Math.round((100 * green) / d.stepCount) : d.bugCount > 0 ? 0 : 100
       };
     });
 }
@@ -1025,7 +1068,7 @@ export function buildCujReportText(data: CujReportData, opts: {
   if (otherFiledBugs.length > 0) {
     plainText = plainText.replace(/\n*$/, '\n\n');
     plainText += `🐞 Other bugs filed today:\n`;
-    otherFiledBugs.forEach(b => { plainText += `  • b/${b.id} ${priorityTag(b)}${cleanBugTitle(b.title)}\n`; });
+    otherFiledBugs.forEach(b => { plainText += `  • b/${b.id} ${updatedTag(b)}${priorityTag(b)}${cleanBugTitle(b.title)}\n`; });
   }
 
   // Demo Flow Quality, after every other section: one block per plan

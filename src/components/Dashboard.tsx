@@ -2066,7 +2066,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               const target = assignedQuota.targetRunsPerDay;
               const doneOnDevToday = (todayRunsMap[matchedDev.id] && todayRunsMap[matchedDev.id][assignedQuota.planId]) || count;
               const displayDone = count > 0 ? count : doneOnDevToday;
-              const isMet = doneOnDevToday >= target || count >= target;
+              const isMet = displayDone >= target;
               return {
                 key: displayName,
                 deviceId: matchedDev.id,
@@ -2231,15 +2231,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
         }
 
         const dateScopeLabel = selectedQaDate === 'all' ? 'all time' : selectedQaDate;
+        const isTodayScope = selectedQaDate === todayStr;
         const isStartOfDay = displayedDevices.length === 0 && activeOrTestedTesters.length === 0;
-        const hasMeaningfulActivity =
-          !isStartOfDay ||
-          fleetProgress.totalTarget > 0 ||
-          fleetProgress.totalCompleted > 0 ||
-          inUseDevicesCount > 0 ||
-          liveNowCount > 0 ||
-          awayNowCount > 0 ||
-          shiftTotalBugs > 0;
+        const hasMeaningfulActivity = isTodayScope
+          ? (!isStartOfDay ||
+              fleetProgress.totalTarget > 0 ||
+              fleetProgress.totalCompleted > 0 ||
+              inUseDevicesCount > 0 ||
+              liveNowCount > 0 ||
+              awayNowCount > 0 ||
+              shiftTotalBugs > 0)
+          : (shiftTotalRuns > 0 || activeOrTestedTesters.length > 0 || shiftTotalBugs > 0);
 
         const formatShortDate = (dateStr: string) => {
           if (dateStr === 'all') return 'All-time';
@@ -2320,7 +2322,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     {!hasMeaningfulActivity ? (
                       <>
                         <span>
-                          <strong className="font-mono text-slate-200 font-bold">0/0</strong> runs
+                          <strong className="font-mono text-slate-200 font-bold">
+                            {isTodayScope ? '0/0' : '0'}
+                          </strong>{' '}
+                          runs
                         </span>
                         <span>
                           <strong className="font-mono text-slate-200 font-bold">0</strong> testers
@@ -2328,13 +2333,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       </>
                     ) : (
                       <>
-                        <span>
-                          <strong className="font-mono text-slate-100 font-bold">
-                            {fleetProgress.totalCompleted}/{fleetProgress.totalTarget}
-                          </strong>{' '}
-                          runs · {fleetProgress.pct}%
-                        </span>
-                        {inUseDevicesCount > 0 && (
+                        {isTodayScope ? (
+                          <span>
+                            <strong className="font-mono text-slate-100 font-bold">
+                              {fleetProgress.totalCompleted}/{fleetProgress.totalTarget}
+                            </strong>{' '}
+                            runs · {fleetProgress.pct}%
+                          </span>
+                        ) : (
+                          <span>
+                            <strong className="font-mono text-slate-100 font-bold">
+                              {shiftTotalRuns}
+                            </strong>{' '}
+                            run{shiftTotalRuns === 1 ? '' : 's'} ·{' '}
+                            <strong className="font-mono text-slate-100 font-bold">
+                              {activeOrTestedTesters.length}
+                            </strong>{' '}
+                            tester{activeOrTestedTesters.length === 1 ? '' : 's'}
+                          </span>
+                        )}
+                        {isTodayScope && inUseDevicesCount > 0 && (
                           <span>
                             <strong className="font-mono text-slate-100 font-bold">
                               {inUseDevicesCount}
@@ -2342,7 +2360,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             in use
                           </span>
                         )}
-                        {(liveNowCount > 0 || awayNowCount > 0) && (
+                        {isTodayScope && (liveNowCount > 0 || awayNowCount > 0) && (
                           <span>
                             <strong className="font-mono text-slate-100 font-bold">
                               {liveNowCount}
@@ -3808,6 +3826,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             type="button"
                             onClick={() => {
                               onRunSubagentTest(plan.id);
+                              setSelectedDailySessionDate(getLocalDateStr(new Date()));
+                              setSelectedReportPlanId(plan.id);
                               setActiveTab('features');
                               setSubagentToast(`Subagent executed all ${plan.steps.length} steps in "${plan.name}" for Today! Features populated.`);
                               setTimeout(() => setSubagentToast(null), 5000);
@@ -4631,7 +4651,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                       ) : (
                                         <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold text-slate-400 bg-slate-800/60 border border-slate-700">
                                           <span className={`w-1.5 h-1.5 rounded-full ${redCount > 0 ? 'bg-rose-400' : 'bg-amber-400'}`} />
-                                          <span>{redCount > 0 ? `Non-Golden (${redCount} Red)` : `Non-Golden (${yellowCount} Yellows)`}</span>
+                                          <span>{redCount > 0 ? `Non-Golden (${redCount} Red)` : yellowCount > 1 ? `Non-Golden (${yellowCount} Yellows)` : 'Non-Golden (Bug Logged)'}</span>
                                         </span>
                                       )}
                                     </td>
