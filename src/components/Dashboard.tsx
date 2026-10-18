@@ -5127,6 +5127,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     else if (onUpdateBugLog) onUpdateBugLog({ ...rawBug, ...patch });
                   };
                   const draftId = filedIssueDrafts[bug.id] ?? '';
+                  const normalizedDraftId = normalizeIssueId(draftId);
                   const isReprod = effectiveStatus(bugCategorizations[bug.id]?.status || rawBug.status) === REPROD;
                   // RX95's likely existing bugs, offered as one-click picks for the b/ field
                   const followUpPicks = isReprod
@@ -5152,7 +5153,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             if (filed) setFiled(undefined);
                             else {
                               // A b/ on a Repro'd bug is the existing bug it was followed up on (summary: "(KI, updated)")
-                              setFiled(newFiled(isReprod && draftId ? 'follow-up' : 'manual', draftId));
+                              setFiled(newFiled(isReprod && normalizedDraftId ? 'follow-up' : 'manual', normalizedDraftId));
                               setFiledIssueDrafts(prev => { const n = { ...prev }; delete n[bug.id]; return n; });
                             }
                           }}
@@ -5167,7 +5168,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             aria-label="Filed b/ issue number"
                             value={draftId}
                             inputMode="numeric"
-                            onChange={e => setFiledIssueDrafts(prev => ({ ...prev, [bug.id]: normalizeIssueId(e.target.value) }))}
+                            onChange={e => setFiledIssueDrafts(prev => ({ ...prev, [bug.id]: e.target.value }))}
+                            onBlur={e => setFiledIssueDrafts(prev => ({ ...prev, [bug.id]: normalizeIssueId(e.target.value) }))}
                             placeholder={isReprod ? 'b/ followed up on' : 'b/ (optional)'}
                             className="ml-auto w-36 bg-[#0f172a] border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-100 font-mono font-normal focus:outline-none focus:border-green-500"
                           />
@@ -5183,7 +5185,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               data-testid="feed-filed-pick"
                               title={c.title}
                               onClick={() => setFiledIssueDrafts(prev => ({ ...prev, [bug.id]: normalizeIssueId(String(c.id)) }))}
-                              className={`max-w-full truncate text-[10px] px-2 py-0.5 rounded-full border font-mono ${draftId === String(c.id) ? 'border-green-500 bg-green-500/15 text-green-200' : 'border-slate-600 bg-slate-800 text-slate-200 hover:border-green-500/60'}`}
+                              className={`max-w-full truncate text-[10px] px-2 py-0.5 rounded-full border font-mono ${normalizedDraftId === String(c.id) ? 'border-green-500 bg-green-500/15 text-green-200' : 'border-slate-600 bg-slate-800 text-slate-200 hover:border-green-500/60'}`}
                             >
                               b/{c.id} · {(c.title || '').replace(/^(\[[^\]]*\]\s*)+/, '').slice(0, 48)}
                             </button>

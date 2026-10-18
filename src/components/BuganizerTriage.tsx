@@ -34,6 +34,7 @@ import {
   issueUrl,
   minutesAgo,
   newFiled,
+  normalizeIssueId,
 } from '../utils/reproFollowUp';
 import { bugTextSig, currentRefinement, isAutoRefineOn, loadRefineCache, saveRefineCache, setAutoRefineOn } from '../utils/bugRefine';
 import {
@@ -740,10 +741,10 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
                       <div className="flex items-center gap-1 ml-auto">
                         <span className="text-[11px] text-slate-400">Filed as b/</span>
                         <input aria-label="Filed issue id" className="w-28 bg-[#0f172a] border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-100" value={d.issueId || ''} placeholder="573…"
-                          onChange={e => { const id = e.target.value.replace(/[^\d]/g, ''); t.update({ issueId: id || undefined, state: id ? 'filed' : (d.state === 'filed' ? 'opened' : d.state) }); }}
+                          onChange={e => { const raw = e.target.value; const id = normalizeIssueId(raw); t.update({ issueId: raw || undefined, state: id ? 'filed' : (d.state === 'filed' ? 'opened' : d.state) }); }}
                           onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-                          // Stamp FILED once the number is entered (not on every keystroke - it would vanish mid-typing)
-                          onBlur={() => t.onFiledAs(d.issueId)} />
+                          // Normalize & stamp FILED once finished typing (blur/Enter) so ?/# delimiters aren't stripped mid-keystroke
+                          onBlur={e => { const id = normalizeIssueId(e.target.value); t.update({ issueId: id || undefined, state: id ? 'filed' : (d.state === 'filed' ? 'opened' : d.state) }); t.onFiledAs(id || undefined); }} />
                       </div>
                     </div>
                     {t.bottom}
@@ -974,7 +975,8 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
           {!p.issueId && (
             <input data-testid="waiting-issue" aria-label="Filed b/ issue number" className="w-36 bg-[#0f172a] border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-100 font-mono"
               placeholder="b/ number (optional)" value={typedId}
-              onChange={ev => setWaitingIssue(prev => ({ ...prev, [e.key]: ev.target.value.replace(/[^\d]/g, '').slice(0, 12) }))} />
+              onChange={ev => setWaitingIssue(prev => ({ ...prev, [e.key]: ev.target.value }))}
+              onBlur={ev => setWaitingIssue(prev => ({ ...prev, [e.key]: normalizeIssueId(ev.target.value) }))} />
           )}
           <button data-testid="waiting-mark-filed" className="px-2.5 h-7 rounded-xl text-xs font-semibold border border-green-500/40 bg-green-500/10 text-green-200 hover:bg-green-500/20"
             onClick={() => forMembers(members, () => ({ filed: newFiled(via, p.issueId || typedId), filePending: undefined }))}>
@@ -1121,7 +1123,7 @@ export default function BuganizerTriage({ bugs, bugCategorizations, dismissed: d
                   <span data-testid="row-reprod-pill" className="px-2 py-0.5 rounded-full border border-violet-500/50 bg-violet-500/15 text-violet-200 flex items-center gap-1"><Repeat className="w-3 h-3" /> Repro'd Issue</span>
                 )}
                 {!repro && (
-                  <span className={`px-2 py-0.5 rounded-full border ${STATE_STYLE[d.state]}`}>{STATE_LABEL[d.state]}{d.state === 'filed' && d.issueId ? ` · b/${d.issueId}` : ''}</span>
+                  <span className={`px-2 py-0.5 rounded-full border ${STATE_STYLE[d.state]}`}>{STATE_LABEL[d.state]}{d.state === 'filed' && d.issueId ? ` · b/${normalizeIssueId(d.issueId)}` : ''}</span>
                 )}
                 <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">{bug.feature || 'General'}</span>
                 {refinedFor(bug) && (
