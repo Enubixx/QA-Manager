@@ -26,11 +26,18 @@ export function effectiveStatus(status?: string): TriageStatus {
   return status === REPROD ? REPROD : 'New';
 }
 
-/** Digits of a Buganizer issue id from "b/123", "123", or an issue URL. */
+/**
+ * Digits of a Buganizer issue id from "b/123", "123", "http://b/123", or an issue URL
+ * (b.corp.google.com/issues/123, issuetracker.google.com/issues/123). Any ?query / #fragment is
+ * ignored and only the first contiguous digit run is taken, so "b/123?comment=5" stays "123".
+ */
 export function normalizeIssueId(raw: string): string {
-  const s = (raw || '').trim();
-  const fromUrl = /issues\/(\d+)/.exec(s);
-  return (fromUrl ? fromUrl[1] : s.replace(/^b\//i, '')).replace(/[^\d]/g, '').slice(0, 12);
+  const s = (raw || '').trim().replace(/[?#].*$/, '');
+  const m =
+    /issues\/(\d+)/i.exec(s) ||
+    /^(?:https?:\/\/)?(?:[\w.-]+\/)?b\/(\d+)/i.exec(s) ||
+    /(\d+)/.exec(s);
+  return m ? m[1].slice(0, 12) : '';
 }
 
 /**
