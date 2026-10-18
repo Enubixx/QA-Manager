@@ -8,7 +8,9 @@ import {
   deleteArchivedRunFromSupabase,
   syncDevicesListToCloud,
   isTestRunDeleted,
-  markTestRunDeleted
+  markTestRunDeleted,
+  isArchivedRunDeleted,
+  markArchivedRunDeleted
 } from './supabaseService';
 import { TestRun, BugLog, DeviceProfile } from '../types';
 
@@ -302,10 +304,11 @@ export const safeSyncTestRun = async (run: TestRun) => {
 };
 
 export const safeSyncArchivedRun = async (run: TestRun) => {
-  if (run?.id) {
-    markTestRunDeleted(run.id);
-    supersedeQueued('syncTestRun', { id: run.id }, Date.now());
+  if (!run?.id || isArchivedRunDeleted(run.id)) {
+    return;
   }
+  markTestRunDeleted(run.id);
+  supersedeQueued('syncTestRun', { id: run.id }, Date.now());
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
     enqueueOfflineMutation('syncArchivedRun', run);
     return;
@@ -315,7 +318,9 @@ export const safeSyncArchivedRun = async (run: TestRun) => {
     await syncArchivedRunToSupabase(run);
     supersedeQueued('syncArchivedRun', run, startedAt);
   } catch (e) {
-    enqueueOfflineMutation('syncArchivedRun', run);
+    if (!isArchivedRunDeleted(run.id)) {
+      enqueueOfflineMutation('syncArchivedRun', run);
+    }
   }
 };
 
@@ -363,6 +368,25 @@ export const safeDeleteTestRun = async (runId: string) => {
     supersedeQueued('deleteTestRun', runId, Date.now());
   } catch (e) {
     enqueueOfflineMutation('deleteTestRun', runId);
+  }
+};
+
+export const safeDeleteArchivedRun = async (runId: string) => {
+  if (!runId) return;
+  markTestRunDeleted(runId);
+  markArchivedRunDeleted(runId);
+  const startedAt = Date.now();
+  supersedeQueued('syncTestRun', { id: runId }, startedAt);
+  supersedeQueued('syncArchivedRun', { id: runId }, startedAt);
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    enqueueOfflineMutation('deleteArchivedRun', runId);
+    return;
+  }
+  try {
+    await deleteArchivedRunFromSupabase(runId);
+    supersedeQueued('deleteArchivedRun', runId, Date.now());
+  } catch (e) {
+    enqueueOfflineMutation('deleteArchivedRun', runId);
   }
 };
 

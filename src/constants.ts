@@ -2,6 +2,9 @@
 export const APP_VERSION_CODE = 8;
 export const APP_VERSION_NAME = '2.6.0';
 
+// Shared Google Drive download link for the latest QA Tester Android APK (v2.6.0)
+export const APK_DOWNLOAD_URL = 'https://drive.google.com/file/d/15qrnpJExF8siPcuTBy6wTIBk33racp3_/view?usp=drivesdk&resourcekey=0-6Th_JDrG2WzhwHfRB9YMcw';
+
 // Version options for minimum APK version selector and display formatting
 export const APP_VERSION_OPTIONS: { code: number; version: string; label: string }[] = [
   { code: 1, version: '1.0.0', label: 'v1.0.0 (Code 1)' },

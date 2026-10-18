@@ -2,8 +2,8 @@ import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota, RefinedBugText, ReproMatches } from '../types';
 import { REPROD, TRIAGE_STATUS_OPTIONS, currentReproMatches, effectiveFiled, effectiveStatus, filedPatch, filedStampLine, newFiled, normalizeIssueId } from '../utils/reproFollowUp';
-import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers, FileSpreadsheet, ExternalLink, MessageSquareText, ClipboardPaste, Bot } from 'lucide-react';
-import { exportAllQADataToCSV, exportAllQADataToJSON } from '../utils/exportUtils';
+import { ListChecks, Bug, Clock, Plus, Play, Trash2, Smartphone, CheckCircle2, AlertTriangle, XCircle, Download, User, Filter, ArrowUpDown, Tag, Activity, Copy, FileJson, Upload, Search, Image as ImageIcon, Sparkles, X, Calendar, Edit, BarChart2, Camera, TrendingUp, TrendingDown, History, ChevronDown, ChevronUp, RefreshCw, UserCheck, Timer, Layers, ExternalLink, MessageSquareText, ClipboardPaste, Bot } from 'lucide-react';
+import { exportAllQADataToJSON } from '../utils/exportUtils';
 import { TabBar, Rx95LiveChip, TAG_STYLE, chipCls, chipOff, chipOn, expandedCls, inputCls, labelCls, listBoxCls, priTagCls, rowActionCls, rowCls, rowOpenCls, smallBtnCls, tagCls } from './triageUi';
 import { isReviewed, isStronglyReviewed, reviewedNow } from '../utils/bugReview';
 import { currentRefinement } from '../utils/bugRefine';
@@ -21,7 +21,6 @@ import { type ShownSuggestion, isBundleable, loadDismissed, newBundle, sameHotli
 /** Buganizer triage view: on by default; set VITE_BUGANIZER_ENABLED=0 to hide it. */
 const BUGANIZER_ENABLED = ((import.meta as any).env?.VITE_BUGANIZER_ENABLED || '') !== '0';
 import type { ExecutiveQAResult, SummaryScopeContext } from '../services/geminiService';
-import { GOOGLE_APPS_SCRIPT_CODE } from '../googleAppsScriptCode';
 import { toBlob } from 'html-to-image';
 import type { Rx95SuggestionsData } from '../services/supabaseService';
 
@@ -552,152 +551,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
-  const [googleSheetUrl, setGoogleSheetUrl] = useState<string>(() => {
-    try {
-      return localStorage.getItem('qa_google_sheet_url') || 'https://script.google.com/a/macros/google.com/s/AKfycbzMH5O3zxz5mHQrQzH5gqc62jssceuXszuKxxRmnHMuj4Pq0AyEVRzrrv_OUrM7B5GlsA/exec';
-    } catch (e) {
-      return 'https://script.google.com/a/macros/google.com/s/AKfycbzMH5O3zxz5mHQrQzH5gqc62jssceuXszuKxxRmnHMuj4Pq0AyEVRzrrv_OUrM7B5GlsA/exec';
-    }
-  });
-
-  const [autoSyncSheet, setAutoSyncSheet] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('qa_auto_sync_sheet') === 'true';
-    } catch (e) {
-      return false;
-    }
-  });
-
-  const [isSheetModalOpen, setIsSheetModalOpen] = useState<boolean>(false);
-  const [isSyncingSheet, setIsSyncingSheet] = useState<boolean>(false);
-  const [sheetSyncStatus, setSheetSyncStatus] = useState<{ success?: boolean; message?: string } | null>(null);
-  const [copiedCodeGs, setCopiedCodeGs] = useState<boolean>(false);
-
-  const handleSyncToGoogleSheet = async (bugsToSync: BugLog[] = bugLogs, silent = false) => {
-    if (bugsToSync.length === 0) {
-      if (!silent) setSheetSyncStatus({ success: false, message: 'No bugs found to sync.' });
-      return;
-    }
-    const trimmedSheetUrl = (googleSheetUrl || '').trim();
-    if (!trimmedSheetUrl.startsWith('https://script.google.com/')) {
-      if (!silent) {
-        setSheetSyncStatus({
-          success: false,
-          message: 'Invalid Google Apps Script URL. Must begin with https://script.google.com/.'
-        });
-      }
-      return;
-    }
-    if (!silent) {
-      setIsSyncingSheet(true);
-      setSheetSyncStatus(null);
-    }
-    try {
-      const planMap = new Map(testPlans.map(p => [p.id, p.name]));
-      const enrichedPayload = bugsToSync.map(b => {
-        const cat = bugCategorizations[b.id];
-        const resolvedPlanName = (b.planId && planMap.get(b.planId)) || (b as any).planName || 'General QA';
-        return {
-          ...b,
-          planName: resolvedPlanName,
-          // Strip base64 data URLs so serverless proxy body limit is never exceeded
-          imageUrl: (b.imageUrl && b.imageUrl.startsWith('data:')) ? undefined : b.imageUrl,
-          bugType: cat?.bugType || b.bugType || 'Bug',
-          priority: cat?.priority || b.priority || (b.severity === 'critical' ? 'P0' : b.severity === 'high' ? 'P1' : 'P2'),
-          // Sheet column: 'Filed' when stamped (or legacy), else New / Repro'd Issue
-          status: effectiveFiled(b) ? 'Filed' : effectiveStatus(cat?.status || b.status)
-        };
-      });
-
-      let success = false;
-      let respMsg = '';
-
-      // 1. Try serverless proxy first
-      try {
-        const res = await fetch('/api/sync-sheet', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ scriptUrl: trimmedSheetUrl, bugs: enrichedPayload })
-        });
-        const data = await res.json();
-        if (
-          res.ok &&
-          data.status === 'success' &&
-          data.result?.status !== 'error' &&
-          !data.result?.raw?.includes('Sign in')
-        ) {
-          success = true;
-          respMsg = data.result?.message || `Successfully synced ${enrichedPayload.length} bug(s) to Google Sheets!`;
-          if (onUpdateBugLog) {
-            const markedSynced = bugsToSync.map(b => {
-              const cat = bugCategorizations[b.id];
-              return {
-                ...b,
-                syncedToSheet: true,
-                // No defaults stamped onto the bug (they'd look like a person's triage); the sheet gets defaults above
-                bugType: cat?.bugType || b.bugType,
-                priority: cat?.priority || b.priority,
-                status: cat?.status || b.status
-              };
-            });
-            onUpdateBugLog(markedSynced);
-          }
-        } else if (data?.result?.message || data?.error) {
-          respMsg = data?.result?.message || data?.error;
-        }
-      } catch (err) {
-        if (!silent) console.warn('Proxy sync failed:', err);
-      }
-
-      if (!silent) {
-        if (success) {
-          setSheetSyncStatus({ success: true, message: respMsg || `Successfully synced ${enrichedPayload.length} bug(s)!` });
-        } else {
-          setSheetSyncStatus({
-            success: false,
-            message: respMsg || 'Could not reach Google Apps Script POST endpoint via /api/sync-sheet. Verify your Web App URL and deployment permissions.'
-          });
-        }
-      }
-    } catch (e: any) {
-      if (!silent) {
-        setSheetSyncStatus({ success: false, message: e.message || 'Sync failed.' });
-      }
-    } finally {
-      if (!silent) {
-        setIsSyncingSheet(false);
-      }
-    }
-  };
-
-  const bugLogsLatestRef = useRef<BugLog[]>(bugLogs);
-  useEffect(() => {
-    bugLogsLatestRef.current = bugLogs;
-  }, [bugLogs]);
-
-  const lastSyncedBugCountRef = useRef<number>(bugLogs.length);
-  useEffect(() => {
-    if (autoSyncSheet && googleSheetUrl && bugLogs.length > lastSyncedBugCountRef.current) {
-      lastSyncedBugCountRef.current = bugLogs.length;
-      handleSyncToGoogleSheet(bugLogs, true);
-    } else {
-      lastSyncedBugCountRef.current = bugLogs.length;
-    }
-  }, [bugLogs.length, autoSyncSheet, googleSheetUrl]);
-
-  // 1-minute recurring auto-sync interval while dashboard is active (uses ref to avoid resetting timer on every bug edit)
-  useEffect(() => {
-    if (!autoSyncSheet || !googleSheetUrl) return;
-
-    const intervalId = setInterval(() => {
-      if (bugLogsLatestRef.current.length > 0) {
-        handleSyncToGoogleSheet(bugLogsLatestRef.current, true);
-      }
-    }, 60000);
-
-    return () => clearInterval(intervalId);
-  }, [autoSyncSheet, googleSheetUrl]);
-
   // Global Escape key listener closes any active modal or popover
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -705,7 +558,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
         if (selectedImagePreviewUrl) setSelectedImagePreviewUrl(null);
         if (isChatSummaryOpen) setIsChatSummaryOpen(false);
         if (isApiKeyModalOpen) setIsApiKeyModalOpen(false);
-        if (isSheetModalOpen) setIsSheetModalOpen(false);
         if (isBugFilterMenuOpen) setIsBugFilterMenuOpen(false);
         if (inspectorTarget) setInspectorTarget(null);
         if (selectedInspectorTester) setSelectedInspectorTester('');
@@ -715,7 +567,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedImagePreviewUrl, isChatSummaryOpen, isApiKeyModalOpen, isSheetModalOpen, isBugFilterMenuOpen, inspectorTarget, selectedInspectorTester, isFloorMenuOpen, isActivateTileOpen]);
+  }, [selectedImagePreviewUrl, isChatSummaryOpen, isApiKeyModalOpen, isBugFilterMenuOpen, inspectorTarget, selectedInspectorTester, isFloorMenuOpen, isActivateTileOpen]);
 
   // Close floor ⋯ menu on outside click
   useEffect(() => {
@@ -5336,9 +5188,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     </div>
                     <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-800">
                       <button type="button" className={smallBtnCls} onClick={() => { setSelectedDateFilter('all'); setSelectedFeatureFilter('all'); setSelectedDeviceFilter('all'); setSelectedPlanFilter('all'); setSortByDevice('newest'); setCustomDateInput(''); }}>Reset filters</button>
-                      <button type="button" className={smallBtnCls} onClick={() => { setIsBugFilterMenuOpen(false); setIsSheetModalOpen(true); }}>
-                        <FileSpreadsheet className="w-3.5 h-3.5 inline mr-1 text-emerald-400" />Sheets sync{autoSyncSheet ? ' · on' : ''}
-                      </button>
                       {bugLogs.length > 0 && onWipeAllBugs && (
                         <button type="button" className="px-2.5 h-7 rounded-xl text-xs font-semibold border border-rose-500/30 bg-rose-500/15 text-rose-300 hover:bg-rose-500/25"
                           onClick={() => { if (window.confirm(`Are you sure you want to wipe all ${bugLogs.length} logged bug(s)? This will permanently remove all defect logs.`)) onWipeAllBugs(); }}>
@@ -5935,192 +5784,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 Build Report
               </button>
               </div>
-            </div>
-          </div>
-        </div>,
-        document.getElementById('modal-portal') || document.body
-      )}
-
-      {/* Google Sheets Integration Modal Portal */}
-      {isSheetModalOpen && createPortal(
-        <div
-          onClick={() => setIsSheetModalOpen(false)}
-          className="fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md"
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            className="liquid-glass-panel rounded-3xl p-6 max-w-lg w-full border border-slate-700 shadow-2xl bg-[#111827] space-y-4 text-left animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto"
-          >
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-emerald-500/20 text-emerald-300 rounded-xl border border-emerald-500/30">
-                  <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
-                </div>
-                <div>
-                  <h4 className="text-sm font-bold text-white flex items-center gap-2">
-                    <span>Google Sheets Bug Integration</span>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-                      Live
-                    </span>
-                  </h4>
-                  <p className="text-[11px] text-slate-400 font-medium">Automatic multi-tab spreadsheet sync with smart dropdowns</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsSheetModalOpen(false)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg transition cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Sync Feedback Alert */}
-            {sheetSyncStatus && (
-              <div className={`p-3 rounded-2xl border text-xs font-semibold flex items-center gap-2 ${
-                sheetSyncStatus.success 
-                  ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40'
-                  : 'bg-rose-950/80 text-rose-300 border-rose-500/40'
-              }`}>
-                {sheetSyncStatus.success ? <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" /> : <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />}
-                <span>{sheetSyncStatus.message}</span>
-              </div>
-            )}
-
-            {/* Webhook URL Input */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-300 flex items-center justify-between">
-                <span>Google Apps Script Web App URL</span>
-                <span className="text-[10px] text-slate-400 font-normal">Deployed Webhook URL</span>
-              </label>
-              <input
-                type="url"
-                value={googleSheetUrl}
-                onChange={e => {
-                  setGoogleSheetUrl(e.target.value);
-                  localStorage.setItem('qa_google_sheet_url', e.target.value);
-                }}
-                placeholder="https://script.google.com/macros/s/.../exec"
-                className="w-full liquid-glass-input rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none font-mono"
-              />
-            </div>
-
-            {/* Controls: Auto-Sync Toggle & Sync Now Button */}
-            <div className="p-3.5 rounded-2xl bg-[#0f172a] border border-slate-800 space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-xs font-bold text-white">Auto-Sync Every 1 Minute</div>
-                  <div className="text-[11px] text-slate-400">Automatically sync fresh bugs to Google Sheets every 60 seconds while viewing the dashboard</div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = !autoSyncSheet;
-                    setAutoSyncSheet(next);
-                    localStorage.setItem('qa_auto_sync_sheet', String(next));
-                  }}
-                  className={`w-11 h-6 flex items-center rounded-full p-1 transition-colors cursor-pointer ${
-                    autoSyncSheet ? 'bg-emerald-500' : 'bg-slate-700'
-                  }`}
-                >
-                  <div
-                    className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${
-                      autoSyncSheet ? 'translate-x-5' : 'translate-x-0'
-                    }`}
-                  />
-                </button>
-              </div>
-
-              <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-2 flex-wrap">
-                <a
-                  href="https://docs.google.com/spreadsheets/d/1p5VfZLm5w9w5XGtbmKxroWwUxgWNxcwU8a0DnCoqCBk/edit"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 border border-slate-700 active:scale-95"
-                >
-                  <ExternalLink className="w-3.5 h-3.5 text-blue-400" />
-                  <span>Open Spreadsheet</span>
-                </a>
-                <button
-                  type="button"
-                  disabled={isSyncingSheet || !googleSheetUrl.trim()}
-                  onClick={() => handleSyncToGoogleSheet(processedBugs)}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm border border-blue-500 active:scale-95 disabled:opacity-50 cursor-pointer"
-                >
-                  {isSyncingSheet ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Syncing...</span>
-                    </>
-                  ) : (
-                    <>
-                      <FileSpreadsheet className="w-3.5 h-3.5 text-white" />
-                      <span>Sync All {processedBugs.length} Bugs</span>
-                    </>
-                  )}
-                </button>
-              </div>
-
-              {/* In-Sheet Direct Control Tip */}
-              <div className="p-2.5 rounded-xl bg-blue-950/40 border border-blue-500/20 text-[11px] text-blue-200 leading-relaxed">
-                <b>24/7 Cloud Background Sync:</b> Inside your Google Sheet, click the top menu <b>QA Manager</b> &gt; <b>Enable Auto-Sync (Every 1 Min)</b>. Google's cloud will automatically pull fresh bugs from the database every 60 seconds even when this app is closed!
-              </div>
-            </div>
-
-            {/* Smart Dropdown Explanation & Features */}
-            <div className="space-y-2 text-xs text-slate-300">
-              <div className="font-bold text-white flex items-center gap-1.5">
-                <span>Features Configured in Google Sheets:</span>
-              </div>
-              <ul className="space-y-1.5 text-[11px] text-slate-400">
-                <li className="flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                  <span><b>Individual Tester Smart Tables:</b> Creates a separate page for each tester (e.g. Eric, Gianna D, Ed, John) + All Bugs master table.</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
-                  <span><b>Smart Table Features:</b> Interactive filter/sort dropdowns on every column, alternating banded rows, and frozen headers.</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-                  <span><b>Smart Dropdowns:</b> Pre-configured with Bug Type, Priority (P0, P1, P2 / 0, 1, 2), and Status chips with color pills.</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
-                  <span><b>Clean 10-Column Smart Table:</b> Severity, Screenshot Preview, and Bug ID removed for maximum clarity; screenshots open via clean clickable links.</span>
-                </li>
-              </ul>
-            </div>
-
-            {/* Google Apps Script Code Accordion / Copy */}
-            <div className="pt-2 border-t border-slate-800 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-white">Google Sheet Apps Script (Code.gs)</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigator.clipboard.writeText(GOOGLE_APPS_SCRIPT_CODE);
-                    setCopiedCodeGs(true);
-                    setTimeout(() => setCopiedCodeGs(false), 3000);
-                  }}
-                  className="px-2.5 py-1 rounded-xl text-[11px] font-bold bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 flex items-center gap-1.5 transition cursor-pointer active:scale-95"
-                >
-                  {copiedCodeGs ? (
-                    <>
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                      <span className="text-emerald-300">Copied!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3.5 h-3.5 text-blue-300" />
-                      <span>Copy Code.gs</span>
-                    </>
-                  )}
-                </button>
-              </div>
-              <p className="text-[11px] text-slate-400">
-                Paste this into your Google Sheet under <b>Extensions &gt; Apps Script &gt; Code.gs</b> and deploy as a Web App with access set to <i>Anyone</i>.
-              </p>
             </div>
           </div>
         </div>,

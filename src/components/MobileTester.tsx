@@ -6,12 +6,11 @@ import { buildEnvironment, getCurrentGlassesBuild, getPhoneBuildInfo, type Glass
 import { createPortal } from 'react-dom';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile } from '../types';
 import { CheckCircle2, Clock, Bug, Smartphone, RefreshCw, Send, Check, Layers, ChevronDown, AlertTriangle, XCircle, ArrowRight, ArrowLeft, ChevronLeft, ChevronRight, Undo2, Sparkles, User, Download, Edit3, Trash2, Tag, Image, X, Mic, WifiOff } from 'lucide-react';
-import { exportTestRunToCSV } from '../utils/exportUtils';
 import { triggerHaptic } from '../utils/haptics';
 import { isRunFullyCompleted, buildStepFirstSeenIndex, getEffectiveRunStatus } from '../utils/runUtils';
 import { mergeRunsById } from '../utils/cujReportUtils';
 import { getLocalDateStr } from '../utils/dateUtils';
-import { APP_VERSION_CODE, APP_VERSION_NAME } from '../constants';
+import { APP_VERSION_CODE, APP_VERSION_NAME, APK_DOWNLOAD_URL, formatAppVersionName } from '../constants';
 import { BootSignal, subscribeToSystemCommands, isTestRunDeleted } from '../services/supabaseService';
 
 /** Buganizer titles stay readable at ~120 chars. */
@@ -1621,14 +1620,15 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   // Requirement 5: App Version Enforcement Blocker
   if (minAppVersion && minAppVersion > APP_VERSION_CODE) {
+    const reqVersionLabel = formatAppVersionName(minAppVersion);
     return (
-      <div className="fixed inset-0 z-[999999] bg-slate-950 flex flex-col items-center justify-center p-6 text-center select-none">
+      <div className="fixed inset-0 z-[999999] bg-slate-950 flex flex-col items-center justify-center p-6 text-center select-none" data-testid="update-required-screen">
         <div className="w-20 h-20 rounded-3xl bg-rose-500/20 border-2 border-rose-500/40 flex items-center justify-center mb-6 shadow-2xl shadow-rose-500/20 animate-pulse">
           <AlertTriangle className="w-10 h-10 text-rose-400" />
         </div>
         <h1 className="text-2xl font-black text-white tracking-tight mb-2">Update Required</h1>
         <p className="text-xs text-slate-300 max-w-xs mb-6 leading-relaxed font-medium">
-          Your installed tester build (v{APP_VERSION_NAME}) is outdated. The QA system requires version {minAppVersion}.0 or higher to continue testing.
+          Your installed tester build (v{APP_VERSION_NAME}) is outdated. The QA system requires {reqVersionLabel} or higher to continue testing.
         </p>
         <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 w-full max-w-xs space-y-2 mb-6">
           <div className="flex justify-between text-xs">
@@ -1637,11 +1637,21 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           </div>
           <div className="flex justify-between text-xs">
             <span className="text-slate-400 font-medium">Required Build:</span>
-            <span className="font-mono font-bold text-emerald-400">v{minAppVersion}.0.0+ (code {minAppVersion})</span>
+            <span className="font-mono font-bold text-emerald-400">{reqVersionLabel}+ (code {minAppVersion})</span>
           </div>
         </div>
+        <a
+          href={APK_DOWNLOAD_URL}
+          target="_blank"
+          rel="noreferrer"
+          data-testid="update-required-apk-link"
+          className="mb-4 px-5 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl text-xs font-bold transition shadow-lg border border-blue-500/50 flex items-center justify-center gap-2 active:scale-95 w-full max-w-xs"
+        >
+          <Download className="w-4 h-4" />
+          <span>Download Latest APK ({reqVersionLabel})</span>
+        </a>
         <p className="text-[11px] text-slate-500 max-w-xs">
-          Please download and install the latest QA Manager APK from your administrator to resume testing.
+          Please download and install the latest QA Manager APK to resume testing.
         </p>
       </div>
     );

@@ -3,7 +3,7 @@
 ## Workspace Location
 - **Cloudtop Repository Path:** `/usr/local/google/home/huankevin/projects/QA Manager`
 - **GitHub Remote:** `https://github.com/Enubixx/QA-Manager.git` (branch: `main`)
-- **Tech Stack:** React 18 + Vite 5 + TypeScript + Tailwind CSS + Supabase + Gemini (`@google/genai`) + Capacitor/Bubblewrap Android APK + Google Apps Script helper (`google-apps-script/`)
+- **Tech Stack:** React 18 + Vite 5 + TypeScript + Tailwind CSS + Supabase + Gemini (`@google/genai`) + Capacitor/Bubblewrap Android APK
 
 ---
 
@@ -27,16 +27,7 @@
   ```
   *(Vercel CLI auth is stored in `~/.local/share/com.vercel.cli/auth.json` and `~/.config/com.vercel.cli/auth.json`).*
 
-### 2. Google Apps Script Backend (`google-apps-script/`)
-- **Script ID:** `1okjLaxHFV_jZEMoUswRHXKtzAt7B_f-NlZArSl7sZYn8LrUSAfTk8zwK`
-- **Deploy Command:**
-  ```bash
-  cd "/usr/local/google/home/huankevin/projects/QA Manager/google-apps-script"
-  npx @google/clasp push
-  ```
-  *(OAuth credentials are in `~/.clasprc.json`).*
-
-### 3. Android APK (`QA_Field_Tester`)
+### 2. Android APK (`QA_Field_Tester`)
 - Sync web build into Capacitor Android project:
   ```bash
   npm run build

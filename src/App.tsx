@@ -2,17 +2,17 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Dashboard } from './components/Dashboard';
 import { PlanBuilder } from './components/PlanBuilder';
 import { MobileTester } from './components/MobileTester';
+import { Navbar } from './components/Navbar';
 import { SAMPLE_PLANS, SAMPLE_RUNS, SAMPLE_BUG_LOGS } from './data/mockData';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, RefinedBugText, ReproMatches } from './types';
 import { bugTextSig } from './utils/bugRefine';
+import { exportAllQADataToJSON } from './utils/exportUtils';
 import {
   fetchAllSupabaseData,
   fetchRx95Suggestions,
   type Rx95SuggestionsData,
   syncTestPlanToSupabase,
   deleteTestPlanFromSupabase,
-  deleteTestRunFromSupabase,
-  deleteArchivedRunFromSupabase,
   syncBugLogToSupabase,
   deleteBugLogFromSupabase,
   wipeAllBugsFromSupabase,
@@ -31,8 +31,8 @@ import {
   broadcastBootSignal,
   BootSignal,
   isTestRunDeleted,
+  isArchivedRunDeleted,
   markTestRunDeleted,
-  unmarkTestRunDeleted,
 } from './services/supabaseService';
 import { isSupabaseConfigured } from './lib/supabase';
 import { getLocalDateStr } from './utils/dateUtils';
@@ -45,6 +45,7 @@ import {
   safeSyncBugLog,
   safePatchBugColumns,
   safeDeleteTestRun,
+  safeDeleteArchivedRun,
   safeSyncDevices
 } from './services/offlineSyncQueue';
 import { APP_VERSION_CODE, CONFIG_MIN_APP_VERSION, CONFIG_DAILY_RESET_DATE } from './constants';
@@ -403,6 +404,7 @@ export function App() {
       }
       const todayStr = getLocalDateStr();
       const validArchivedRuns = normalizeRuns(cloudData.archivedRuns || []).filter(r => {
+        if (!r || !r.id || isArchivedRunDeleted(r.id) || isTestRunDeleted(r.id)) return false;
         const stepEntries = Object.entries(r.results || {}).filter(
           ([k, v]) => k !== '_meta' && v && typeof v === 'object' && 'status' in (v as any) && (v as any).status !== 'pending'
         );
@@ -929,16 +931,36 @@ export function App() {
     setTestRuns([]);
     setArchivedRuns([]);
     setBugLogs([]);
+    setDevices([]);
+    setTesters([]);
+    setPopulatedFeatures([]);
+    setPopulatedDevices([]);
     setSelectedPlanId('');
     try {
       localStorage.removeItem('qa_test_plans');
       localStorage.removeItem('qa_test_runs');
       localStorage.removeItem('qa_archived_runs');
       localStorage.removeItem('qa_bug_logs');
+      localStorage.removeItem('qa_devices_list');
+      localStorage.removeItem('qa_testers_list');
+      localStorage.removeItem('qa_populated_features');
+      localStorage.removeItem('qa_populated_devices');
+      localStorage.removeItem('qa_selected_plan_id');
+      localStorage.removeItem('qa_bug_categorizations');
+      localStorage.setItem('qa_prototype_seeded', 'skip');
     } catch (e) {}
   };
 
-  const handleImportJSONData = (data: { testPlans?: TestPlan[]; testRuns?: TestRun[]; bugLogs?: BugLog[]; archivedRuns?: TestRun[] }) => {
+  const handleImportJSONData = (data: {
+    testPlans?: TestPlan[];
+    testRuns?: TestRun[];
+    bugLogs?: BugLog[];
+    archivedRuns?: TestRun[];
+    devices?: DeviceProfile[];
+    testers?: TesterProfile[];
+    populatedFeatures?: string[];
+    populatedDevices?: string[];
+  }) => {
     if (!data || typeof data !== 'object') return;
     markUserMutation();
     if (data.testPlans && Array.isArray(data.testPlans)) {
@@ -961,6 +983,31 @@ export function App() {
       const validBugs = normalizeBugs(data.bugLogs);
       setBugLogs(validBugs);
       validBugs.forEach(syncBugLogToSupabase);
+    }
+    if (data.devices && Array.isArray(data.devices)) {
+      const validDevices = data.devices.filter(d => d && typeof d === 'object' && d.id && d.name);
+      setDevices(validDevices);
+      safeSetStorageItem('qa_devices_list', JSON.stringify(validDevices));
+      validDevices.forEach(syncDeviceToSupabase);
+      syncDevicesListToCloud(validDevices);
+    }
+    if (data.testers && Array.isArray(data.testers)) {
+      const validTesters = data.testers.filter(t => t && typeof t === 'object' && t.id && t.name);
+      setTesters(validTesters);
+      safeSetStorageItem('qa_testers_list', JSON.stringify(validTesters));
+      validTesters.forEach(syncTesterToSupabase);
+      syncTestersListToCloud(validTesters);
+    }
+    if (data.populatedFeatures && Array.isArray(data.populatedFeatures)) {
+      const validFeatures = data.populatedFeatures.filter(f => typeof f === 'string' && f.trim() !== '');
+      setPopulatedFeatures(validFeatures);
+      safeSetStorageItem('qa_populated_features', JSON.stringify(validFeatures));
+      validFeatures.forEach(syncPopulatedFeatureToSupabase);
+    }
+    if (data.populatedDevices && Array.isArray(data.populatedDevices)) {
+      const validPopDevs = data.populatedDevices.filter(d => typeof d === 'string' && d.trim() !== '');
+      setPopulatedDevices(validPopDevs);
+      safeSetStorageItem('qa_populated_devices', JSON.stringify(validPopDevs));
     }
   };
 
@@ -988,7 +1035,7 @@ export function App() {
 
     const runsToRemove = testRunsRef.current.filter(r => r.planId === planId);
     const removedRunIds = new Set(runsToRemove.map(r => r.id));
-    runsToRemove.forEach(r => deleteTestRunFromSupabase(r.id));
+    runsToRemove.forEach(r => safeDeleteTestRun(r.id));
 
     let nextPlansSnapshot: TestPlan[] = [];
     setTestPlans(prev => {
@@ -1050,7 +1097,7 @@ export function App() {
     setArchivedRuns(prev => prev.filter(r => r.id !== runId));
 
     safeDeleteTestRun(runId);
-    deleteArchivedRunFromSupabase(runId);
+    safeDeleteArchivedRun(runId);
     markTestRunDeleted(runId);
     if (deletedRun?.planId) {
       try {
@@ -1292,8 +1339,8 @@ export function App() {
     setArchivedRuns(prev => prev.filter(r => !idsToDelete.has(r.id)));
 
     runsToDelete.forEach(r => {
-      deleteTestRunFromSupabase(r.id);
-      deleteArchivedRunFromSupabase(r.id);
+      safeDeleteTestRun(r.id);
+      safeDeleteArchivedRun(r.id);
     });
 
     // Also delete matching tester profile(s) from testers list & Supabase
@@ -1420,7 +1467,7 @@ export function App() {
         // If no steps and no bugs remain, delete the archived run completely
         if (remainingKeys === 0 && updatedBugs.length === 0) {
           resetRunIds.add(run.id);
-          deleteArchivedRunFromSupabase(run.id);
+          safeDeleteArchivedRun(run.id);
         } else if (modified) {
           const updated: TestRun = {
             ...run,
@@ -2219,6 +2266,27 @@ export function App() {
         <div className="liquid-orb liquid-orb-2"></div>
         <div className="liquid-orb liquid-orb-3"></div>
       </div>
+
+      {/* Slim Global Header & Data Management Menu */}
+      {currentView !== 'mobile' && (
+        <Navbar
+          currentView={currentView}
+          onNavigate={setCurrentView}
+          onExportBackup={() =>
+            exportAllQADataToJSON(testPlans, testRuns, bugLogs, {
+              archivedRuns,
+              devices,
+              testers,
+              populatedFeatures: populatedFeatures.filter(
+                f => typeof f === 'string' && f.trim() !== '' && !f.startsWith('__')
+              ),
+              populatedDevices,
+            })
+          }
+          onImportBackup={handleImportJSONData}
+          onClearAllData={handleClearAllData}
+        />
+      )}
 
       {/* Main View Router - keep Dashboard mounted so active tabs, filters, and modals never reset */}
       <main className="flex-1 relative z-10">

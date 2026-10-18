@@ -2,6 +2,7 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, BundleSuggestion, BundleSuggestionSet } from '../types';
 
 const deletedTestRunIdsMemory = new Set<string>();
+const deletedArchivedRunIdsMemory = new Set<string>();
 
 export const getDeletedTestRunIds = (): Set<string> => {
   const result = new Set<string>(deletedTestRunIdsMemory);
@@ -21,10 +22,34 @@ export const getDeletedTestRunIds = (): Set<string> => {
   return result;
 };
 
+export const getDeletedArchivedRunIds = (): Set<string> => {
+  const result = new Set<string>(deletedArchivedRunIdsMemory);
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const raw = localStorage.getItem('qa_deleted_archived_run_ids');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          parsed.forEach(id => {
+            if (typeof id === 'string') result.add(id);
+          });
+        }
+      }
+    }
+  } catch (e) {}
+  return result;
+};
+
 export const isTestRunDeleted = (runId?: string | null): boolean => {
   if (!runId) return false;
   if (deletedTestRunIdsMemory.has(runId)) return true;
   return getDeletedTestRunIds().has(runId);
+};
+
+export const isArchivedRunDeleted = (runId?: string | null): boolean => {
+  if (!runId) return false;
+  if (deletedArchivedRunIdsMemory.has(runId)) return true;
+  return getDeletedArchivedRunIds().has(runId);
 };
 
 export const markTestRunDeleted = (runId: string) => {
@@ -39,6 +64,18 @@ export const markTestRunDeleted = (runId: string) => {
   } catch (e) {}
 };
 
+export const markArchivedRunDeleted = (runId: string) => {
+  if (!runId) return;
+  deletedArchivedRunIdsMemory.add(runId);
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const current = Array.from(getDeletedArchivedRunIds());
+      const trimmed = current.slice(-500);
+      localStorage.setItem('qa_deleted_archived_run_ids', JSON.stringify(trimmed));
+    }
+  } catch (e) {}
+};
+
 export const unmarkTestRunDeleted = (runId: string) => {
   if (!runId) return;
   deletedTestRunIdsMemory.delete(runId);
@@ -47,6 +84,18 @@ export const unmarkTestRunDeleted = (runId: string) => {
       const current = getDeletedTestRunIds();
       current.delete(runId);
       localStorage.setItem('qa_deleted_test_run_ids', JSON.stringify(Array.from(current)));
+    }
+  } catch (e) {}
+};
+
+export const unmarkArchivedRunDeleted = (runId: string) => {
+  if (!runId) return;
+  deletedArchivedRunIdsMemory.delete(runId);
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const current = getDeletedArchivedRunIds();
+      current.delete(runId);
+      localStorage.setItem('qa_deleted_archived_run_ids', JSON.stringify(Array.from(current)));
     }
   } catch (e) {}
 };
@@ -158,9 +207,10 @@ export const fetchAllSupabaseData = async () => {
     });
 
     const knownDeviceIds = new Set(devices.map(d => d.id).filter(Boolean));
+    const deletedArchivedIds = getDeletedArchivedRunIds();
 
     const archivedRuns: TestRun[] = (archivedRes.data || [])
-      .filter((item: any) => item && typeof item.id === 'string')
+      .filter((item: any) => item && typeof item.id === 'string' && !deletedArchivedIds.has(item.id))
       .map((item: any) => {
         const devIdFromId = extractDeviceIdFromRunId(item.id, knownDeviceIds);
         return {
@@ -431,7 +481,10 @@ export const deleteTestRunFromSupabase = async (runId: string) => {
 };
 
 export const deleteArchivedRunFromSupabase = async (runId: string) => {
-  if (runId) unmarkTestRunDeleted(runId);
+  if (runId) {
+    markTestRunDeleted(runId);
+    markArchivedRunDeleted(runId);
+  }
   if (!supabase || !isSupabaseConfigured) return;
   const { error } = await supabase.from('archived_runs').delete().eq('id', runId);
   if (error) {
