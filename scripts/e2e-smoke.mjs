@@ -75,7 +75,15 @@ async function runE2ESmoke() {
     });
 
     // 1. Seed deterministic offline state (device in pool with 0 active quotas so Start-of-day Activate works)
-    await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await page.goto(baseUrl, { waitUntil: 'networkidle0', timeout: 60000 });
+        break;
+      } catch (err) {
+        if (attempt === 2) throw err;
+        await new Promise(r => setTimeout(r, 500));
+      }
+    }
     await page.waitForSelector('#root', { timeout: 60000 });
     await page.evaluate(() => {
       localStorage.clear();
@@ -317,8 +325,39 @@ async function runE2ESmoke() {
       'Buganizer tab must render the logged bug'
     );
 
+    // 8. Verify M4 Undo Delete toast (delete plan -> hidden + toast -> Undo -> restored in place)
+    await clickCardByTitle(page, 'Test Plans');
+    await page.evaluate(() => {
+      const delBtn = document.querySelector('button[title="Delete Test Plan"]');
+      if (!delBtn) throw new Error('Delete Test Plan button not found');
+      delBtn.click();
+    });
+    await new Promise(r => setTimeout(r, 200));
+
+    const toastText = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="undo-toast"]');
+      return el ? el.textContent : '';
+    });
+    assert.ok(
+      toastText && toastText.includes('Deleted') && toastText.includes('E2E Core Plan') && toastText.includes('Undo'),
+      `Expected Undo toast for E2E Core Plan, got: ${toastText}`
+    );
+
+    await page.evaluate(() => {
+      const undoBtn = document.querySelector('[data-testid="undo-toast-button"]');
+      if (!undoBtn) throw new Error('Undo button not found on toast');
+      undoBtn.click();
+    });
+    await new Promise(r => setTimeout(r, 200));
+
+    const afterUndoText = await page.evaluate(() => document.body.innerText);
+    assert.ok(
+      afterUndoText.includes('E2E Core Plan'),
+      'Clicking Undo must restore E2E Core Plan in place'
+    );
+
     assert.equal(consoleErrors.length, 0, `Expected 0 console errors, got: ${consoleErrors.join('; ')}`);
-    console.log('E2E SMOKE TEST PASSED (all tabs, device activation, mobile run completion, quota 1/2, tester idle, Bugs Feed & Buganizer verified, 0 console errors)!');
+    console.log('E2E SMOKE TEST PASSED (all tabs, device activation, mobile run completion, quota 1/2, tester idle, Bugs Feed & Buganizer, Undo delete verified, 0 console errors)!');
   } finally {
     if (browser) await browser.close();
     viteProc.kill('SIGTERM');

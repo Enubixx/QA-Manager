@@ -177,17 +177,7 @@ export const TestPlansTab: React.FC<TestPlansTabProps> = ({
                         <Copy className="w-3.5 h-3.5" />
                       </button>
                       <button
-                        onClick={() => {
-                          // Mirrors App.handleDeletePlan: removes this plan's active (non-archived) runs; bugs and completed runs are kept.
-                          const runsInProgress = testRuns.filter(r => r.planId === plan.id).length;
-                          const runsNote =
-                            runsInProgress > 0
-                              ? ` This also removes ${runsInProgress} run${runsInProgress === 1 ? '' : 's'} in progress.`
-                              : '';
-                          if (confirm(`Delete "${plan.name}"?${runsNote} Completed runs and bugs are kept.`)) {
-                            onDeletePlan(plan.id);
-                          }
-                        }}
+                        onClick={() => onDeletePlan(plan.id)}
                         className="p-2 text-slate-500 hover:text-rose-400 liquid-glass-button hover:bg-rose-500/10 rounded-xl transition-all"
                         title="Delete Test Plan"
                       >

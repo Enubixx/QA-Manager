@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ShieldCheck, WifiOff, RefreshCw, Download, MoreHorizontal, FileJson, Upload, Trash2, AlertTriangle, X } from 'lucide-react';
+import { ShieldCheck, WifiOff, RefreshCw, Download, MoreHorizontal, FileJson, Upload, Trash2, AlertTriangle, X, RotateCcw } from 'lucide-react';
 import { onQueueCountChange } from '../services/offlineSyncQueue';
 import { APK_DOWNLOAD_URL, APP_VERSION_NAME } from '../constants';
+import { RecentlyDeletedEntry } from '../utils/undoDeleteStore';
 
 interface NavbarProps {
   currentView: 'dashboard' | 'mobile' | 'plan-builder';
@@ -10,6 +11,9 @@ interface NavbarProps {
   onExportBackup?: () => void;
   onImportBackup?: (data: any) => void;
   onClearAllData?: () => void;
+  recentlyDeletedItems?: RecentlyDeletedEntry[];
+  onRestoreDeletedItem?: (entryId: string) => void;
+  onOpenRecentlyDeleted?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -17,11 +21,15 @@ export const Navbar: React.FC<NavbarProps> = ({
   onExportBackup,
   onImportBackup,
   onClearAllData,
+  recentlyDeletedItems = [],
+  onRestoreDeletedItem,
+  onOpenRecentlyDeleted,
 }) => {
   const [pendingCount, setPendingCount] = useState(0);
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [menuOpen, setMenuOpen] = useState(false);
   const [clearModalOpen, setClearModalOpen] = useState(false);
+  const [recentlyDeletedOpen, setRecentlyDeletedOpen] = useState(false);
   const [clearConfirmText, setClearConfirmText] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -181,6 +189,31 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <span>Import backup (JSON)</span>
                     </button>
                   )}
+                  {onRestoreDeletedItem && (
+                    <button
+                      type="button"
+                      data-testid="data-menu-recently-deleted"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        onOpenRecentlyDeleted?.();
+                        setRecentlyDeletedOpen(true);
+                      }}
+                      className="w-full px-3 py-2 text-left text-slate-200 hover:bg-[#13203a] hover:text-white flex items-center justify-between gap-2 transition cursor-pointer"
+                    >
+                      <span className="flex items-center gap-2">
+                        <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Recently deleted</span>
+                      </span>
+                      {recentlyDeletedItems.length > 0 && (
+                        <span
+                          data-testid="recently-deleted-count"
+                          className="px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300 font-mono text-[10px] border border-slate-700"
+                        >
+                          {recentlyDeletedItems.length}
+                        </span>
+                      )}
+                    </button>
+                  )}
                   {onClearAllData && (
                     <>
                       <div className="my-1 border-t border-slate-800" />
@@ -286,6 +319,120 @@ export const Navbar: React.FC<NavbarProps> = ({
                 className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white border border-rose-500 cursor-pointer"
               >
                 Clear all data
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Recently Deleted Modal (7-day local retention) */}
+      {recentlyDeletedOpen && (
+        <div
+          data-testid="recently-deleted-modal"
+          onClick={() => setRecentlyDeletedOpen(false)}
+          onKeyDown={e => {
+            if (e.key === 'Escape') setRecentlyDeletedOpen(false);
+          }}
+          tabIndex={-1}
+          className="fixed inset-0 z-[99999] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="bg-[#111827] border border-slate-700 rounded-2xl max-w-lg w-full p-5 space-y-4 shadow-2xl max-h-[80vh] flex flex-col"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400">
+                  <RotateCcw className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Recently Deleted</h3>
+                  <p className="text-[11px] text-slate-400">
+                    Items deleted in this browser in the last 7 days
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                data-testid="recently-deleted-close"
+                onClick={() => setRecentlyDeletedOpen(false)}
+                className="p-1 text-slate-400 hover:text-white rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-2 min-h-[120px] pr-1">
+              {recentlyDeletedItems.length === 0 ? (
+                <div
+                  data-testid="recently-deleted-empty"
+                  className="bg-[#0b0f19] border border-slate-800 rounded-xl p-6 text-center text-xs text-slate-400"
+                >
+                  No recently deleted items in the last 7 days.
+                </div>
+              ) : (
+                recentlyDeletedItems.map(item => {
+                  const typeLabel =
+                    item.type === 'plan'
+                      ? 'Test Plan'
+                      : item.type === 'run'
+                      ? 'Test Run'
+                      : item.type === 'bug'
+                      ? 'Bug'
+                      : item.type === 'device'
+                      ? 'Device'
+                      : 'Tester';
+                  const deletedDate = new Date(item.deletedAt);
+                  const deletedTimeStr = !isNaN(deletedDate.getTime())
+                    ? deletedDate.toLocaleString([], {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: 'numeric',
+                        minute: '2-digit',
+                      })
+                    : item.deletedAt;
+                  return (
+                    <div
+                      key={item.id}
+                      data-testid="recently-deleted-row"
+                      data-deleted-id={item.id}
+                      data-deleted-type={item.type}
+                      className="bg-[#0b0f19] border border-slate-800 rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-3 text-xs"
+                    >
+                      <div className="min-w-0 flex-1 space-y-0.5">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 font-mono text-[10px] font-semibold uppercase shrink-0">
+                            {typeLabel}
+                          </span>
+                          <span className="font-semibold text-slate-100 truncate" title={item.label}>
+                            {item.label}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-500 font-mono">
+                          Deleted {deletedTimeStr}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        data-testid="recently-deleted-restore"
+                        onClick={() => onRestoreDeletedItem?.(item.id)}
+                        className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs border border-blue-500 transition cursor-pointer shrink-0"
+                      >
+                        Restore
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="flex items-center justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => setRecentlyDeletedOpen(false)}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 cursor-pointer"
+              >
+                Close
               </button>
             </div>
           </div>

@@ -223,9 +223,7 @@ export const PoolRosterDrawer: React.FC<PoolRosterDrawerProps> = ({
                 type="button"
                 onClick={e => {
                   e.stopPropagation();
-                  if (confirm(`Delete device "${dev.name}"?`)) {
-                    if (onDeleteDevice) onDeleteDevice(dev.id);
-                  }
+                  if (onDeleteDevice) onDeleteDevice(dev.id);
                 }}
                 className="text-slate-500 hover:text-rose-400 ml-0.5 cursor-pointer"
                 title={`Delete ${dev.name}`}
@@ -323,22 +321,15 @@ export const PoolRosterDrawer: React.FC<PoolRosterDrawerProps> = ({
                   type="button"
                   onClick={e => {
                     e.stopPropagation();
-                    if (
-                      confirm(
-                        `Delete tester "${t.name}" and all associated performance data?`
-                      )
-                    ) {
-                      if (t.id && onDeleteTesterProfile) {
-                        onDeleteTesterProfile(t.id);
-                      }
-                      if (onDeleteTester) {
-                        onDeleteTester(t.name);
-                      } else if (onDeleteTestRun) {
-                        const runsToDelete = [...testRuns, ...archivedRuns].filter(
-                          r => r.testerName === t.name
-                        );
-                        runsToDelete.forEach(r => onDeleteTestRun(r.id));
-                      }
+                    if (onDeleteTester) {
+                      onDeleteTester(t.name);
+                    } else if (t.id && onDeleteTesterProfile) {
+                      onDeleteTesterProfile(t.id);
+                    } else if (onDeleteTestRun) {
+                      const runsToDelete = [...testRuns, ...archivedRuns].filter(
+                        r => r.testerName === t.name
+                      );
+                      runsToDelete.forEach(r => onDeleteTestRun(r.id));
                     }
                   }}
                   className="text-slate-500 hover:text-rose-400 ml-0.5 cursor-pointer"
@@ -640,10 +631,8 @@ export const InspectorSlideOver: React.FC<InspectorSlideOverProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        if (confirm(`Delete device "${dev.name}"?`)) {
-                          if (onDeleteDevice) onDeleteDevice(dev.id);
-                          setInspectorTarget(null);
-                        }
+                        if (onDeleteDevice) onDeleteDevice(dev.id);
+                        setInspectorTarget(null);
                       }}
                       className="p-1.5 rounded-lg border border-slate-800 text-slate-400 hover:text-rose-400 hover:border-rose-500/40 transition cursor-pointer"
                       title={`Delete ${dev.name}`}
@@ -887,15 +876,7 @@ export const InspectorSlideOver: React.FC<InspectorSlideOverProps> = ({
                         {onDeleteTestRun && (
                           <button
                             type="button"
-                            onClick={() => {
-                              if (
-                                confirm(
-                                  `Delete run record for "${runItem.planName}"?`
-                                )
-                              ) {
-                                onDeleteTestRun(runItem.runId);
-                              }
-                            }}
+                            onClick={() => onDeleteTestRun(runItem.runId)}
                             className="p-0.5 text-slate-500 hover:text-rose-400 rounded transition-colors cursor-pointer ml-1"
                             title="Delete run"
                           >
@@ -994,25 +975,18 @@ export const InspectorSlideOver: React.FC<InspectorSlideOverProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        if (
-                          confirm(
-                            `Delete tester "${inspectedTester.name}" and all associated performance data?`
-                          )
-                        ) {
-                          if (inspectedTester.id && onDeleteTesterProfile) {
-                            onDeleteTesterProfile(inspectedTester.id);
-                          }
-                          if (onDeleteTester) {
-                            onDeleteTester(inspectedTester.name);
-                          } else if (onDeleteTestRun) {
-                            const runsToDelete = [...testRuns, ...archivedRuns].filter(
-                              r => r.testerName === inspectedTester.name
-                            );
-                            runsToDelete.forEach(r => onDeleteTestRun(r.id));
-                          }
-                          setInspectorTarget(null);
-                          setSelectedInspectorTester('');
+                        if (onDeleteTester) {
+                          onDeleteTester(inspectedTester.name);
+                        } else if (inspectedTester.id && onDeleteTesterProfile) {
+                          onDeleteTesterProfile(inspectedTester.id);
+                        } else if (onDeleteTestRun) {
+                          const runsToDelete = [...testRuns, ...archivedRuns].filter(
+                            r => r.testerName === inspectedTester.name
+                          );
+                          runsToDelete.forEach(r => onDeleteTestRun(r.id));
                         }
+                        setInspectorTarget(null);
+                        setSelectedInspectorTester('');
                       }}
                       className="p-1.5 rounded-lg border border-slate-800 text-slate-400 hover:text-rose-400 hover:border-rose-500/40 transition cursor-pointer"
                       title={`Delete ${inspectedTester.name}`}
@@ -1156,15 +1130,7 @@ export const InspectorSlideOver: React.FC<InspectorSlideOverProps> = ({
                         {onDeleteTestRun && (
                           <button
                             type="button"
-                            onClick={() => {
-                              if (
-                                confirm(
-                                  `Delete run record for "${runItem.planName}"?`
-                                )
-                              ) {
-                                onDeleteTestRun(runItem.runId);
-                              }
-                            }}
+                            onClick={() => onDeleteTestRun(runItem.runId)}
                             className="p-0.5 text-slate-500 hover:text-rose-400 rounded transition-colors cursor-pointer ml-1"
                             title="Delete run"
                           >

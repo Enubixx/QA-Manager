@@ -49,6 +49,18 @@ import {
   markRunAutoReleased,
   autoReleaseStuckSessions,
 } from './utils/runUtils';
+import {
+  createPendingDeleteQueue,
+  loadRecentlyDeleted,
+  saveRecentlyDeletedEntry,
+  removeRecentlyDeletedEntry,
+  applySnapshotRestore,
+  clearSnapshotTombstones,
+  type PendingDeleteEntry,
+  type RecentlyDeletedEntry,
+  type DeleteSnapshotPayload,
+  type DeleteDeviceDelta,
+} from './utils/undoDeleteStore';
 import { mergeRunsById } from './utils/cujReportUtils';
 import {
   drainOfflineQueue,
@@ -407,6 +419,12 @@ export function App() {
   const populatedFeaturesRef = useRef(populatedFeatures);
   useEffect(() => { populatedFeaturesRef.current = populatedFeatures; }, [populatedFeatures]);
 
+  const populatedDevicesRef = useRef(populatedDevices);
+  useEffect(() => { populatedDevicesRef.current = populatedDevices; }, [populatedDevices]);
+
+  const selectedPlanIdRef = useRef(selectedPlanId);
+  useEffect(() => { selectedPlanIdRef.current = selectedPlanId; }, [selectedPlanId]);
+
   const [lastBootSignal, setLastBootSignal] = useState<BootSignal | null>(null);
 
   const devicesRef = useRef(devices);
@@ -422,6 +440,203 @@ export function App() {
   const lastUserMutationRef = useRef<number>(0);
   const markUserMutation = () => {
     lastUserMutationRef.current = Date.now();
+  };
+
+  // M4: 10s Pending Undo Queue & 7-day Recently Deleted Store
+  const [pendingDeletes, setPendingDeletes] = useState<PendingDeleteEntry[]>([]);
+  const pendingDeletesRef = useRef<PendingDeleteEntry[]>([]);
+  const [recentlyDeleted, setRecentlyDeleted] = useState<RecentlyDeletedEntry[]>(() =>
+    loadRecentlyDeleted()
+  );
+
+  const applyRestoredSnapshotToState = (snapshot: DeleteSnapshotPayload) => {
+    const restored = applySnapshotRestore(
+      {
+        testPlans: testPlansRef.current,
+        testRuns: testRunsRef.current,
+        archivedRuns: archivedRunsRef.current,
+        bugLogs: bugLogsRef.current,
+        devices: devicesRef.current,
+        testers: testersRef.current,
+        populatedDevices: populatedDevicesRef.current,
+        selectedPlanId: selectedPlanIdRef.current,
+      },
+      snapshot
+    );
+
+    testPlansRef.current = restored.testPlans;
+    setTestPlans(restored.testPlans);
+    safeSetStorageItem('qa_test_plans', JSON.stringify(restored.testPlans));
+
+    testRunsRef.current = restored.testRuns;
+    setTestRuns(restored.testRuns);
+    safeSetStorageItem('qa_test_runs', JSON.stringify(restored.testRuns));
+
+    archivedRunsRef.current = restored.archivedRuns;
+    setArchivedRuns(restored.archivedRuns);
+    safeSetStorageItem('qa_archived_runs', JSON.stringify(restored.archivedRuns));
+
+    bugLogsRef.current = restored.bugLogs;
+    setBugLogs(restored.bugLogs);
+    safeSetStorageItem(
+      'qa_bug_logs',
+      JSON.stringify(restored.bugLogs),
+      () =>
+        JSON.stringify(
+          restored.bugLogs.map((b, idx) =>
+            idx >= 5 && b?.imageUrl?.startsWith('data:') ? { ...b, imageUrl: undefined } : b
+          )
+        )
+    );
+
+    devicesRef.current = restored.devices;
+    setDevices(restored.devices);
+    safeSetStorageItem('qa_devices_list', JSON.stringify(restored.devices));
+
+    testersRef.current = restored.testers;
+    setTesters(restored.testers);
+    safeSetStorageItem('qa_testers_list', JSON.stringify(restored.testers));
+
+    populatedDevicesRef.current = restored.populatedDevices;
+    setPopulatedDevices(restored.populatedDevices);
+    safeSetStorageItem('qa_populated_devices', JSON.stringify(restored.populatedDevices));
+
+    if (restored.selectedPlanId !== undefined && restored.selectedPlanId !== selectedPlanIdRef.current) {
+      selectedPlanIdRef.current = restored.selectedPlanId;
+      setSelectedPlanId(restored.selectedPlanId);
+      safeSetStorageItem('qa_selected_plan_id', restored.selectedPlanId);
+    }
+
+    return restored;
+  };
+
+  const commitPendingDeleteRef = useRef<(entry: PendingDeleteEntry) => void>(() => {});
+  commitPendingDeleteRef.current = (entry: PendingDeleteEntry) => {
+    const { snapshot } = entry;
+
+    (snapshot.plans || []).forEach(p => {
+      deleteTestPlanFromSupabase(p.id);
+    });
+
+    (snapshot.testRuns || []).forEach(r => {
+      safeDeleteTestRun(r.id);
+      markTestRunDeleted(r.id);
+    });
+
+    (snapshot.archivedRuns || []).forEach(r => {
+      safeDeleteArchivedRun(r.id);
+      markTestRunDeleted(r.id);
+    });
+
+    (snapshot.modifiedTestRuns || []).forEach(orig => {
+      const current = testRunsRef.current.find(r => r.id === orig.id);
+      if (current) safeSyncTestRun(current);
+    });
+
+    (snapshot.modifiedArchivedRuns || []).forEach(orig => {
+      const current = archivedRunsRef.current.find(r => r.id === orig.id);
+      if (current) safeSyncArchivedRun(current);
+    });
+
+    (snapshot.bugs || []).forEach(b => {
+      deleteBugLogFromSupabase(b.id);
+    });
+
+    (snapshot.modifiedBugs || []).forEach(orig => {
+      const current = bugLogsRef.current.find(b => b.id === orig.id);
+      if (current) {
+        safePatchBugColumns(current, ['bundle']);
+      }
+    });
+
+    if (snapshot.devices && snapshot.devices.length > 0) {
+      snapshot.devices.forEach(d => deleteDeviceFromSupabase(d.id));
+      syncDevicesListToCloud(devicesRef.current);
+    }
+
+    if (snapshot.deviceDeltas && snapshot.deviceDeltas.length > 0) {
+      snapshot.deviceDeltas.forEach(delta => {
+        const currentDev = devicesRef.current.find(d => d.id === delta.deviceId);
+        if (currentDev) syncDeviceToSupabase(currentDev);
+      });
+      syncDevicesListToCloud(devicesRef.current);
+    }
+
+    if (snapshot.testers && snapshot.testers.length > 0) {
+      snapshot.testers.forEach(t => deleteTesterFromSupabase(t.id));
+      syncTestersListToCloud(testersRef.current);
+    }
+
+    const updatedRecent = saveRecentlyDeletedEntry({
+      id: entry.id,
+      type: entry.type,
+      targetId: entry.targetId,
+      label: entry.label,
+      deletedAt: entry.deletedAt,
+      snapshot: entry.snapshot,
+    });
+    setRecentlyDeleted(updatedRecent);
+  };
+
+  const undoPendingDeleteRef = useRef<(entry: PendingDeleteEntry) => void>(() => {});
+  undoPendingDeleteRef.current = (entry: PendingDeleteEntry) => {
+    markUserMutation();
+    lastDeviceEditTimeRef.current = Date.now();
+    clearSnapshotTombstones(entry.snapshot);
+    (entry.snapshot.inProgressCache || []).forEach(({ key, value }) => {
+      safeSetStorageItem(key, value);
+    });
+    applyRestoredSnapshotToState(entry.snapshot);
+  };
+
+  const pendingDeleteQueueRef = useRef<ReturnType<typeof createPendingDeleteQueue> | null>(null);
+  if (!pendingDeleteQueueRef.current) {
+    pendingDeleteQueueRef.current = createPendingDeleteQueue({
+      onCommit: entry => commitPendingDeleteRef.current(entry),
+      onUndo: entry => undoPendingDeleteRef.current(entry),
+      onChange: entries => {
+        pendingDeletesRef.current = entries;
+        setPendingDeletes(entries);
+      },
+    });
+  }
+
+  const handleRestoreRecentlyDeleted = (entryId: string) => {
+    const currentList = loadRecentlyDeleted();
+    const entry = currentList.find(e => e.id === entryId) || recentlyDeleted.find(e => e.id === entryId);
+    if (!entry) return;
+
+    markUserMutation();
+    lastDeviceEditTimeRef.current = Date.now();
+    clearSnapshotTombstones(entry.snapshot);
+    const restored = applyRestoredSnapshotToState(entry.snapshot);
+
+    const { snapshot } = entry;
+    (snapshot.plans || []).forEach(p => syncTestPlanToSupabase(p));
+    (snapshot.testRuns || []).forEach(r => safeSyncTestRun(r));
+    (snapshot.modifiedTestRuns || []).forEach(r => safeSyncTestRun(r));
+    (snapshot.archivedRuns || []).forEach(r => safeSyncArchivedRun(r));
+    (snapshot.modifiedArchivedRuns || []).forEach(r => safeSyncArchivedRun(r));
+    (snapshot.bugs || []).forEach(b => safeSyncBugLog(b));
+    (snapshot.modifiedBugs || []).forEach(b =>
+      safePatchBugColumns(b, ['bundle'])
+    );
+    if ((snapshot.devices && snapshot.devices.length > 0) || (snapshot.deviceDeltas && snapshot.deviceDeltas.length > 0)) {
+      const affectedIds = new Set([
+        ...(snapshot.devices || []).map(d => d.id),
+        ...(snapshot.deviceDeltas || []).map(d => d.deviceId),
+      ]);
+      restored.devices.forEach(d => {
+        if (affectedIds.has(d.id)) syncDeviceToSupabase(d);
+      });
+      syncDevicesListToCloud(restored.devices);
+    }
+    if (snapshot.testers && snapshot.testers.length > 0) {
+      snapshot.testers.forEach(t => syncTesterToSupabase(t));
+      syncTestersListToCloud(restored.testers);
+    }
+
+    setRecentlyDeleted(removeRecentlyDeletedEntry(entryId));
   };
 
   // Reads the most recent __DAILY_QUOTA_RESET_DATE__ marker recorded in the cloud.
@@ -561,8 +776,33 @@ export function App() {
       return;
     }
     if (cloudData) {
+      // M4: Exclude any entities currently in the 10s pending-delete queue so cloud polls never resurrect them
+      const pendingPlanIds = new Set<string>();
+      const pendingRunIds = new Set<string>();
+      const pendingBugIds = new Set<string>();
+      const pendingDeviceIds = new Set<string>();
+      const pendingTesterIds = new Set<string>();
+      const pendingTesterNames = new Set<string>();
+      pendingDeletesRef.current.forEach(entry => {
+        const s = entry.snapshot;
+        (s.plans || []).forEach(p => pendingPlanIds.add(p.id));
+        (s.testRuns || []).forEach(r => pendingRunIds.add(r.id));
+        (s.archivedRuns || []).forEach(r => pendingRunIds.add(r.id));
+        (s.bugs || []).forEach(b => pendingBugIds.add(b.id));
+        (s.devices || []).forEach(d => pendingDeviceIds.add(d.id));
+        (s.testers || []).forEach(t => {
+          pendingTesterIds.add(t.id);
+          if (t.name) pendingTesterNames.add(t.name.toLowerCase().trim());
+        });
+        if (entry.type === 'tester' && entry.label) {
+          pendingTesterNames.add(entry.label.toLowerCase().trim());
+        }
+      });
+
       if (cloudData.testPlans) {
-        const normalizedPlans = normalizePlans(cloudData.testPlans);
+        const normalizedPlans = normalizePlans(cloudData.testPlans).filter(
+          p => !pendingPlanIds.has(p.id)
+        );
         if (JSON.stringify(normalizedPlans) !== JSON.stringify(testPlansRef.current)) {
           setTestPlans(normalizedPlans);
           if (normalizedPlans.length > 0 && (!selectedPlanId || !normalizedPlans.some(p => p.id === selectedPlanId))) {
@@ -574,7 +814,7 @@ export function App() {
       const validArchivedRuns = filterCloudArchivedRuns(
         normalizeRuns(cloudData.archivedRuns || []),
         isArchivedRunDeleted
-      );
+      ).filter(r => !pendingRunIds.has(r.id) && !pendingPlanIds.has(r.planId));
       if (cloudData.archivedRuns && JSON.stringify(validArchivedRuns) !== JSON.stringify(archivedRunsRef.current)) {
         setArchivedRuns(validArchivedRuns);
       }
@@ -593,22 +833,24 @@ export function App() {
         ...(bugLogsRef.current || []),
         ...normalizeBugs(cloudData.bugLogs || []),
       ];
-      const rawCloudRuns = normalizeRuns(cloudData.testRuns || []).map(cr => {
-        if (cr.status !== 'in_progress') return cr;
-        const localCopy = localRunsById.get(cr.id);
-        if (localCopy && localCopy.status === 'in_progress') {
-          const localLast = getRunLastActivityMs(localCopy, combinedBugsForSweep);
-          const cloudLast = getRunLastActivityMs(cr, combinedBugsForSweep);
-          if (Number.isFinite(localLast) && (!Number.isFinite(cloudLast) || localLast > cloudLast)) {
-            return {
-              ...cr,
-              results: { ...(cr.results || {}), ...(localCopy.results || {}) },
-              bugLogs: localCopy.bugLogs?.length ? localCopy.bugLogs : cr.bugLogs,
-            };
+      const rawCloudRuns = normalizeRuns(cloudData.testRuns || [])
+        .filter(cr => !pendingRunIds.has(cr.id) && !pendingPlanIds.has(cr.planId))
+        .map(cr => {
+          if (cr.status !== 'in_progress') return cr;
+          const localCopy = localRunsById.get(cr.id);
+          if (localCopy && localCopy.status === 'in_progress') {
+            const localLast = getRunLastActivityMs(localCopy, combinedBugsForSweep);
+            const cloudLast = getRunLastActivityMs(cr, combinedBugsForSweep);
+            if (Number.isFinite(localLast) && (!Number.isFinite(cloudLast) || localLast > cloudLast)) {
+              return {
+                ...cr,
+                results: { ...(cr.results || {}), ...(localCopy.results || {}) },
+                bugLogs: localCopy.bugLogs?.length ? localCopy.bugLogs : cr.bugLogs,
+              };
+            }
           }
-        }
-        return cr;
-      });
+          return cr;
+        });
       const cloudSweep = autoReleaseStuckSessions(rawCloudRuns, devicesRef.current, nowMs, AUTO_RELEASE_IDLE_MINUTES, combinedBugsForSweep);
       if (cloudSweep.releasedRuns.length > 0) {
         clearInProgressCacheForReleasedRuns(cloudSweep.releasedRuns);
@@ -625,7 +867,7 @@ export function App() {
         isArchivedRunDeleted,
         safeDeleteTestRun,
         todayStr
-      );
+      ).filter(r => !pendingRunIds.has(r.id) && !pendingPlanIds.has(r.planId));
       if (cloudData.testRuns && JSON.stringify(validTestRuns) !== JSON.stringify(testRunsRef.current)) {
         setTestRuns(validTestRuns);
       }
@@ -641,8 +883,11 @@ export function App() {
         const localWipedAt = localWipedAtStr ? parseInt(localWipedAtStr, 10) : 0;
         const effectiveWipedAt = Math.max(cloudWipedAt, localWipedAt);
 
-        // Filter out any bugs recorded before the wipe timestamp
+        // Filter out any bugs recorded before the wipe timestamp or currently pending delete
         const validCloudBugs = normalizeBugs(cloudData.bugLogs).filter(b => {
+          if (pendingBugIds.has(b.id) || (b.testRunId && pendingRunIds.has(b.testRunId))) {
+            return false;
+          }
           if (effectiveWipedAt > 0) {
             const bTs = b.timestamp ? new Date(b.timestamp).getTime() : 0;
             if (bTs > 0 && bTs <= effectiveWipedAt) return false;
@@ -674,7 +919,9 @@ export function App() {
       }
       if (cloudData.devices && (cloudData.devices.length > 0 || devicesRef.current.length === 0)) {
         const deletedDevIds = getDeletedDeviceIds();
-        const filteredCloudDevices = normalizeDevices(cloudData.devices).filter(cd => !deletedDevIds.has(cd.id));
+        const filteredCloudDevices = normalizeDevices(cloudData.devices).filter(
+          cd => !deletedDevIds.has(cd.id) && !pendingDeviceIds.has(cd.id)
+        );
         const isRecentUserEdit = Date.now() - lastDeviceEditTimeRef.current < 4000;
         const baseDevices = isRecentUserEdit
           ? devicesRef.current
@@ -682,7 +929,9 @@ export function App() {
 
         const currentDevices = checkDailyQuotaReset(baseDevices, cloudData.populatedFeatures);
 
-        const plansForQuota = cloudData.testPlans ? normalizePlans(cloudData.testPlans) : testPlansRef.current;
+        const plansForQuota = cloudData.testPlans
+          ? normalizePlans(cloudData.testPlans).filter(p => !pendingPlanIds.has(p.id))
+          : testPlansRef.current;
 
         const inProgressRuns = validTestRuns.filter(
           r =>
@@ -757,7 +1006,9 @@ export function App() {
       }
       if (cloudData.testers) {
         const deletedTesterIds = getDeletedTesterIds();
-        const filteredCloudTesters = normalizeTesters(cloudData.testers).filter(ct => !deletedTesterIds.has(ct.id));
+        const filteredCloudTesters = normalizeTesters(cloudData.testers).filter(
+          ct => !deletedTesterIds.has(ct.id) && !pendingTesterIds.has(ct.id) && !pendingTesterNames.has(ct.name.toLowerCase().trim())
+        );
         if (JSON.stringify(filteredCloudTesters) !== JSON.stringify(testersRef.current)) {
           setTesters(filteredCloudTesters);
         }
@@ -767,6 +1018,7 @@ export function App() {
 
   useEffect(() => {
     let disposed = false;
+    setRecentlyDeleted(loadRecentlyDeleted());
     runLocalAutoReleaseSweep();
     loadCloudData();
     let debounceTimer: any = null;
@@ -811,10 +1063,14 @@ export function App() {
       runLocalAutoReleaseSweep();
       loadCloudData();
     };
+    const handleBeforeUnload = () => {
+      pendingDeleteQueueRef.current?.flushAll();
+    };
 
     window.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('focus', handleWindowFocus);
     window.addEventListener('online', handleOnline);
+    window.addEventListener('beforeunload', handleBeforeUnload);
 
     const unsubCmds = subscribeToSystemCommands((signal) => {
       if (!disposed) setLastBootSignal(signal);
@@ -838,6 +1094,7 @@ export function App() {
       window.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleWindowFocus);
       window.removeEventListener('online', handleOnline);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, []);
 
@@ -1234,56 +1491,86 @@ export function App() {
     markUserMutation();
     lastDeviceEditTimeRef.current = Date.now();
 
+    const deletedPlan = testPlansRef.current.find(p => p.id === planId);
     const runsToRemove = testRunsRef.current.filter(r => r.planId === planId);
     const removedRunIds = new Set(runsToRemove.map(r => r.id));
-    runsToRemove.forEach(r => safeDeleteTestRun(r.id));
 
-    let nextPlansSnapshot: TestPlan[] = [];
-    setTestPlans(prev => {
-      const filtered = prev.filter(p => p.id !== planId);
-      nextPlansSnapshot = filtered;
-      return filtered;
-    });
-    setTestRuns(prev => prev.filter(r => r.planId !== planId));
-    deleteTestPlanFromSupabase(planId);
-
+    const inProgressCache: { key: string; value: string }[] = [];
     try {
-      localStorage.removeItem(`qa_in_progress_run_${planId}`);
+      const cacheKey = `qa_in_progress_run_${planId}`;
+      const raw = localStorage.getItem(cacheKey);
+      if (raw) {
+        inProgressCache.push({ key: cacheKey, value: raw });
+        localStorage.removeItem(cacheKey);
+      }
     } catch (e) {}
 
-    // Strip deleted planId from device quotas and release any device locked by a run of this plan
-    setDevices(prev => {
-      let changed = false;
-      const next = prev.map(d => {
-        const hadQuota = (d.quotas || []).some(q => q.planId === planId);
-        const hadRunLock = Boolean(d.activeRunId && removedRunIds.has(d.activeRunId));
-        if (hadQuota || hadRunLock) {
-          changed = true;
-          const updatedDev: DeviceProfile = {
-            ...d,
-            quotas: (d.quotas || []).filter(q => q.planId !== planId),
-            activeRunId: hadRunLock ? undefined : d.activeRunId,
-            activeTesterName: hadRunLock ? undefined : d.activeTesterName
-          };
-          syncDeviceToSupabase(updatedDev);
-          return updatedDev;
-        }
-        return d;
-      });
-      if (changed) {
-        safeSetStorageItem('qa_devices_list', JSON.stringify(next));
-        syncDevicesListToCloud(next);
+    const deviceDeltas: DeleteDeviceDelta[] = [];
+    const nextDevices = devicesRef.current.map(d => {
+      const hadQuota = (d.quotas || []).some(q => q.planId === planId);
+      const hadRunLock = Boolean(d.activeRunId && removedRunIds.has(d.activeRunId));
+      if (hadQuota || hadRunLock) {
+        deviceDeltas.push({
+          deviceId: d.id,
+          previousQuotas: d.quotas ? [...d.quotas] : [],
+          activeRunId: d.activeRunId,
+          activeTesterName: d.activeTesterName,
+        });
+        return {
+          ...d,
+          quotas: (d.quotas || []).filter(q => q.planId !== planId),
+          activeRunId: hadRunLock ? undefined : d.activeRunId,
+          activeTesterName: hadRunLock ? undefined : d.activeTesterName,
+        };
       }
-      return next;
+      return d;
     });
-    
-    const remainingPlans = nextPlansSnapshot.length > 0 ? nextPlansSnapshot : testPlansRef.current.filter(p => p.id !== planId);
-    if (currentView === 'mobile' && (selectedPlanId === planId || remainingPlans.length === 0)) {
+
+    const nextPlans = testPlansRef.current.filter(p => p.id !== planId);
+    const nextRuns = testRunsRef.current.filter(r => r.planId !== planId);
+    const prevSelectedPlanId = selectedPlanIdRef.current;
+
+    testPlansRef.current = nextPlans;
+    setTestPlans(nextPlans);
+    safeSetStorageItem('qa_test_plans', JSON.stringify(nextPlans));
+
+    testRunsRef.current = nextRuns;
+    setTestRuns(nextRuns);
+    safeSetStorageItem('qa_test_runs', JSON.stringify(nextRuns));
+
+    if (deviceDeltas.length > 0) {
+      devicesRef.current = nextDevices;
+      setDevices(nextDevices);
+      safeSetStorageItem('qa_devices_list', JSON.stringify(nextDevices));
+    }
+
+    if (currentView === 'mobile' && (prevSelectedPlanId === planId || nextPlans.length === 0)) {
       setCurrentView('dashboard');
     }
 
-    if (selectedPlanId === planId) {
-      setSelectedPlanId(remainingPlans[0]?.id || '');
+    if (prevSelectedPlanId === planId) {
+      const fallbackId = nextPlans[0]?.id || '';
+      selectedPlanIdRef.current = fallbackId;
+      setSelectedPlanId(fallbackId);
+      safeSetStorageItem('qa_selected_plan_id', fallbackId);
+    }
+
+    if (deletedPlan) {
+      pendingDeleteQueueRef.current?.enqueue({
+        type: 'plan',
+        targetId: planId,
+        label: deletedPlan.name || 'Test Plan',
+        snapshot: {
+          plans: [deletedPlan],
+          testRuns: runsToRemove.length > 0 ? runsToRemove : undefined,
+          deviceDeltas: deviceDeltas.length > 0 ? deviceDeltas : undefined,
+          selectedPlanId: prevSelectedPlanId === planId ? planId : undefined,
+          inProgressCache: inProgressCache.length > 0 ? inProgressCache : undefined,
+        },
+      });
+    } else {
+      deleteTestPlanFromSupabase(planId);
+      runsToRemove.forEach(r => safeDeleteTestRun(r.id));
     }
   };
 
@@ -1292,59 +1579,142 @@ export function App() {
   const handleDeleteTestRun = (runId: string, options?: { keepBugs?: boolean }) => {
     markUserMutation();
     lastDeviceEditTimeRef.current = Date.now();
-    const deletedRun = [...testRunsRef.current, ...archivedRunsRef.current].find(r => r.id === runId);
+    const deletedTestRun = testRunsRef.current.find(r => r.id === runId);
+    const deletedArchivedRun = archivedRunsRef.current.find(r => r.id === runId);
+    const deletedRun = deletedTestRun || deletedArchivedRun;
 
-    setTestRuns(prev => prev.filter(r => r.id !== runId));
-    setArchivedRuns(prev => prev.filter(r => r.id !== runId));
+    // Internal superseding path (keepBugs: true) executes immediately without an Undo toast
+    if (options?.keepBugs) {
+      setTestRuns(prev => prev.filter(r => r.id !== runId));
+      setArchivedRuns(prev => prev.filter(r => r.id !== runId));
+      safeDeleteTestRun(runId);
+      safeDeleteArchivedRun(runId);
+      markTestRunDeleted(runId);
+      if (deletedRun?.planId) {
+        try {
+          const raw = localStorage.getItem(`qa_in_progress_run_${deletedRun.planId}`);
+          if (raw && JSON.parse(raw)?.id === runId) {
+            localStorage.removeItem(`qa_in_progress_run_${deletedRun.planId}`);
+          }
+        } catch (e) {}
+      }
+      setDevices(prev => {
+        let changed = false;
+        const next = prev.map(d => {
+          const matchesRunId = d.activeRunId === runId;
+          const matchesTesterAndDev = Boolean(
+            deletedRun &&
+            deletedRun.testerName &&
+            d.activeTesterName &&
+            d.activeTesterName.toLowerCase().trim() === deletedRun.testerName.toLowerCase().trim() &&
+            deletedRun.deviceName &&
+            d.name &&
+            d.name.toLowerCase().trim() === deletedRun.deviceName.toLowerCase().trim()
+          );
+          if (matchesRunId || matchesTesterAndDev) {
+            changed = true;
+            const released = { ...d, activeRunId: undefined, activeTesterName: undefined };
+            syncDeviceToSupabase(released);
+            return released;
+          }
+          return d;
+        });
+        if (changed) {
+          safeSetStorageItem('qa_devices_list', JSON.stringify(next));
+          syncDevicesListToCloud(next);
+        }
+        return next;
+      });
+      return;
+    }
 
-    safeDeleteTestRun(runId);
-    safeDeleteArchivedRun(runId);
-    markTestRunDeleted(runId);
+    const inProgressCache: { key: string; value: string }[] = [];
     if (deletedRun?.planId) {
       try {
-        const raw = localStorage.getItem(`qa_in_progress_run_${deletedRun.planId}`);
+        const cacheKey = `qa_in_progress_run_${deletedRun.planId}`;
+        const raw = localStorage.getItem(cacheKey);
         if (raw && JSON.parse(raw)?.id === runId) {
-          localStorage.removeItem(`qa_in_progress_run_${deletedRun.planId}`);
+          inProgressCache.push({ key: cacheKey, value: raw });
+          localStorage.removeItem(cacheKey);
         }
       } catch (e) {}
     }
 
-    // Cascade delete associated bug logs from state and Supabase (explicit deletes only)
-    if (!options?.keepBugs) {
-      setBugLogs(prev => {
-        const { remaining, toDelete } = filterBugsAfterRunDelete(prev, runId, deletedRun, options);
-        toDelete.forEach(b => deleteBugLogFromSupabase(b.id));
-        return remaining;
-      });
+    const { remaining: remainingBugs, toDelete: deletedBugs } = filterBugsAfterRunDelete(
+      bugLogsRef.current,
+      runId,
+      deletedRun,
+      options
+    );
+
+    const deviceDeltas: DeleteDeviceDelta[] = [];
+    const nextDevices = devicesRef.current.map(d => {
+      const matchesRunId = d.activeRunId === runId;
+      const matchesTesterAndDev = Boolean(
+        deletedRun &&
+        deletedRun.testerName &&
+        d.activeTesterName &&
+        d.activeTesterName.toLowerCase().trim() === deletedRun.testerName.toLowerCase().trim() &&
+        deletedRun.deviceName &&
+        d.name &&
+        d.name.toLowerCase().trim() === deletedRun.deviceName.toLowerCase().trim()
+      );
+      if (matchesRunId || matchesTesterAndDev) {
+        deviceDeltas.push({
+          deviceId: d.id,
+          activeRunId: d.activeRunId,
+          activeTesterName: d.activeTesterName,
+        });
+        return { ...d, activeRunId: undefined, activeTesterName: undefined };
+      }
+      return d;
+    });
+
+    const nextTestRuns = testRunsRef.current.filter(r => r.id !== runId);
+    const nextArchivedRuns = archivedRunsRef.current.filter(r => r.id !== runId);
+
+    testRunsRef.current = nextTestRuns;
+    setTestRuns(nextTestRuns);
+    safeSetStorageItem('qa_test_runs', JSON.stringify(nextTestRuns));
+
+    archivedRunsRef.current = nextArchivedRuns;
+    setArchivedRuns(nextArchivedRuns);
+    safeSetStorageItem('qa_archived_runs', JSON.stringify(nextArchivedRuns));
+
+    bugLogsRef.current = remainingBugs;
+    setBugLogs(remainingBugs);
+    safeSetStorageItem(
+      'qa_bug_logs',
+      JSON.stringify(remainingBugs),
+      () =>
+        JSON.stringify(
+          remainingBugs.map((b, idx) =>
+            idx >= 5 && b?.imageUrl?.startsWith('data:') ? { ...b, imageUrl: undefined } : b
+          )
+        )
+    );
+
+    if (deviceDeltas.length > 0) {
+      devicesRef.current = nextDevices;
+      setDevices(nextDevices);
+      safeSetStorageItem('qa_devices_list', JSON.stringify(nextDevices));
     }
 
-    // Release device if locked by this deleted run
-    setDevices(prev => {
-      let changed = false;
-      const next = prev.map(d => {
-        const matchesRunId = d.activeRunId === runId;
-        const matchesTesterAndDev = Boolean(
-          deletedRun &&
-          deletedRun.testerName &&
-          d.activeTesterName &&
-          d.activeTesterName.toLowerCase().trim() === deletedRun.testerName.toLowerCase().trim() &&
-          deletedRun.deviceName &&
-          d.name &&
-          d.name.toLowerCase().trim() === deletedRun.deviceName.toLowerCase().trim()
-        );
-        if (matchesRunId || matchesTesterAndDev) {
-          changed = true;
-          const released = { ...d, activeRunId: undefined, activeTesterName: undefined };
-          syncDeviceToSupabase(released);
-          return released;
-        }
-        return d;
-      });
-      if (changed) {
-        safeSetStorageItem('qa_devices_list', JSON.stringify(next));
-        syncDevicesListToCloud(next);
-      }
-      return next;
+    const runLabel = deletedRun
+      ? `${deletedRun.planName || 'Test Run'}${deletedRun.testerName ? ` (${deletedRun.testerName})` : ''}`
+      : `Run ${runId}`;
+
+    pendingDeleteQueueRef.current?.enqueue({
+      type: 'run',
+      targetId: runId,
+      label: runLabel,
+      snapshot: {
+        testRuns: deletedTestRun ? [deletedTestRun] : undefined,
+        archivedRuns: deletedArchivedRun ? [deletedArchivedRun] : undefined,
+        bugs: deletedBugs.length > 0 ? deletedBugs : undefined,
+        deviceDeltas: deviceDeltas.length > 0 ? deviceDeltas : undefined,
+        inProgressCache: inProgressCache.length > 0 ? inProgressCache : undefined,
+      },
     });
   };
 
@@ -1529,61 +1899,95 @@ export function App() {
     markUserMutation();
     lastDeviceEditTimeRef.current = Date.now();
     const normTarget = (testerName || '').toLowerCase().trim();
-    const runsToDelete = [...testRunsRef.current, ...archivedRunsRef.current].filter(
+    const deletedTestRuns = testRunsRef.current.filter(
       r => (r.testerName?.trim() || 'Unassigned Tester').toLowerCase() === normTarget
     );
+    const deletedArchivedRuns = archivedRunsRef.current.filter(
+      r => (r.testerName?.trim() || 'Unassigned Tester').toLowerCase() === normTarget
+    );
+    const idsToDelete = new Set([
+      ...deletedTestRuns.map(r => r.id),
+      ...deletedArchivedRuns.map(r => r.id),
+    ]);
 
-    const idsToDelete = new Set(runsToDelete.map(r => r.id));
+    const matchingProfiles = testersRef.current.filter(
+      t => t.name.toLowerCase().trim() === normTarget
+    );
+    const deletedBugs = bugLogsRef.current.filter(
+      b =>
+        (b.testRunId && idsToDelete.has(b.testRunId)) ||
+        (b.testerName && b.testerName.toLowerCase().trim() === normTarget)
+    );
 
-    setTestRuns(prev => prev.filter(r => !idsToDelete.has(r.id)));
-    setArchivedRuns(prev => prev.filter(r => !idsToDelete.has(r.id)));
-
-    runsToDelete.forEach(r => {
-      safeDeleteTestRun(r.id);
-      safeDeleteArchivedRun(r.id);
-    });
-
-    // Also delete matching tester profile(s) from testers list & Supabase
-    setTesters(prev => {
-      const matchingProfiles = prev.filter(t => t.name.toLowerCase().trim() === normTarget);
-      if (matchingProfiles.length === 0) return prev;
-      matchingProfiles.forEach(t => deleteTesterFromSupabase(t.id));
-      const next = prev.filter(t => t.name.toLowerCase().trim() !== normTarget);
-      safeSetStorageItem('qa_testers_list', JSON.stringify(next));
-      syncTestersListToCloud(next);
-      return next;
-    });
-
-    // Also delete bugs belonging to those deleted runs or tester
-    setBugLogs(prev => {
-      const toDelete = prev.filter(
-        b => (b.testRunId && idsToDelete.has(b.testRunId)) || (b.testerName && b.testerName.toLowerCase().trim() === normTarget)
+    const deviceDeltas: DeleteDeviceDelta[] = [];
+    const nextDevices = devicesRef.current.map(d => {
+      const matchesRun = Boolean(d.activeRunId && idsToDelete.has(d.activeRunId));
+      const matchesTester = Boolean(
+        d.activeTesterName && d.activeTesterName.toLowerCase().trim() === normTarget
       );
-      toDelete.forEach(b => deleteBugLogFromSupabase(b.id));
-      return prev.filter(
-        b => !(b.testRunId && idsToDelete.has(b.testRunId)) && !(b.testerName && b.testerName.toLowerCase().trim() === normTarget)
-      );
-    });
-
-    // Release any device locks held by this tester or their runs
-    setDevices(prev => {
-      let changed = false;
-      const next = prev.map(d => {
-        const matchesRun = Boolean(d.activeRunId && idsToDelete.has(d.activeRunId));
-        const matchesTester = Boolean(d.activeTesterName && d.activeTesterName.toLowerCase().trim() === normTarget);
-        if (matchesRun || matchesTester) {
-          changed = true;
-          const released = { ...d, activeRunId: undefined, activeTesterName: undefined };
-          syncDeviceToSupabase(released);
-          return released;
-        }
-        return d;
-      });
-      if (changed) {
-        safeSetStorageItem('qa_devices_list', JSON.stringify(next));
-        syncDevicesListToCloud(next);
+      if (matchesRun || matchesTester) {
+        deviceDeltas.push({
+          deviceId: d.id,
+          activeRunId: d.activeRunId,
+          activeTesterName: d.activeTesterName,
+        });
+        return { ...d, activeRunId: undefined, activeTesterName: undefined };
       }
-      return next;
+      return d;
+    });
+
+    const nextTestRuns = testRunsRef.current.filter(r => !idsToDelete.has(r.id));
+    const nextArchivedRuns = archivedRunsRef.current.filter(r => !idsToDelete.has(r.id));
+    const nextTesters = testersRef.current.filter(t => t.name.toLowerCase().trim() !== normTarget);
+    const nextBugLogs = bugLogsRef.current.filter(
+      b =>
+        !(b.testRunId && idsToDelete.has(b.testRunId)) &&
+        !(b.testerName && b.testerName.toLowerCase().trim() === normTarget)
+    );
+
+    testRunsRef.current = nextTestRuns;
+    setTestRuns(nextTestRuns);
+    safeSetStorageItem('qa_test_runs', JSON.stringify(nextTestRuns));
+
+    archivedRunsRef.current = nextArchivedRuns;
+    setArchivedRuns(nextArchivedRuns);
+    safeSetStorageItem('qa_archived_runs', JSON.stringify(nextArchivedRuns));
+
+    testersRef.current = nextTesters;
+    setTesters(nextTesters);
+    safeSetStorageItem('qa_testers_list', JSON.stringify(nextTesters));
+
+    bugLogsRef.current = nextBugLogs;
+    setBugLogs(nextBugLogs);
+    safeSetStorageItem(
+      'qa_bug_logs',
+      JSON.stringify(nextBugLogs),
+      () =>
+        JSON.stringify(
+          nextBugLogs.map((b, idx) =>
+            idx >= 5 && b?.imageUrl?.startsWith('data:') ? { ...b, imageUrl: undefined } : b
+          )
+        )
+    );
+
+    if (deviceDeltas.length > 0) {
+      devicesRef.current = nextDevices;
+      setDevices(nextDevices);
+      safeSetStorageItem('qa_devices_list', JSON.stringify(nextDevices));
+    }
+
+    const label = (testerName || '').trim() || 'Tester';
+    pendingDeleteQueueRef.current?.enqueue({
+      type: 'tester',
+      targetId: matchingProfiles[0]?.id || normTarget,
+      label,
+      snapshot: {
+        testers: matchingProfiles.length > 0 ? matchingProfiles : undefined,
+        testRuns: deletedTestRuns.length > 0 ? deletedTestRuns : undefined,
+        archivedRuns: deletedArchivedRuns.length > 0 ? deletedArchivedRuns : undefined,
+        bugs: deletedBugs.length > 0 ? deletedBugs : undefined,
+        deviceDeltas: deviceDeltas.length > 0 ? deviceDeltas : undefined,
+      },
     });
   };
 
@@ -1730,48 +2134,124 @@ export function App() {
 
   const handleDeleteBug = (bugId: string) => {
     markUserMutation();
-    const target = bugLogs.find(b => b.id === bugId);
+    const currentBugs = bugLogsRef.current;
+    const target =
+      currentBugs.find(b => b.id === bugId) ||
+      testRunsRef.current.flatMap(r => r.bugLogs || []).find(b => b.id === bugId) ||
+      archivedRunsRef.current.flatMap(r => r.bugLogs || []).find(b => b.id === bugId);
+
+    const modifiedBugs: BugLog[] = [];
+    let survivorBundlePatch = new Map<string, BugLog['bundle']>();
+
     const bundleId = target?.bundle?.id;
     if (bundleId) {
-      const survivors = bugLogs.filter(b => b.id !== bugId && b.bundle?.id === bundleId);
+      const survivors = currentBugs.filter(b => b.id !== bugId && b.bundle?.id === bundleId);
+      survivors.forEach(s => modifiedBugs.push({ ...s }));
       if (survivors.length < 2) {
-        survivors.forEach(s => handlePatchBugLog(s.id, { bundle: undefined }));
+        survivors.forEach(s => survivorBundlePatch.set(s.id, undefined));
       } else {
-        const latest = survivors.reduce((acc, s) => (String(s.bundle!.at) > String(acc.at) ? s.bundle! : acc), survivors[0].bundle!);
-        const rawMemberIds = Array.isArray(latest?.memberIds) ? latest.memberIds : survivors.map(s => s.id);
-        const filteredMemberIds = rawMemberIds.filter(id => id !== bugId && survivors.some(s => s.id === id));
+        const latest = survivors.reduce(
+          (acc, s) => (String(s.bundle!.at) > String(acc.at) ? s.bundle! : acc),
+          survivors[0].bundle!
+        );
+        const rawMemberIds = Array.isArray(latest?.memberIds)
+          ? latest.memberIds
+          : survivors.map(s => s.id);
+        const filteredMemberIds = rawMemberIds.filter(
+          id => id !== bugId && survivors.some(s => s.id === id)
+        );
         const nextBundle = {
           ...latest,
           memberIds: filteredMemberIds.length >= 2 ? filteredMemberIds : survivors.map(s => s.id),
           at: new Date().toISOString(),
         };
-        handlePatchBugLogs(Object.fromEntries(survivors.map(s => [s.id, { bundle: nextBundle }])));
+        survivors.forEach(s => survivorBundlePatch.set(s.id, nextBundle));
       }
     }
-    setBugLogs(prev => {
-      const next = prev.filter(b => b.id !== bugId);
-      safeSetStorageItem(
-        'qa_bug_logs',
-        JSON.stringify(next),
-        () => JSON.stringify(next.map((b, idx) => (idx >= 5 && b?.imageUrl?.startsWith('data:')) ? { ...b, imageUrl: undefined } : b))
+
+    const nextBugLogs = currentBugs
+      .filter(b => b.id !== bugId)
+      .map(b =>
+        survivorBundlePatch.has(b.id)
+          ? { ...b, bundle: survivorBundlePatch.get(b.id) }
+          : b
       );
-      return next;
+
+    bugLogsRef.current = nextBugLogs;
+    setBugLogs(nextBugLogs);
+    safeSetStorageItem(
+      'qa_bug_logs',
+      JSON.stringify(nextBugLogs),
+      () =>
+        JSON.stringify(
+          nextBugLogs.map((b, idx) =>
+            idx >= 5 && b?.imageUrl?.startsWith('data:') ? { ...b, imageUrl: undefined } : b
+          )
+        )
+    );
+
+    const modifiedTestRuns: TestRun[] = [];
+    const nextTestRuns = testRunsRef.current.map(r => {
+      const hasBug = (r.bugLogs || []).some(b => b.id === bugId);
+      const hasPatchedSurvivor = (r.bugLogs || []).some(b => survivorBundlePatch.has(b.id));
+      if (!hasBug && !hasPatchedSurvivor) return r;
+      modifiedTestRuns.push(r);
+      return {
+        ...r,
+        bugLogs: (r.bugLogs || [])
+          .filter(b => b.id !== bugId)
+          .map(b =>
+            survivorBundlePatch.has(b.id)
+              ? { ...b, bundle: survivorBundlePatch.get(b.id) }
+              : b
+          ),
+      };
     });
-    deleteBugLogFromSupabase(bugId);
+    if (modifiedTestRuns.length > 0) {
+      testRunsRef.current = nextTestRuns;
+      setTestRuns(nextTestRuns);
+      safeSetStorageItem('qa_test_runs', JSON.stringify(nextTestRuns));
+    }
 
-    setTestRuns(prev => prev.map(r => {
+    const modifiedArchivedRuns: TestRun[] = [];
+    const nextArchivedRuns = archivedRunsRef.current.map(r => {
       const hasBug = (r.bugLogs || []).some(b => b.id === bugId);
-      const updated = { ...r, bugLogs: (r.bugLogs || []).filter(b => b.id !== bugId) };
-      if (hasBug) safeSyncTestRun(updated);
-      return updated;
-    }));
+      const hasPatchedSurvivor = (r.bugLogs || []).some(b => survivorBundlePatch.has(b.id));
+      if (!hasBug && !hasPatchedSurvivor) return r;
+      modifiedArchivedRuns.push(r);
+      return {
+        ...r,
+        bugLogs: (r.bugLogs || [])
+          .filter(b => b.id !== bugId)
+          .map(b =>
+            survivorBundlePatch.has(b.id)
+              ? { ...b, bundle: survivorBundlePatch.get(b.id) }
+              : b
+          ),
+      };
+    });
+    if (modifiedArchivedRuns.length > 0) {
+      archivedRunsRef.current = nextArchivedRuns;
+      setArchivedRuns(nextArchivedRuns);
+      safeSetStorageItem('qa_archived_runs', JSON.stringify(nextArchivedRuns));
+    }
 
-    setArchivedRuns(prev => prev.map(r => {
-      const hasBug = (r.bugLogs || []).some(b => b.id === bugId);
-      const updated = { ...r, bugLogs: (r.bugLogs || []).filter(b => b.id !== bugId) };
-      if (hasBug) safeSyncArchivedRun(updated);
-      return updated;
-    }));
+    if (target) {
+      const bugLabel = target.stepTitle ? `Bug: ${target.stepTitle}` : 'Bug report';
+      pendingDeleteQueueRef.current?.enqueue({
+        type: 'bug',
+        targetId: bugId,
+        label: bugLabel,
+        snapshot: {
+          bugs: [target],
+          modifiedBugs: modifiedBugs.length > 0 ? modifiedBugs : undefined,
+          modifiedTestRuns: modifiedTestRuns.length > 0 ? modifiedTestRuns : undefined,
+          modifiedArchivedRuns: modifiedArchivedRuns.length > 0 ? modifiedArchivedRuns : undefined,
+        },
+      });
+    } else {
+      deleteBugLogFromSupabase(bugId);
+    }
   };
 
   const handleUpdateBugLog = (updatedBugsInput: BugLog | BugLog[]) => {
@@ -2281,29 +2761,68 @@ export function App() {
     markUserMutation();
     lastDeviceEditTimeRef.current = Date.now();
     const targetDev = devicesRef.current.find(d => d.id === deviceId);
-    deleteDeviceFromSupabase(deviceId);
-    setDevices(prev => {
-      const next = prev.filter(d => d.id !== deviceId);
-      safeSetStorageItem('qa_devices_list', JSON.stringify(next));
-      syncDevicesListToCloud(next);
-      return next;
-    });
+
+    const nextDevices = devicesRef.current.filter(d => d.id !== deviceId);
+    devicesRef.current = nextDevices;
+    setDevices(nextDevices);
+    safeSetStorageItem('qa_devices_list', JSON.stringify(nextDevices));
+
+    let removedPopulated: string[] = [];
     if (targetDev?.name) {
-      setPopulatedDevices(prev => prev.filter(n => n.toLowerCase().trim() !== targetDev.name.toLowerCase().trim()));
+      const normName = targetDev.name.toLowerCase().trim();
+      removedPopulated = populatedDevicesRef.current.filter(
+        n => n.toLowerCase().trim() === normName
+      );
+      if (removedPopulated.length > 0) {
+        const nextPop = populatedDevicesRef.current.filter(
+          n => n.toLowerCase().trim() !== normName
+        );
+        populatedDevicesRef.current = nextPop;
+        setPopulatedDevices(nextPop);
+        safeSetStorageItem('qa_populated_devices', JSON.stringify(nextPop));
+      }
     }
+
     // Terminate any active in-progress runs on this deleted device
-    setTestRuns(prev => prev.map(r => {
+    const modifiedTestRuns: TestRun[] = [];
+    const nextTestRuns = testRunsRef.current.map(r => {
       if (r.status === 'in_progress') {
-        const matchesId = Boolean(r.deviceId && r.deviceId.toLowerCase().trim() === deviceId.toLowerCase().trim());
-        const matchesName = Boolean(targetDev?.name && r.deviceName && r.deviceName.toLowerCase().trim() === targetDev.name.toLowerCase().trim());
+        const matchesId = Boolean(
+          r.deviceId && r.deviceId.toLowerCase().trim() === deviceId.toLowerCase().trim()
+        );
+        const matchesName = Boolean(
+          targetDev?.name &&
+            r.deviceName &&
+            r.deviceName.toLowerCase().trim() === targetDev.name.toLowerCase().trim()
+        );
         if (matchesId || matchesName) {
-          const terminated = { ...r, status: 'terminated' as any };
-          safeSyncTestRun(terminated);
-          return terminated;
+          modifiedTestRuns.push(r);
+          return { ...r, status: 'terminated' as any };
         }
       }
       return r;
-    }));
+    });
+    if (modifiedTestRuns.length > 0) {
+      testRunsRef.current = nextTestRuns;
+      setTestRuns(nextTestRuns);
+      safeSetStorageItem('qa_test_runs', JSON.stringify(nextTestRuns));
+    }
+
+    if (targetDev) {
+      pendingDeleteQueueRef.current?.enqueue({
+        type: 'device',
+        targetId: deviceId,
+        label: targetDev.name || deviceId,
+        snapshot: {
+          devices: [targetDev],
+          populatedDevices: removedPopulated.length > 0 ? removedPopulated : undefined,
+          modifiedTestRuns: modifiedTestRuns.length > 0 ? modifiedTestRuns : undefined,
+        },
+      });
+    } else {
+      deleteDeviceFromSupabase(deviceId);
+      syncDevicesListToCloud(nextDevices);
+    }
   };
 
   const handleSaveTester = (tester: TesterProfile) => {
@@ -2331,33 +2850,21 @@ export function App() {
     markUserMutation();
     lastDeviceEditTimeRef.current = Date.now();
     const target = testersRef.current.find(t => t.id === testerId);
-    deleteTesterFromSupabase(testerId);
-    setTesters(prev => {
-      const next = prev.filter(t => t.id !== testerId);
-      safeSetStorageItem('qa_testers_list', JSON.stringify(next));
-      syncTestersListToCloud(next);
-      return next;
-    });
-    if (target?.name) {
-      const normName = target.name.toLowerCase().trim();
-      setDevices(prev => {
-        let changed = false;
-        const next = prev.map(d => {
-          if (d.activeTesterName && d.activeTesterName.toLowerCase().trim() === normName) {
-            changed = true;
-            const released = { ...d, activeRunId: undefined, activeTesterName: undefined };
-            syncDeviceToSupabase(released);
-            return released;
-          }
-          return d;
-        });
-        if (changed) {
-          safeSetStorageItem('qa_devices_list', JSON.stringify(next));
-          syncDevicesListToCloud(next);
-        }
-        return next;
-      });
+    if (!target) {
+      deleteTesterFromSupabase(testerId);
+      return;
     }
+
+    // If handleDeleteTester already enqueued this tester in the same tick, skip duplicate enqueue
+    const alreadyPending = pendingDeletesRef.current.some(
+      e =>
+        e.type === 'tester' &&
+        (e.targetId === testerId ||
+          e.label.toLowerCase().trim() === target.name.toLowerCase().trim())
+    );
+    if (alreadyPending) return;
+
+    handleDeleteTester(target.name);
   };
 
   const handleOpenMobileView = (planId?: string) => {
@@ -2485,6 +2992,9 @@ export function App() {
           }
           onImportBackup={handleImportJSONData}
           onClearAllData={handleClearAllData}
+          recentlyDeletedItems={recentlyDeleted}
+          onRestoreDeletedItem={handleRestoreRecentlyDeleted}
+          onOpenRecentlyDeleted={() => setRecentlyDeleted(loadRecentlyDeleted())}
         />
       )}
 
@@ -2584,13 +3094,39 @@ export function App() {
         )}
       </main>
 
-      {currentView === 'dashboard' && autoReleaseToast && (
-        <div
-          data-testid="auto-release-toast"
-          className="fixed bottom-4 right-4 z-50 px-3.5 py-2 rounded-xl bg-slate-900/95 border border-slate-700/80 text-slate-200 text-xs font-medium shadow-xl flex items-center gap-2"
-        >
-          <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-          <span>{autoReleaseToast}</span>
+      {(pendingDeletes.length > 0 || (currentView === 'dashboard' && autoReleaseToast)) && (
+        <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 items-end pointer-events-none">
+          {pendingDeletes.map(entry => (
+            <div
+              key={entry.id}
+              data-testid="undo-toast"
+              data-delete-type={entry.type}
+              data-delete-target-id={entry.targetId}
+              className="pointer-events-auto px-4 py-2.5 rounded-xl bg-slate-900/95 border border-slate-700/80 text-slate-200 text-xs font-medium shadow-2xl flex items-center gap-2.5 backdrop-blur-md"
+            >
+              <span className="w-2 h-2 rounded-full bg-rose-400 shrink-0" />
+              <span className="text-slate-200">
+                Deleted <span className="font-semibold text-white">{entry.label}</span> ·
+              </span>
+              <button
+                type="button"
+                data-testid="undo-toast-button"
+                onClick={() => pendingDeleteQueueRef.current?.undo(entry.id)}
+                className="px-2.5 py-1 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-300 hover:text-white font-semibold transition-colors cursor-pointer"
+              >
+                Undo
+              </button>
+            </div>
+          ))}
+          {currentView === 'dashboard' && autoReleaseToast && (
+            <div
+              data-testid="auto-release-toast"
+              className="pointer-events-auto px-3.5 py-2 rounded-xl bg-slate-900/95 border border-slate-700/80 text-slate-200 text-xs font-medium shadow-xl flex items-center gap-2"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+              <span>{autoReleaseToast}</span>
+            </div>
+          )}
         </div>
       )}
 

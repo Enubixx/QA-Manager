@@ -549,14 +549,7 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
                             <button
                               type="button"
                               data-testid="feed-delete-bug"
-                              onClick={() => {
-                                const label =
-                                  (bug.title || '').trim() ||
-                                  (bug.note || '').trim().slice(0, 80) ||
-                                  'this bug';
-                                if (confirm(`Delete bug "${label}"? This can't be undone.`))
-                                  onDeleteBug(bug.id);
-                              }}
+                              onClick={() => onDeleteBug(bug.id)}
                               className="ml-auto px-2 h-7 rounded-xl text-[11px] font-semibold text-slate-400 hover:text-rose-300 hover:bg-rose-950/40"
                               title="Delete Bug Log"
                             >
