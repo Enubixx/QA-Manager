@@ -244,46 +244,54 @@ async function runE2ESmoke() {
     });
     await new Promise(r => setTimeout(r, 300));
 
-    // Open Tester picker modal and select "Alice E2E"
-    await page.evaluate(() => {
-      const btn = Array.from(document.querySelectorAll('button')).find(
-        b => b.textContent?.includes('Choose QA Tester') || b.textContent?.includes('Tap to select tester')
-      );
-      if (!btn) throw new Error('Choose QA Tester trigger not found');
-      btn.click();
-    });
+    // Verify U5 "Start a session" setup screen
+    const setupTitleText = await page.evaluate(
+      () => document.querySelector('[data-testid="mobile-setup-title"]')?.textContent?.trim() || ''
+    );
+    assert.equal(setupTitleText, 'Start a session', 'Mobile setup title must be "Start a session"');
+
+    // Open "1 · You" searchable A-Z dropdown and select "Alice E2E"
+    const testerTrigger = await page.$('[data-testid="mobile-tester-dropdown-trigger"]');
+    assert.ok(testerTrigger, '1 · You dropdown trigger must exist');
+    await testerTrigger.click();
     await new Promise(r => setTimeout(r, 150));
 
     await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const testerBtn = btns.find(b => b.textContent?.includes('Alice E2E'));
-      if (!testerBtn) throw new Error('Alice E2E option not found in tester picker');
-      testerBtn.click();
+      const opt = document.querySelector('[data-testid="mobile-tester-option"][data-tester-name="Alice E2E"]');
+      if (!opt) throw new Error('Alice E2E option not found in 1 · You dropdown');
+      opt.click();
     });
     await new Promise(r => setTimeout(r, 150));
 
-    // Open Device picker modal and select "WP-E2E-01"
+    // Tap "WP-E2E-01" device card in "2 · Device"
     await page.evaluate(() => {
-      const btn = Array.from(document.querySelectorAll('button')).find(
-        b => b.textContent?.includes('Choose Mobile Device') || b.textContent?.includes('WP-E2E-01')
-      );
-      if (!btn) throw new Error('Choose Mobile Device trigger not found');
-      btn.click();
+      const devCard = document.querySelector('[data-testid="mobile-device-card"][data-device-name="WP-E2E-01"]');
+      if (!devCard) throw new Error('WP-E2E-01 card not found in 2 · Device');
+      devCard.click();
     });
     await new Promise(r => setTimeout(r, 150));
 
-    await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const devBtn = btns.find(b => b.textContent?.includes('WP-E2E-01'));
-      devBtn?.click();
-    });
-    await new Promise(r => setTimeout(r, 150));
+    // Verify Start button label "Start on WP-E2E-01 →" and summary line "Alice E2E · E2E Core Plan · run 1 of 2 today"
+    const startBtnLabel = await page.evaluate(
+      () => document.querySelector('[data-testid="mobile-start-btn"]')?.textContent?.trim() || ''
+    );
+    assert.ok(
+      startBtnLabel.includes('Start on WP-E2E-01'),
+      `Expected Start button label "Start on WP-E2E-01 →", got: ${startBtnLabel}`
+    );
+    const setupSummaryText = await page.evaluate(
+      () => document.querySelector('[data-testid="mobile-setup-summary"]')?.textContent?.trim() || ''
+    );
+    assert.ok(
+      setupSummaryText.includes('Alice E2E') &&
+        setupSummaryText.includes('E2E Core Plan') &&
+        setupSummaryText.includes('run 1 of 2 today'),
+      `Expected setup summary "Alice E2E · E2E Core Plan · run 1 of 2 today", got: ${setupSummaryText}`
+    );
 
-    // Click "Start" button on setup form
+    // Click "Start on WP-E2E-01 →" button on setup form
     await page.evaluate(() => {
-      const startBtn = Array.from(document.querySelectorAll('button[type="submit"]')).find(b =>
-        b.textContent?.includes('Start')
-      );
+      const startBtn = document.querySelector('[data-testid="mobile-start-btn"]');
       if (!startBtn) throw new Error('Start button not found on setup modal');
       startBtn.click();
     });

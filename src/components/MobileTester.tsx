@@ -534,14 +534,140 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     return true;
   });
 
-  // Professional Bottom-Sheet Custom Selectors (replaces raw OS debug menus)
+  // Searchable A-Z dropdown state for "1 · You"
   const [openTesterPickerModal, setOpenTesterPickerModal] = useState<boolean>(false);
   const [openDevicePickerModal, setOpenDevicePickerModal] = useState<boolean>(false);
+  const [testerSearchQuery, setTesterSearchQuery] = useState<string>('');
+  const testerDropdownRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!openTesterPickerModal) return;
+    const handleOutside = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      if (testerDropdownRef.current && target && !testerDropdownRef.current.contains(target)) {
+        setOpenTesterPickerModal(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [openTesterPickerModal]);
+
+  // Per-tester status for "1 · You" dropdown: whether live on another device and today's completed run count
+  const testerStatusMap = useMemo(() => {
+    const map = new Map<string, { liveOnDevice?: string; runsToday: number }>();
+    const currentSavedDev = (getStoredDeviceName() || inputDeviceName || '').toLowerCase().trim();
+
+    testers.forEach(t => {
+      const tLower = t.name.toLowerCase().trim();
+      let runsToday = 0;
+      mergedRuns.forEach(run => {
+        if (!run.completedAt || !isRunFullyCompleted(run, testPlans, stepFirstSeen)) return;
+        if (getLocalDateStr(run.completedAt) !== todayStr) return;
+        if ((run.testerName || '').toLowerCase().trim() === tLower) {
+          runsToday += 1;
+        }
+      });
+
+      let liveOnDevice: string | undefined;
+      const liveRun = testRuns.find(
+        r =>
+          r &&
+          r.id &&
+          r.id !== activeRun?.id &&
+          !archivedIdSet.has(r.id) &&
+          !isTestRunDeleted(r.id) &&
+          r.status === 'in_progress' &&
+          getEffectiveRunStatus(r, testPlans) === 'in_progress' &&
+          getAutoReleaseReason(r, Date.now(), undefined, bugLogs) === null &&
+          (!r.startedAt || getLocalDateStr(r.startedAt) === todayStr) &&
+          (r.testerName || '').toLowerCase().trim() === tLower
+      );
+      if (liveRun) {
+        const isThisPhone = Boolean(
+          liveRun.deviceId === deviceId ||
+            (currentSavedDev &&
+              liveRun.deviceName &&
+              liveRun.deviceName.toLowerCase().trim() === currentSavedDev &&
+              liveRun.deviceId === deviceId)
+        );
+        if (!isThisPhone) {
+          liveOnDevice = liveRun.deviceName || liveRun.deviceId || 'another device';
+        }
+      } else {
+        const lockedDev = devices.find(dev => {
+          if (!dev.isReady) return false;
+          if ((dev.activeTesterName || '').toLowerCase().trim() !== tLower) return false;
+          if (dev.activeRunId && dev.activeRunId === activeRun?.id) return false;
+          if (dev.id === deviceId) return false;
+          const knownRun = dev.activeRunId
+            ? [...testRuns, ...archivedRuns].find(r => r && r.id === dev.activeRunId)
+            : undefined;
+          const isStale = Boolean(
+            dev.activeRunId &&
+              (archivedIdSet.has(dev.activeRunId) ||
+                isTestRunDeleted(dev.activeRunId) ||
+                (knownRun &&
+                  (knownRun.status === 'completed' ||
+                    knownRun.status === 'terminated' ||
+                    getEffectiveRunStatus(knownRun, testPlans) === 'completed' ||
+                    (knownRun.startedAt && getLocalDateStr(knownRun.startedAt) !== todayStr))))
+          );
+          return !isStale;
+        });
+        if (lockedDev) {
+          liveOnDevice = lockedDev.name;
+        }
+      }
+
+      map.set(tLower, { liveOnDevice, runsToday });
+    });
+    return map;
+  }, [
+    testers,
+    mergedRuns,
+    testPlans,
+    stepFirstSeen,
+    todayStr,
+    testRuns,
+    archivedRuns,
+    archivedIdSet,
+    activeRun?.id,
+    bugLogs,
+    devices,
+    deviceId,
+    inputDeviceName,
+  ]);
+
+  // Sorted A-Z testers for "1 · You" dropdown
+  const sortedTesters = useMemo(() => {
+    return [...testers].sort((a, b) => a.name.localeCompare(b.name));
+  }, [testers]);
+
+  const filteredTestersForDropdown = useMemo(() => {
+    const q = testerSearchQuery.trim().toLowerCase();
+    if (!q) return sortedTesters;
+    return sortedTesters.filter(t => t.name.toLowerCase().includes(q));
+  }, [sortedTesters, testerSearchQuery]);
 
   // Computed helper for currently selected tester profile
   const selectedTesterProfile = useMemo(() => {
     return testers.find(t => t.name.toLowerCase().trim() === inputReporterName.toLowerCase().trim()) || null;
   }, [testers, inputReporterName]);
+
+  const selectedTesterLiveDevice = useMemo(() => {
+    const k = inputReporterName.toLowerCase().trim();
+    if (!k) return undefined;
+    return testerStatusMap.get(k)?.liveOnDevice;
+  }, [inputReporterName, testerStatusMap]);
+
+  const isTesterSelectable = Boolean(inputReporterName.trim() && !selectedTesterLiveDevice);
+
+  // Ready devices with active quotas for "2 · Device" cards (sorted A-Z)
+  const readyQuotaDevices = useMemo(() => {
+    return devices
+      .filter(d => d.isReady && (d.quotas || []).some(q => q.targetRunsPerDay > 0))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [devices]);
 
   // Computed helper for currently selected device profile
   const selectedDeviceProfile = useMemo(() => {
@@ -883,7 +1009,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   // Save Setup Session Info
   const handleSaveSessionSetup = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputReporterName.trim() || !inputDeviceName.trim() || !activeRun) return;
+    if (!inputReporterName.trim() || !isTesterSelectable || !inputDeviceName.trim() || !activeRun) return;
     if (!selectedDeviceProfile || !isDeviceSelectable) return;
 
     // Resolve target plan with remaining quota on selectedDeviceProfile
@@ -2573,315 +2699,396 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           </div>
         )}
 
-        {/* Pre-Test Session Setup Modal */}
+        {/* Pre-Test Session Setup Screen (U5 · #9 Start a session) */}
         {showSetupModal && !completedRunSummary && (
-          <div className="absolute inset-0 bg-black/95 backdrop-blur-2xl p-6 flex flex-col justify-center z-50 animate-in fade-in duration-200 rounded-[44px]">
-            
-            <form onSubmit={handleSaveSessionSetup} className="space-y-5 max-w-sm mx-auto w-full">
-              
-              <div className="text-center space-y-1.5">
-                <div className="p-3.5 bg-sky-500/15 text-sky-400 rounded-2xl w-fit mx-auto border border-sky-500/30 backdrop-blur-md shadow-lg">
-                  <Smartphone className="w-7 h-7" />
-                </div>
-                <h3 className="text-lg font-bold text-white tracking-tight">Start Field QA Session</h3>
-                <p className="text-xs text-zinc-400 font-medium leading-relaxed">
-                  Select your name and target mobile device to begin testing.
-                </p>
-              </div>
+          <div
+            data-testid="mobile-setup-screen"
+            className="absolute inset-0 bg-[#070b14] p-5 flex flex-col justify-between z-50 animate-in fade-in duration-200 rounded-[44px] overflow-y-auto"
+          >
+            {(() => {
+              // Compute target quota/plan & run k of n for the selected device
+              const activeQuotas = selectedDeviceProfile
+                ? (selectedDeviceProfile.quotas || []).filter(q => q.targetRunsPerDay > 0)
+                : [];
+              const remainingQuotas = selectedDeviceProfile
+                ? activeQuotas.filter(q => {
+                    const done =
+                      (todayRunsMap[selectedDeviceProfile.id] &&
+                        todayRunsMap[selectedDeviceProfile.id][q.planId]) ||
+                      0;
+                    return done < q.targetRunsPerDay;
+                  })
+                : [];
+              const targetQuota =
+                remainingQuotas.find(q => q.planId === currentPlan?.id) ||
+                remainingQuotas[0] ||
+                activeQuotas[0];
+              const targetPlanObj = targetQuota
+                ? testPlans.find(p => p.id === targetQuota.planId) || currentPlan
+                : currentPlan;
+              const doneTodayOnSelectedDev =
+                selectedDeviceProfile && targetQuota
+                  ? (todayRunsMap[selectedDeviceProfile.id] &&
+                      todayRunsMap[selectedDeviceProfile.id][targetQuota.planId]) ||
+                    0
+                  : 0;
+              const runK = doneTodayOnSelectedDev + 1;
+              const totalN = targetQuota?.targetRunsPerDay || 1;
+              const canStart = isTesterSelectable && isDeviceSelectable && Boolean(selectedDeviceProfile);
 
-              <div className="liquid-glass-panel rounded-3xl p-5 space-y-4 border border-zinc-800 shadow-2xl bg-zinc-950/90">
-                
-                {/* QA Tester Custom Trigger */}
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1.5 flex items-center gap-1.5">
-                    <User className="w-3.5 h-3.5 text-sky-400" />
-                    Select QA Tester
-                  </label>
-                  {testers.length > 0 ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        triggerHaptic('light');
-                        setOpenTesterPickerModal(true);
-                      }}
-                      className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left group cursor-pointer active:scale-[0.99] ${
-                        inputReporterName
-                          ? 'bg-zinc-900 border-sky-500/50 shadow-md ring-1 ring-sky-500/25'
-                          : 'bg-zinc-900/70 border-zinc-800 hover:border-zinc-700'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3 truncate">
-                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs shadow flex-shrink-0 ${
-                          inputReporterName
-                            ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
-                            : 'bg-zinc-800 text-zinc-200 border border-zinc-700'
-                        }`}>
-                          {selectedTesterProfile ? selectedTesterProfile.name.charAt(0).toUpperCase() : <User className="w-4 h-4 text-zinc-400" />}
-                        </div>
-                        <div className="truncate">
-                          <div className="text-xs font-bold text-white truncate">
-                            {selectedTesterProfile ? selectedTesterProfile.name : (inputReporterName || 'Choose QA Tester...')}
-                          </div>
-                          <div className="text-[10px] text-zinc-400 truncate">
-                            {selectedTesterProfile?.role || 'Tap to select tester profile'}
-                          </div>
-                        </div>
-                      </div>
-                      <ChevronRight className="w-4 h-4 text-sky-400 group-hover:text-white flex-shrink-0 transition-transform" />
-                    </button>
-                  ) : (
-                    <div className="p-3 bg-amber-500/15 border border-amber-500/30 rounded-2xl text-amber-200 text-xs font-semibold text-center leading-relaxed">
-                      ⚠️ No QA tester profiles created yet. Register tester profiles on the Web Dashboard.
-                    </div>
-                  )}
-                </div>
+              let disabledReason = '';
+              if (!canStart) {
+                if (testers.length === 0) {
+                  disabledReason = 'No testers yet. Ask your manager to add you.';
+                } else if (!inputReporterName.trim()) {
+                  disabledReason = 'Select your name in 1 · You to continue.';
+                } else if (selectedTesterLiveDevice) {
+                  disabledReason = `${inputReporterName.trim()} is live on ${selectedTesterLiveDevice} — pick another tester or finish that run.`;
+                } else if (readyQuotaDevices.length === 0) {
+                  disabledReason = 'No devices are ready. Ask your manager to activate one on Floor.';
+                } else if (selectableDevices.length === 0) {
+                  disabledReason = "All ready devices have hit today's quota or are in use.";
+                } else {
+                  disabledReason = 'Select an available device in 2 · Device to continue.';
+                }
+              }
 
-                {/* Target Device Custom Trigger */}
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1.5 flex items-center gap-1.5">
-                    <Smartphone className="w-3.5 h-3.5 text-sky-400" />
-                    Select Target Device
-                  </label>
-                  {selectableDevices.length > 0 ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        triggerHaptic('light');
-                        setOpenDevicePickerModal(true);
-                      }}
-                      className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left group cursor-pointer active:scale-[0.99] ${
-                        isDeviceSelectable && selectedDeviceProfile
-                          ? 'bg-zinc-900 border-sky-500/50 shadow-md ring-1 ring-sky-500/25'
-                          : 'bg-zinc-900/70 border-zinc-800 hover:border-zinc-700'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3 truncate">
-                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs shadow flex-shrink-0 ${
-                          isDeviceSelectable && selectedDeviceProfile
-                            ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
-                            : 'bg-zinc-800 text-zinc-200 border border-zinc-700'
-                        }`}>
-                          <Smartphone className="w-4 h-4 text-sky-400" />
-                        </div>
-                        <div className="truncate">
-                          <div className="text-xs font-bold text-white truncate">
-                            {isDeviceSelectable && selectedDeviceProfile ? selectedDeviceProfile.name : 'Choose Mobile Device...'}
-                          </div>
-                          <div className="text-[10px] text-sky-300/90 font-mono truncate">
-                            {(() => {
-                              if (!isDeviceSelectable || !selectedDeviceProfile) return 'Tap to select mobile device with remaining quota';
-                              const activeQuotas = (selectedDeviceProfile.quotas || []).filter(q => q.targetRunsPerDay > 0);
-                              if (activeQuotas.length === 0) return 'Tap to select mobile device';
-                              const remainingQuotas = activeQuotas.filter(q => {
-                                const done = (todayRunsMap[selectedDeviceProfile.id] && todayRunsMap[selectedDeviceProfile.id][q.planId]) || 0;
-                                return done < q.targetRunsPerDay;
-                              });
-                              const currentQuota = remainingQuotas.find(q => q.planId === currentPlan?.id) || remainingQuotas[0] || activeQuotas[0];
-                              const planObj = testPlans.find(p => p.id === currentQuota.planId);
-                              const done = (todayRunsMap[selectedDeviceProfile.id] && todayRunsMap[selectedDeviceProfile.id][currentQuota.planId]) || 0;
-                              const rem = Math.max(0, currentQuota.targetRunsPerDay - done);
-                              return `⚡ ${planObj?.name || currentPlan?.name || 'Plan'}: ${rem} run${rem === 1 ? '' : 's'} left today`;
-                            })()}
-                          </div>
-                        </div>
-                      </div>
-                      <ChevronRight className="w-4 h-4 text-sky-400 group-hover:text-white flex-shrink-0 transition-transform" />
-                    </button>
-                  ) : devices.some(d => d.isReady && d.quotas?.some(q => q.targetRunsPerDay > 0)) ? (
-                    <div className="p-3 bg-emerald-500/15 border border-emerald-500/30 rounded-2xl text-emerald-200 text-xs font-semibold text-center leading-relaxed" data-testid="all-devices-quota-met">
-                      All devices have hit today's quota
-                    </div>
-                  ) : (
-                    <div className="p-3 bg-amber-500/15 border border-amber-500/30 rounded-2xl text-amber-200 text-xs font-semibold text-center leading-relaxed">
-                      ⚠️ No ready devices with active daily quotas found. Register devices and set daily plan quotas on the Web Dashboard under Devices & Quotas.
-                    </div>
-                  )}
-                </div>
-
-              </div>
-
-              <GlassesBuildCapture onChange={(glasses, phone) => { buildEnvRef.current = { phone, glasses }; }} />
-
-              <button
-                type="submit"
-                disabled={!inputReporterName.trim() || !isDeviceSelectable}
-                className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-800 disabled:text-zinc-500 disabled:border-zinc-700 disabled:cursor-not-allowed text-white font-bold text-sm rounded-2xl shadow-lg border border-emerald-400/30 flex items-center justify-center gap-2 transition-all active:scale-[0.98] cursor-pointer"
-              >
-                <span>Start</span>
-                <ArrowRight className="w-4 h-4" />
-              </button>
-
-            </form>
-
-          </div>
-        )}
-
-        {/* Custom Tester Picker Modal (Centered) */}
-        {openTesterPickerModal && (
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-xl z-[80] flex items-center justify-center p-4 animate-in fade-in duration-200 rounded-[44px]">
-            <div className="bg-zinc-950 border border-zinc-800 rounded-3xl p-5 space-y-4 w-full max-h-[85%] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200">
-              <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
-                <div>
-                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                    <User className="w-4 h-4 text-sky-400" />
-                    <span>Select QA Tester</span>
-                  </h3>
-                  <p className="text-[11px] text-zinc-400">Choose who is running this QA walkthrough</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setOpenTesterPickerModal(false)}
-                  className="p-1.5 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition cursor-pointer"
+              return (
+                <form
+                  onSubmit={handleSaveSessionSetup}
+                  className="space-y-4 max-w-sm mx-auto w-full my-auto py-1"
                 >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="space-y-2 overflow-y-auto max-h-[350px] pr-1">
-                {testers.map(t => {
-                  const isSelected = t.name.toLowerCase().trim() === inputReporterName.toLowerCase().trim();
-                  return (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() => {
-                        triggerHaptic('light');
-                        setInputReporterName(t.name);
-                        setOpenTesterPickerModal(false);
-                      }}
-                      className={`w-full p-3.5 rounded-2xl text-left border flex items-center justify-between gap-3 transition-all cursor-pointer ${
-                        isSelected
-                          ? 'bg-zinc-900 border-sky-500/60 shadow-md ring-1 ring-sky-500/40 scale-[1.01]'
-                          : 'bg-zinc-950/80 border-zinc-800/80 hover:bg-zinc-900/60 hover:border-zinc-700'
-                      }`}
+                  {/* Header */}
+                  <div className="space-y-1 text-left">
+                    <h3
+                      data-testid="mobile-setup-title"
+                      className="text-lg font-extrabold text-white tracking-tight"
                     >
-                      <div className="flex items-center gap-3 truncate">
-                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm shadow flex-shrink-0 ${
-                          isSelected
-                            ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
-                            : 'bg-zinc-800 text-zinc-200 border border-zinc-700'
-                        }`}>
-                          {t.name.charAt(0).toUpperCase()}
-                        </div>
-                        <div className="truncate">
-                          <div className="text-xs font-bold text-white truncate">{t.name}</div>
-                          <div className={`text-[10px] font-medium truncate ${isSelected ? 'text-sky-400' : 'text-zinc-400'}`}>
-                            {t.role || 'QA Tester'}
-                          </div>
-                        </div>
-                      </div>
-                      {isSelected && (
-                        <div className="w-6 h-6 rounded-full bg-sky-500 text-white flex items-center justify-center flex-shrink-0 shadow">
-                          <Check className="w-3.5 h-3.5" />
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Custom Target Device Picker Modal (Centered) */}
-        {openDevicePickerModal && (
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-xl z-[80] flex items-center justify-center p-4 animate-in fade-in duration-200 rounded-[44px]">
-            <div className="bg-zinc-950 border border-zinc-800 rounded-3xl p-5 space-y-4 w-full max-h-[85%] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200">
-              <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
-                <div>
-                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                    <Smartphone className="w-4 h-4 text-sky-400" />
-                    <span>Select Target Device</span>
-                  </h3>
-                  <p className="text-[11px] text-zinc-400">Devices configured with active daily quotas</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setOpenDevicePickerModal(false)}
-                  className="p-1.5 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="space-y-2 overflow-y-auto max-h-[350px] pr-1">
-                {selectableDevices.length === 0 ? (
-                  <div className="p-4 bg-emerald-500/15 border border-emerald-500/30 rounded-2xl text-emerald-200 text-xs font-semibold text-center leading-relaxed">
-                    {devices.some(d => d.isReady && d.quotas?.some(q => q.targetRunsPerDay > 0))
-                      ? "All devices have hit today's quota"
-                      : 'No ready devices with active daily quotas found.'}
+                      Start a session
+                    </h3>
+                    <p
+                      data-testid="mobile-setup-subtitle"
+                      className="text-xs text-slate-400 font-medium leading-relaxed"
+                    >
+                      Pick who you are and which phone you&rsquo;re holding.
+                    </p>
                   </div>
-                ) : selectableDevices.map(dev => {
-                  const isSelected = dev.name.toLowerCase().trim() === inputDeviceName.toLowerCase().trim() || dev.id === inputDeviceName;
-                  const activeQuotas = (dev.quotas || []).filter(q => q.targetRunsPerDay > 0);
-                  
-                  const quotaDetails = activeQuotas.map(q => {
-                    const planObj = testPlans.find(p => p.id === q.planId);
-                    const done = (todayRunsMap[dev.id] && todayRunsMap[dev.id][q.planId]) || 0;
-                    const rem = Math.max(0, q.targetRunsPerDay - done);
-                    return { name: planObj?.name || 'Plan', rem, planId: q.planId };
-                  });
 
-                  const quotaText = quotaDetails.map(d => `${d.name}: ${d.rem} left`).join(' • ');
+                  {/* 1 · YOU (Searchable A-Z dropdown) */}
+                  <div className="space-y-1.5 text-left" data-testid="mobile-tester-dropdown" ref={testerDropdownRef}>
+                    <label className="block text-[10.5px] font-bold uppercase tracking-wider text-slate-400">
+                      1 · You
+                    </label>
+                    {testers.length > 0 ? (
+                      <div className="relative">
+                        <button
+                          type="button"
+                          data-testid="mobile-tester-dropdown-trigger"
+                          onClick={() => {
+                            triggerHaptic('light');
+                            setOpenTesterPickerModal(v => !v);
+                          }}
+                          className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border transition-all text-left cursor-pointer ${
+                            isTesterSelectable
+                              ? 'bg-[#0f172a] border-blue-500/50 text-white'
+                              : selectedTesterLiveDevice
+                              ? 'bg-[#0f172a] border-amber-500/50 text-amber-200'
+                              : 'bg-[#0f172a] border-slate-800 text-slate-300 hover:border-slate-700'
+                          }`}
+                        >
+                          <span className="text-xs font-semibold truncate">
+                            {selectedTesterProfile
+                              ? selectedTesterProfile.name
+                              : inputReporterName.trim() || 'Choose QA Tester...'}
+                          </span>
+                          <span className="flex items-center gap-2 shrink-0 ml-2">
+                            {selectedTesterLiveDevice && (
+                              <span className="text-[10.5px] font-mono text-amber-300">
+                                live on {selectedTesterLiveDevice}
+                              </span>
+                            )}
+                            <span className="text-xs text-slate-400">▾</span>
+                          </span>
+                        </button>
 
-                  return (
-                    <button
-                      key={dev.id}
-                      type="button"
-                      onClick={() => {
-                        triggerHaptic('light');
-                        const chosenDevName = dev.name;
-                        setInputDeviceName(chosenDevName);
-                        // Check if current plan is supported by this device AND still has remaining quota today
-                        const hasCurrentRemaining = dev.quotas?.some(q => {
-                          if (q.planId !== currentPlan?.id || q.targetRunsPerDay <= 0) return false;
-                          const done = (todayRunsMap[dev.id] && todayRunsMap[dev.id][q.planId]) || 0;
-                          return done < q.targetRunsPerDay;
-                        });
-                        if (!hasCurrentRemaining && dev.quotas && dev.quotas.length > 0) {
-                          // Switch to the first plan this device has an active remaining quota for today
-                          const firstAvailableQuota = dev.quotas.find(q => {
-                            const done = (todayRunsMap[dev.id] && todayRunsMap[dev.id][q.planId]) || 0;
-                            return q.targetRunsPerDay > 0 && done < q.targetRunsPerDay;
-                          }) || dev.quotas.find(q => q.targetRunsPerDay > 0);
-
-                          if (firstAvailableQuota) {
-                            onSelectPlan(firstAvailableQuota.planId);
-                          }
-                        }
-                        setOpenDevicePickerModal(false);
-                      }}
-                      className={`w-full p-3.5 rounded-2xl text-left border flex items-center justify-between gap-3 transition-all cursor-pointer ${
-                        isSelected
-                          ? 'bg-zinc-900 border-sky-500/60 shadow-md ring-1 ring-sky-500/40 scale-[1.01]'
-                          : 'bg-zinc-950/80 border-zinc-800/80 hover:bg-zinc-900/60 hover:border-zinc-700'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3 truncate">
-                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm shadow flex-shrink-0 ${
-                          isSelected
-                            ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
-                            : 'bg-zinc-800 text-zinc-200 border border-zinc-700'
-                        }`}>
-                          <Smartphone className="w-4 h-4 text-sky-400" />
-                        </div>
-                        <div className="truncate">
-                          <div className="text-xs font-bold text-white truncate">{dev.name}</div>
-                          <div className={`text-[10px] font-mono font-medium truncate ${isSelected ? 'text-sky-300' : 'text-zinc-400'}`}>
-                            {quotaText ? `⚡ ${quotaText}` : 'Ready'}
+                        {openTesterPickerModal && (
+                          <div
+                            data-testid="mobile-tester-dropdown-panel"
+                            className="mt-1.5 w-full rounded-xl border border-slate-700 bg-[#0b1120] p-2 shadow-2xl space-y-1.5 z-30"
+                          >
+                            <input
+                              type="text"
+                              data-testid="mobile-tester-search"
+                              value={testerSearchQuery}
+                              onChange={e => setTesterSearchQuery(e.target.value)}
+                              placeholder="Search testers…"
+                              className="w-full bg-[#070b14] border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                            />
+                            <div className="max-h-44 overflow-y-auto space-y-0.5 pr-0.5">
+                              {filteredTestersForDropdown.length === 0 ? (
+                                <div className="px-2.5 py-2 text-[11px] text-slate-500 text-center">
+                                  No matching testers
+                                </div>
+                              ) : (
+                                filteredTestersForDropdown.map(t => {
+                                  const tLower = t.name.toLowerCase().trim();
+                                  const isSelected =
+                                    tLower === inputReporterName.toLowerCase().trim();
+                                  const st = testerStatusMap.get(tLower) || {
+                                    runsToday: 0,
+                                  };
+                                  const isLiveElsewhere = Boolean(st.liveOnDevice);
+                                  return (
+                                    <button
+                                      key={t.id}
+                                      type="button"
+                                      data-testid="mobile-tester-option"
+                                      data-tester-name={t.name}
+                                      disabled={isLiveElsewhere}
+                                      onClick={() => {
+                                        if (isLiveElsewhere) return;
+                                        triggerHaptic('light');
+                                        setInputReporterName(t.name);
+                                        try {
+                                          localStorage.setItem('qa_tester_name', t.name);
+                                          sessionStorage.setItem('qa_tester_name', t.name);
+                                        } catch {}
+                                        setOpenTesterPickerModal(false);
+                                        setTesterSearchQuery('');
+                                      }}
+                                      className={`w-full px-2.5 py-2 rounded-lg text-left flex items-center justify-between gap-2 text-xs transition ${
+                                        isLiveElsewhere
+                                          ? 'opacity-45 cursor-not-allowed text-slate-500'
+                                          : isSelected
+                                          ? 'bg-blue-600/20 text-white font-semibold cursor-pointer'
+                                          : 'text-slate-200 hover:bg-slate-800/80 cursor-pointer'
+                                      }`}
+                                    >
+                                      <span className="flex items-center gap-2 truncate">
+                                        <span
+                                          className={`text-[10px] ${
+                                            isSelected && !isLiveElsewhere
+                                              ? 'text-blue-400'
+                                              : 'text-slate-500'
+                                          }`}
+                                        >
+                                          {isSelected && !isLiveElsewhere ? '●' : '○'}
+                                        </span>
+                                        <span className="truncate">{t.name}</span>
+                                      </span>
+                                      {isLiveElsewhere ? (
+                                        <span
+                                          data-testid="tester-live-status"
+                                          className="text-[10.5px] font-mono text-slate-400 shrink-0"
+                                        >
+                                          live on {st.liveOnDevice}
+                                        </span>
+                                      ) : (
+                                        <span
+                                          data-testid="tester-runs-today"
+                                          className="text-[10.5px] font-mono text-slate-400 shrink-0"
+                                        >
+                                          {st.runsToday} {st.runsToday === 1 ? 'run' : 'runs'} today
+                                        </span>
+                                      )}
+                                    </button>
+                                  );
+                                })
+                              )}
+                            </div>
                           </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div
+                        data-testid="mobile-no-testers"
+                        className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl text-slate-300 text-xs font-medium text-center leading-relaxed"
+                      >
+                        No testers yet. Ask your manager to add you.
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 2 · DEVICE (Tappable cards) */}
+                  <div className="space-y-1.5 text-left" data-testid="mobile-device-cards">
+                    <label className="block text-[10.5px] font-bold uppercase tracking-wider text-slate-400">
+                      2 · Device
+                    </label>
+                    {readyQuotaDevices.length === 0 ? (
+                      <div
+                        data-testid="mobile-no-devices"
+                        className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl text-slate-300 text-xs font-medium text-center leading-relaxed"
+                      >
+                        No devices are ready. Ask your manager to activate one on Floor.
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {selectableDevices.length === 0 && (
+                          <div
+                            data-testid="all-devices-quota-met"
+                            className="px-3 py-2 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-emerald-200 text-xs font-semibold text-center"
+                          >
+                            All devices have hit today&rsquo;s quota
+                          </div>
+                        )}
+                        <div className="space-y-1.5 max-h-52 overflow-y-auto pr-0.5">
+                          {readyQuotaDevices.map(dev => {
+                            const isSelectable = selectableDevices.some(d => d.id === dev.id);
+                            const isSelected =
+                              isSelectable &&
+                              (dev.name.toLowerCase().trim() ===
+                                inputDeviceName.toLowerCase().trim() ||
+                                dev.id === inputDeviceName);
+                            const devActiveQuotas = (dev.quotas || []).filter(
+                              q => q.targetRunsPerDay > 0
+                            );
+                            const devRemQuotas = devActiveQuotas.filter(q => {
+                              const done =
+                                (todayRunsMap[dev.id] && todayRunsMap[dev.id][q.planId]) || 0;
+                              return done < q.targetRunsPerDay;
+                            });
+                            const primaryQuota =
+                              devRemQuotas.find(q => q.planId === currentPlan?.id) ||
+                              devRemQuotas[0] ||
+                              devActiveQuotas[0];
+                            const planObj = primaryQuota
+                              ? testPlans.find(p => p.id === primaryQuota.planId)
+                              : undefined;
+                            const planName = planObj?.name || currentPlan?.name || 'Plan';
+                            const doneCount = primaryQuota
+                              ? (todayRunsMap[dev.id] &&
+                                  todayRunsMap[dev.id][primaryQuota.planId]) ||
+                                0
+                              : 0;
+                            const targetCount = primaryQuota?.targetRunsPerDay || 0;
+                            const quotaMet = devRemQuotas.length === 0;
+
+                            // Check if locked by another tester when not selectable and quota not met
+                            let lockedByTester: string | undefined;
+                            if (!isSelectable && !quotaMet) {
+                              const liveRunOnDev = testRuns.find(
+                                r =>
+                                  r &&
+                                  r.id &&
+                                  r.id !== activeRun?.id &&
+                                  !archivedIdSet.has(r.id) &&
+                                  !isTestRunDeleted(r.id) &&
+                                  r.status === 'in_progress' &&
+                                  getEffectiveRunStatus(r, testPlans) === 'in_progress' &&
+                                  (!r.startedAt || getLocalDateStr(r.startedAt) === todayStr) &&
+                                  ((dev.activeRunId && r.id === dev.activeRunId) ||
+                                    (r.deviceId &&
+                                      r.deviceId.toLowerCase().trim() ===
+                                        dev.id.toLowerCase().trim()) ||
+                                    (r.deviceName &&
+                                      r.deviceName.toLowerCase().trim() ===
+                                        dev.name.toLowerCase().trim()))
+                              );
+                              lockedByTester =
+                                liveRunOnDev?.testerName || dev.activeTesterName || 'in use';
+                            }
+
+                            return (
+                              <button
+                                key={dev.id}
+                                type="button"
+                                data-testid="mobile-device-card"
+                                data-device-name={dev.name}
+                                disabled={!isSelectable}
+                                onClick={() => {
+                                  if (!isSelectable) return;
+                                  triggerHaptic('light');
+                                  setInputDeviceName(dev.name);
+                                  if (primaryQuota && primaryQuota.planId !== currentPlan?.id) {
+                                    onSelectPlan(primaryQuota.planId);
+                                  }
+                                }}
+                                className={`w-full px-3.5 py-2.5 rounded-xl border text-left flex items-center justify-between gap-2 transition text-xs ${
+                                  !isSelectable
+                                    ? 'bg-[#0b1120]/60 border-slate-800/70 text-slate-500 opacity-45 cursor-not-allowed'
+                                    : isSelected
+                                    ? 'bg-blue-600/15 border-blue-500 text-white shadow-sm cursor-pointer'
+                                    : 'bg-[#0f172a] border-slate-800 text-slate-200 hover:border-slate-700 cursor-pointer'
+                                }`}
+                              >
+                                <span className="flex items-center gap-2 min-w-0 truncate">
+                                  <span
+                                    className={`text-[10px] ${
+                                      isSelected ? 'text-blue-400' : 'text-slate-500'
+                                    }`}
+                                  >
+                                    {isSelected ? '●' : '○'}
+                                  </span>
+                                  <span className="font-bold truncate">{dev.name}</span>
+                                  <span className="text-slate-500">·</span>
+                                  <span className="text-slate-300 truncate">{planName}</span>
+                                </span>
+                                <span
+                                  data-testid="mobile-device-quota"
+                                  className={`font-mono text-[11px] shrink-0 ${
+                                    !isSelectable
+                                      ? 'text-slate-500'
+                                      : isSelected
+                                      ? 'text-blue-300 font-semibold'
+                                      : 'text-slate-400'
+                                  }`}
+                                >
+                                  {lockedByTester
+                                    ? `live · ${lockedByTester}`
+                                    : quotaMet
+                                    ? `${doneCount}/${targetCount} ✓`
+                                    : `${doneCount}/${targetCount}`}
+                                </span>
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
-                      {isSelected && (
-                        <div className="w-6 h-6 rounded-full bg-sky-500 text-white flex items-center justify-center flex-shrink-0 shadow">
-                          <Check className="w-3.5 h-3.5" />
-                        </div>
-                      )}
+                    )}
+                  </div>
+
+                  {/* Glasses build · optional compact row */}
+                  <GlassesBuildCapture
+                    onChange={(glasses, phone) => {
+                      buildEnvRef.current = { phone, glasses };
+                    }}
+                  />
+
+                  {/* Start button + summary line / one-line disabled reason */}
+                  <div className="space-y-1.5 pt-1">
+                    <button
+                      type="submit"
+                      data-testid="mobile-start-btn"
+                      disabled={!canStart}
+                      className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800/80 disabled:text-slate-500 disabled:border-slate-800 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl shadow-lg border border-blue-500/40 flex items-center justify-center gap-1.5 transition-all active:scale-[0.99] cursor-pointer"
+                    >
+                      <span>
+                        {isDeviceSelectable && selectedDeviceProfile
+                          ? `Start on ${selectedDeviceProfile.name} →`
+                          : 'Start session →'}
+                      </span>
                     </button>
-                  );
-                })}
-              </div>
-            </div>
+
+                    {canStart && selectedDeviceProfile ? (
+                      <p
+                        data-testid="mobile-setup-summary"
+                        className="text-[11px] text-slate-400 text-center font-medium"
+                      >
+                        {selectedTesterProfile?.name || inputReporterName.trim()} ·{' '}
+                        {targetPlanObj?.name || 'Plan'} · run {runK} of {totalN} today
+                      </p>
+                    ) : (
+                      <p
+                        data-testid="mobile-setup-disabled-reason"
+                        className="text-[11px] text-slate-500 text-center"
+                      >
+                        {disabledReason}
+                      </p>
+                    )}
+                  </div>
+                </form>
+              );
+            })()}
           </div>
         )}
 

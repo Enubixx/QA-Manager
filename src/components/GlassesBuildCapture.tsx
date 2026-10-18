@@ -87,77 +87,136 @@ export default function GlassesBuildCapture({ onChange }: Props) {
   };
 
   return (
-    <div className="p-3.5 bg-zinc-900/60 border border-zinc-800 rounded-2xl space-y-2.5 text-left" data-testid="glasses-build-capture">
-      <div className="flex items-center gap-2">
-        <Glasses className="w-4 h-4 text-sky-400" />
-        <span className="text-xs font-bold text-white">Glasses build</span>
-        {saved?.firmware && !draft && <span className="ml-auto text-[10px] text-zinc-400">captured {ago(saved.capturedAt)}</span>}
+    <div
+      className="px-3.5 py-2.5 bg-zinc-900/60 border border-zinc-800 rounded-xl space-y-2 text-left"
+      data-testid="glasses-build-capture"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <Glasses className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+          <span className="text-xs font-semibold text-white truncate">
+            Glasses build{' '}
+            <span className="text-zinc-500 font-normal">
+              · {saved?.firmware ? saved.firmware : 'optional'}
+            </span>
+          </span>
+          {saved?.firmware && !draft && (
+            <span className="hidden sm:inline text-[10px] text-zinc-500 shrink-0">
+              ({ago(saved.capturedAt)})
+            </span>
+          )}
+        </div>
+
+        {!draft && (
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              disabled={busy || !native}
+              onClick={() => fileRef.current?.click()}
+              data-testid="scan-about"
+              className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 disabled:opacity-50 flex items-center gap-1 cursor-pointer"
+            >
+              <ScanLine className="w-3 h-3 text-sky-400" />
+              <span>{busy ? 'Reading…' : saved?.firmware ? 'Rescan' : 'Scan'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setDraft({ ...(saved || {}) });
+                setReview([]);
+              }}
+              data-testid="edit-glasses-build"
+              className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-zinc-300 bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700/80 flex items-center gap-1 cursor-pointer"
+            >
+              <Pencil className="w-3 h-3 text-zinc-400" />
+              <span>{saved?.firmware ? 'Edit' : 'Enter'}</span>
+            </button>
+          </div>
+        )}
       </div>
 
-      {!draft && (
-        saved?.firmware ? (
-          <div className="text-[11px] font-mono text-zinc-200 leading-relaxed" data-testid="glasses-build-saved">
-            <div><span className="text-zinc-500">Version </span>{saved.firmware}</div>
-            {saved.serial && <div><span className="text-zinc-500">Serial </span>{saved.serial}</div>}
-          </div>
-        ) : (
-          <p className="text-[11px] text-zinc-400 leading-relaxed">
-            Open <b className="text-zinc-200">Glasses Companion → System → About</b>, take a screenshot, then tap <b className="text-zinc-200">Scan</b>.
-          </p>
-        )
+      {!draft && saved?.firmware && (
+        <div
+          className="text-[10.5px] font-mono text-zinc-300 leading-snug"
+          data-testid="glasses-build-saved"
+        >
+          <span>Version {saved.firmware}</span>
+          {saved.serial && <span> · Serial {saved.serial}</span>}
+        </div>
       )}
 
       {draft && (
-        <div className="space-y-2" data-testid="glasses-build-confirm">
-          <p className="text-[11px] text-zinc-400">Check these match the About screen, then save.</p>
+        <div className="space-y-2 pt-1 border-t border-zinc-800/80" data-testid="glasses-build-confirm">
+          <p className="text-[11px] text-zinc-400">
+            Enter or check the build from <b className="text-zinc-200">Glasses Companion → System → About</b>, then save.
+          </p>
           {(['firmware', 'serial', 'product'] as const).map(k => (
             <label key={k} className="block">
               <span className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-zinc-500 mb-0.5">
                 {k === 'firmware' ? 'Version (firmware)' : k === 'serial' ? 'Serial number' : 'Product'}
-                {review.includes(k) && <span className="text-amber-300 normal-case tracking-normal flex items-center gap-0.5"><AlertTriangle className="w-3 h-3" />check O vs 0, I vs 1</span>}
+                {review.includes(k) && (
+                  <span className="text-amber-300 normal-case tracking-normal flex items-center gap-0.5">
+                    <AlertTriangle className="w-3 h-3" />
+                    check O vs 0, I vs 1
+                  </span>
+                )}
               </span>
-              <input aria-label={k} className={`${field} ${review.includes(k) ? 'border-amber-500/60' : ''}`} value={draft[k] || ''}
-                onChange={e => setDraft({ ...draft, [k]: e.target.value })} />
+              <input
+                aria-label={k}
+                className={`${field} ${review.includes(k) ? 'border-amber-500/60' : ''}`}
+                value={draft[k] || ''}
+                onChange={e => setDraft({ ...draft, [k]: e.target.value })}
+              />
             </label>
           ))}
+          <div className="flex gap-2 pt-1">
+            <button
+              type="button"
+              onClick={confirm}
+              data-testid="save-glasses-build"
+              className="flex-1 py-1.5 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" /> Save build
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setDraft(null);
+                setReview([]);
+                setError(null);
+              }}
+              className="px-3 py-1.5 rounded-xl text-xs text-zinc-300 bg-zinc-800 hover:bg-zinc-700 cursor-pointer"
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       )}
 
       {error && <p className="text-[11px] text-amber-300 leading-snug">{error}</p>}
 
-      <div className="flex gap-2">
-        {!draft ? (
-          <>
-            <button type="button" disabled={busy || !native} onClick={() => fileRef.current?.click()} data-testid="scan-about"
-              className="flex-1 py-2 rounded-xl text-xs font-semibold bg-sky-600/80 hover:bg-sky-500 text-white disabled:opacity-40 flex items-center justify-center gap-1.5">
-              <ScanLine className="w-3.5 h-3.5" /> {busy ? 'Reading…' : saved?.firmware ? 'Rescan' : 'Scan'}
-            </button>
-            <button type="button" onClick={() => { setDraft({ ...(saved || {}) }); setReview([]); }} data-testid="edit-glasses-build"
-              className="px-3 py-2 rounded-xl text-xs text-zinc-300 bg-zinc-800 hover:bg-zinc-700 flex items-center gap-1.5">
-              <Pencil className="w-3.5 h-3.5" /> {saved?.firmware ? 'Edit' : 'Enter'}
-            </button>
-          </>
-        ) : (
-          <>
-            <button type="button" onClick={confirm} data-testid="save-glasses-build"
-              className="flex-1 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-center gap-1.5">
-              <CheckCircle2 className="w-3.5 h-3.5" /> Save build
-            </button>
-            <button type="button" onClick={() => { setDraft(null); setReview([]); setError(null); }}
-              className="px-3 py-2 rounded-xl text-xs text-zinc-300 bg-zinc-800 hover:bg-zinc-700">Cancel</button>
-          </>
-        )}
-      </div>
-      <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPick} data-testid="about-file" />
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={onPick}
+        data-testid="about-file"
+      />
 
       {phone && (
-        <div className="pt-1.5 border-t border-zinc-800 text-[10px] font-mono text-zinc-500 leading-relaxed break-all" data-testid="phone-builds">
-          <div>{[phone.manufacturer, phone.model].filter(Boolean).join(' ')} · Android {phone.androidVersion} · {phone.buildId}</div>
+        <div
+          className="pt-1 border-t border-zinc-800/80 text-[10px] font-mono text-zinc-500 leading-relaxed break-all"
+          data-testid="phone-builds"
+        >
+          <div>
+            {[phone.manufacturer, phone.model].filter(Boolean).join(' ')} · Android{' '}
+            {phone.androidVersion} · {phone.buildId}
+          </div>
           <div>Core {phone.glassesCore?.versionName || 'not installed'}</div>
           <div>Companion {phone.glassesCompanion?.versionName || 'not installed'}</div>
         </div>
       )}
-      {!native && <p className="text-[10px] text-zinc-500">Scanning and automatic phone builds work in the QA Tester Android app.</p>}
     </div>
   );
 }
