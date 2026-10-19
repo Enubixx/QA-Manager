@@ -43,7 +43,7 @@ const LINK_WINDOW_MS = DAY_MS;
 const LINK_EVERY_MS = 10 * 60_000;
 const LINK_BEFORE_MS = 6 * 60 * 60_000;
 const LINK_AFTER_MS = 60 * 60_000;
-const BUNDLE_WAIT_FOR_REFINE_MS = 3 * 60_000;
+const BUNDLE_WAIT_FOR_REFINE_MS = Number(process.env.RX95_BUNDLE_WAIT_FOR_REFINE_MS || 3 * 60_000);
 /** A plan-day is re-judged only after it has been quiet this long (testers log in bursts)... */
 const BUNDLE_QUIET_MS = Number(process.env.RX95_BUNDLE_QUIET_MS || 90_000);
 /** ...or, while it keeps changing, at most once per this interval. */
@@ -422,11 +422,16 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
     queue.push(job);
     void pump();
   }
+  /** RX95 reply health (heartbeat -> the app warns when RX95 stops answering). */
+  const rx95 = { okAt: '', failAt: '', failStreak: 0, error: '' };
+  const isRx95Failure = (e: unknown) => /RX95 did not reply|agentapi/i.test(String((e as any)?.message || e));
   async function pump() {
     if (running) return;
     while (queue.length) {
-      // repro checks first (a person is waiting on them), then refine, then bundles
-      queue.sort((a, b) => ['match', 'refine', 'bundle'].indexOf(a.kind) - ['match', 'refine', 'bundle'].indexOf(b.kind));
+      // repro checks first (a person is waiting on them), then refine, then bundles. While RX95 replies are
+      // failing, bundles go before refine so a run of failing cleanups can't starve the bundle checks.
+      const order = rx95.failStreak > 0 ? ['match', 'bundle', 'refine'] : ['match', 'refine', 'bundle'];
+      queue.sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
       const job = queue.shift()!;
       queued.delete(job.key);
       if (!ports.allow(job.kind)) {
@@ -435,8 +440,17 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
         continue;
       }
       running = job;
-      try { await job.run(); backoff.delete(job.key); } catch (e) { fail(job.key, e); }
+      try {
+        await job.run();
+        backoff.delete(job.key);
+        if (rx95.failStreak) log(`RX95 replying again after ${rx95.failStreak} failed job(s)`);
+        Object.assign(rx95, { okAt: new Date().toISOString(), failStreak: 0, error: '' });
+      } catch (e) {
+        fail(job.key, e);
+        if (isRx95Failure(e)) Object.assign(rx95, { failAt: new Date().toISOString(), failStreak: rx95.failStreak + 1, error: String((e as any)?.message || e).slice(0, 200) });
+      }
       running = null;
+      if (rx95.failStreak === 2) void heartbeat(); // tell the app right away
     }
   }
 
@@ -742,7 +756,7 @@ export function startWorker(cfg: WorkerConfig): { stop: () => void; kick: () => 
   async function heartbeat() {
     if (!suggestionsTable) return;
     const at = new Date().toISOString();
-    const r = await rest.req('POST', SUGGESTIONS, { id: '_heartbeat', plan_id: null, day: null, sig: '', payload: { at, startedAt, version: WORKER_VERSION, queues: queueSizes() }, updated_at: at }, 'resolution=merge-duplicates,return=minimal').catch(e => ({ ok: false, status: 0, data: { message: e.message } }));
+    const r = await rest.req('POST', SUGGESTIONS, { id: '_heartbeat', plan_id: null, day: null, sig: '', payload: { at, startedAt, version: WORKER_VERSION, queues: queueSizes(), rx95: { ...rx95 } }, updated_at: at }, 'resolution=merge-duplicates,return=minimal').catch(e => ({ ok: false, status: 0, data: { message: e.message } }));
     if (!r.ok) {
       if (isMissingTable(r.data)) { suggestionsTable = false; probedAt = 0; }
       warnOnce(`hb:${r.status}`, 'heartbeat failed', r.status, JSON.stringify(r.data).slice(0, 200));

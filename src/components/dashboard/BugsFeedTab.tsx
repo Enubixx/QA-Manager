@@ -43,6 +43,7 @@ import {
 } from '../BundleSuggestionsPanel';
 import { bundleCuj, saveDismissed, type ShownSuggestion } from '../../utils/bundleDraft';
 import type { Rx95SuggestionsData } from '../../services/supabaseService';
+import { rx95Stalled } from '../../utils/rx95Health';
 
 export type FeedDraft = { title: string; note: string; time: string };
 
@@ -1029,6 +1030,7 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
           <Rx95LiveChip
             heartbeatAt={rx95Suggestions?.heartbeat?.at}
             nowMs={feedNow}
+            stalled={rx95Stalled(rx95Suggestions?.heartbeat)}
             jobsInProgress={
               (rx95Suggestions?.heartbeat?.queues?.refine || 0) +
               (rx95Suggestions?.heartbeat?.queues?.match || 0) +

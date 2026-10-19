@@ -49,6 +49,8 @@ const PORT = Number(args.port || 4799);
 const AGENTAPI = process.env.AGENTAPI_BIN || path.join(os.homedir(), '.gemini/jetski/bin/agentapi');
 const BRAIN_DIR = path.join(os.homedir(), '.gemini/jetski/brain');
 const REPLY_TIMEOUT_MS = Number(args.timeoutMs || 240_000);
+/** Background jobs (refine / match / bundle) normally answer in seconds; give up sooner so one stuck reply doesn't hold the queue. */
+const BG_REPLY_TIMEOUT_MS = Number(args.bgTimeoutMs || 90_000);
 const POLL_MS = 3000;
 
 // Limits for untrusted requests
@@ -450,14 +452,14 @@ export async function archiveConversation(conversationId: string): Promise<boole
 }
 
 async function waitForReplyThenArchive(conversationId: string, reportId: string): Promise<{ reply: string; reportId: string; conversationId: string }> {
-  const deadline = Date.now() + REPLY_TIMEOUT_MS;
+  const deadline = Date.now() + BG_REPLY_TIMEOUT_MS;
   try {
     while (Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 2000));
       const reply = readReplyFromTranscript(conversationId, reportId);
       if (reply) return { reply, reportId, conversationId };
     }
-    throw new Error(`RX95 did not reply within ${Math.round(REPLY_TIMEOUT_MS / 1000)}s (chat ${conversationId})`);
+    throw new Error(`RX95 did not reply within ${Math.round(BG_REPLY_TIMEOUT_MS / 1000)}s (chat ${conversationId})`);
   } finally {
     // Give the chat a moment to finish its last step, then tuck it away.
     setTimeout(() => { void archiveConversation(conversationId); }, 5000);
@@ -865,6 +867,8 @@ async function workerPorts() {
     ...base,
     refine: async (bugs: RefineBugInput[]) => {
       await sleepMs(delay);
+      // simulates RX95 answers that never become readable (the 2026-10-19 stall)
+      if (process.env.RX95_FAKE_REFINE_DOWN === '1') throw new Error('RX95 did not reply within 90s (fake: refine down)');
       return JSON.stringify({ bugs: bugs.map((b, i) => ({ n: i + 1, title: `Cleaned: ${(b.title || b.note).replace(/\s+/g, ' ').trim().slice(0, 80)}`, description: b.note || b.title })) });
     },
     match: async (bug: MatchBugInput, planId: string) => {
@@ -879,6 +883,7 @@ async function workerPorts() {
     },
     bundle: async (reports: BundleReportInput[]) => {
       await sleepMs(delay);
+      if (process.env.RX95_FAKE_BUNDLE_DOWN === '1') throw new Error('RX95 did not reply within 90s (fake: bundle down)');
       // fake grouping: identical normalized titles
       const norm = (r: BundleReportInput) => (r.title || r.note).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
       const groups = new Map<string, number[]>();

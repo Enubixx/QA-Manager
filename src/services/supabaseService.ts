@@ -975,7 +975,10 @@ export const broadcastBootSignal = async (signal: BootSignal) => {
 export interface Rx95Heartbeat {
   at: string;
   queues?: { refine?: number; match?: number; bundle?: number; confirm?: number };
+  /** RX95 reply health: consecutive failed jobs since the last success. */
+  rx95?: { okAt?: string; failAt?: string; failStreak?: number; error?: string };
 }
+
 
 export interface Rx95SuggestionsData {
   sets: BundleSuggestionSet[];
@@ -993,7 +996,11 @@ function parseSuggestionRows(rows: any[]): Rx95SuggestionsData {
     const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
     if (row.id === '_heartbeat') {
       const at = typeof payload.at === 'string' ? payload.at : (typeof row.updated_at === 'string' ? row.updated_at : '');
-      if (at) heartbeat = { at, queues: payload.queues && typeof payload.queues === 'object' ? payload.queues : undefined };
+      if (at) heartbeat = {
+        at,
+        queues: payload.queues && typeof payload.queues === 'object' ? payload.queues : undefined,
+        rx95: payload.rx95 && typeof payload.rx95 === 'object' ? payload.rx95 : undefined,
+      };
       continue;
     }
     const suggestions = Array.isArray(payload.suggestions) ? payload.suggestions : [];

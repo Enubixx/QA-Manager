@@ -51,13 +51,15 @@ export function TabBar<K extends string>({ tabs, active, onChange, testid }: {
   );
 }
 
-/** "RX95 live · synced Ns ago" (or error) from the worker heartbeat; hidden when offline without error. */
-export function Rx95LiveChip({ heartbeatAt, nowMs, jobsInProgress = 0, offlineText = 'offline', error = false, title, onClick, testid }: {
+/** "RX95 live · synced Ns ago" (or error) from the worker heartbeat; hidden when offline without error.
+ *  `stalled`: the worker runs but RX95 stopped answering it -> amber "not responding" chip. */
+export function Rx95LiveChip({ heartbeatAt, nowMs, jobsInProgress = 0, offlineText = 'offline', error = false, stalled = false, title, onClick, testid }: {
   heartbeatAt?: string;
   nowMs: number;
   jobsInProgress?: number;
   offlineText?: string;
   error?: boolean;
+  stalled?: boolean;
   title?: string;
   onClick?: () => void;
   testid?: string;
@@ -65,6 +67,16 @@ export function Rx95LiveChip({ heartbeatAt, nowMs, jobsInProgress = 0, offlineTe
   const age = heartbeatAt ? Math.max(0, (nowMs - new Date(heartbeatAt).getTime()) / 1000) : Infinity;
   const live = Number.isFinite(age) && age < 90;
   if (!live && !error) return null;
+  if (live && stalled) {
+    return (
+      <button type="button" data-testid={testid} data-stalled="true" onClick={onClick}
+        className={`${chipCls} border-amber-500/60 text-amber-200 bg-amber-500/10`}
+        title="RX95 isn't answering the background helper. Wording cleanup and bundle suggestions are paused until it does; it retries on its own.">
+        <span className="w-[7px] h-[7px] rounded-full bg-amber-400" />
+        <b className="text-white">RX95 not responding</b> · suggestions paused
+      </button>
+    );
+  }
   return (
     <button type="button" data-testid={testid} onClick={onClick}
       className={`${chipCls} ${!live && error ? 'border-amber-500/60 text-amber-200 bg-amber-500/10' : chipOff}`}

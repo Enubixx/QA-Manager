@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Bug, CheckCircle2, Copy, ExternalLink, Eye, Filter, Repeat, Search, ShieldCheck, Sparkles, X } from 'lucide-react';
 import type { BugFilePending, BugLog, RefinedBugText, ReproCandidate, ReproMatches, TestPlan } from '../types';
 import type { Rx95SuggestionsData } from '../services/supabaseService';
+import { rx95Stalled } from '../utils/rx95Health';
 import { Rx95LiveChip, TabBar, TAG_STYLE, UnreviewedDot, chipCls, chipOff, chipOn, expandedCls, listBoxCls, rowActionCls, rowCls, rowOpenCls, tagCls } from './triageUi';
 import { isReviewed, reviewedNow } from '../utils/bugReview';
 import {
@@ -1944,6 +1945,7 @@ export default function BuganizerTriage({
           <Rx95LiveChip
             heartbeatAt={heartbeat?.at}
             nowMs={nowMs}
+            stalled={rx95Stalled(heartbeat)}
             jobsInProgress={jobsInProgress}
             offlineText={refineText}
             error={!!refineState.error}
