@@ -41,6 +41,7 @@ import {
   syncTestersListToCloud,
   mergeDevicesLists,
   mergeTestersLists,
+  waitForPendingTombstoneWrites,
   type DevicePatch,
   subscribeToSupabaseRealtime,
   subscribeToSystemCommands,
@@ -660,7 +661,9 @@ export function App() {
     }
   };
 
-  const syncRestoreSnapshotToCloud = (snapshot: DeleteSnapshotPayload, restored: QAStateSlice) => {
+  const syncRestoreSnapshotToCloud = async (snapshot: DeleteSnapshotPayload, restored: QAStateSlice) => {
+    clearSnapshotTombstones(snapshot);
+    await waitForPendingTombstoneWrites();
     (snapshot.plans || []).forEach(p => syncTestPlanToSupabase(p));
     (snapshot.testRuns || []).forEach(r => safeSyncTestRun(r));
     (snapshot.modifiedTestRuns || []).forEach(r => safeSyncTestRun(r));
@@ -684,6 +687,7 @@ export function App() {
             : { quotas: nowIso };
           patches.push({
             id: d.id,
+            restore: isFullRestore,
             changes: isFullRestore
               ? { ...d, updatedAt: nowIso, fieldUpdatedAt }
               : {
@@ -706,6 +710,7 @@ export function App() {
       safePatchTesters(
         snapshot.testers.map(t => ({
           id: t.id,
+          restore: true,
           changes: { ...t, updatedAt: nowIso, fieldUpdatedAt: { name: nowIso, role: nowIso } },
           updatedAt: nowIso,
           fieldUpdatedAt: { name: nowIso, role: nowIso },

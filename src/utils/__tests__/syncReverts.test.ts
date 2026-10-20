@@ -27,6 +27,10 @@ import {
   markTestRunDeleted,
   unmarkTestRunDeleted,
   isTestRunDeleted,
+  markArchivedRunDeleted,
+  unmarkArchivedRunDeleted,
+  isArchivedRunDeleted,
+  ingestCloudTombstoneRows,
 } from '../../services/supabaseService';
 
 describe('Items A & B: Per-device and per-tester patches & updatedAt reconciliation', () => {
@@ -392,6 +396,59 @@ describe('Items C, G, H: Tombstones for deleted devices, testers, bugs, and runs
     expect(isTestRunDeleted('run-99')).toBe(true);
     unmarkTestRunDeleted('run-99');
     expect(isTestRunDeleted('run-99')).toBe(false);
+  });
+
+  it('protects restored tombstones against stale cloud tombstone re-ingestion and allows restore: true patches', () => {
+    markDeviceDeleted('dev-restore');
+    markTesterDeleted('tester-restore');
+    markBugDeleted('bug-restore');
+    markArchivedRunDeleted('run-restore');
+
+    unmarkDeviceDeleted('dev-restore');
+    unmarkTesterDeleted('tester-restore');
+    unmarkBugDeleted('bug-restore');
+    unmarkArchivedRunDeleted('run-restore');
+
+    // Simulate a stale cloud poll ingesting old __GLOBAL_DELETED_* rows during the restore grace window
+    ingestCloudTombstoneRows([
+      { feature_name: '__GLOBAL_DELETED_DEVICES__:["dev-restore"]' },
+      { feature_name: '__GLOBAL_DELETED_TESTERS__:["tester-restore"]' },
+      { feature_name: '__GLOBAL_DELETED_BUGS__:["bug-restore"]' },
+      { feature_name: '__GLOBAL_DELETED_RUNS__:["run-restore"]' },
+    ]);
+
+    expect(isDeviceDeleted('dev-restore')).toBe(false);
+    expect(isTesterDeleted('tester-restore')).toBe(false);
+    expect(isBugDeleted('bug-restore')).toBe(false);
+    expect(isArchivedRunDeleted('run-restore')).toBe(false);
+    expect(isTestRunDeleted('run-restore')).toBe(false);
+
+    // Also verify applyDevicePatches and applyTesterPatches with restore: true re-add restored entities
+    const patchedDevs = applyDevicePatches(
+      [{ id: 'dev-1', name: 'WP01', isReady: true, quotas: [] }],
+      [
+        {
+          id: 'dev-restore',
+          restore: true,
+          updatedAt: '2026-10-20T02:00:00.000Z',
+          changes: { id: 'dev-restore', name: 'RESTORED-DEV', isReady: true, quotas: [] },
+        },
+      ]
+    );
+    expect(patchedDevs.map(d => d.id)).toEqual(['dev-1', 'dev-restore']);
+
+    const patchedTesters = applyTesterPatches(
+      [{ id: 't-1', name: 'Alice', role: 'QA' }],
+      [
+        {
+          id: 'tester-restore',
+          restore: true,
+          updatedAt: '2026-10-20T02:00:00.000Z',
+          changes: { id: 'tester-restore', name: 'Restored Tester', role: 'Lead' },
+        },
+      ]
+    );
+    expect(patchedTesters.map(t => t.id)).toEqual(['t-1', 'tester-restore']);
   });
 });
 

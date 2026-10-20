@@ -18,7 +18,9 @@ import {
   isBugDeleted,
   getDeletedBugIds,
   isDeviceDeleted,
+  unmarkDeviceAsDeleted,
   isTesterDeleted,
+  unmarkTesterAsDeleted,
   setCloudSyncStatus
 } from './supabaseService';
 import { isSupabaseConfigured } from '../lib/supabase';
@@ -205,10 +207,10 @@ export const enqueueOfflineMutation = (type: OfflineMutationType, payload: any) 
   if (type === 'patchBugColumns' && (!payload?.bug?.id || isBugDeleted(payload.bug.id))) {
     return;
   }
-  if (type === 'patchDevices' && (!payload?.id || isDeviceDeleted(payload.id))) {
+  if (type === 'patchDevices' && (!payload?.id || (!payload?.restore && isDeviceDeleted(payload.id)))) {
     return;
   }
-  if (type === 'patchTesters' && (!payload?.id || isTesterDeleted(payload.id))) {
+  if (type === 'patchTesters' && (!payload?.id || (!payload?.restore && isTesterDeleted(payload.id)))) {
     return;
   }
   const queue = getOfflineQueue();
@@ -401,14 +403,14 @@ export const drainOfflineQueue = async () => {
             anySucceeded = true;
             break;
           case 'patchDevices':
-            if (!mut.payload?.id || isDeviceDeleted(mut.payload.id)) {
+            if (!mut.payload?.id || (!mut.payload?.restore && isDeviceDeleted(mut.payload.id))) {
               break;
             }
             await patchDevicesToCloud(mut.payload as DevicePatch);
             anySucceeded = true;
             break;
           case 'patchTesters':
-            if (!mut.payload?.id || isTesterDeleted(mut.payload.id)) {
+            if (!mut.payload?.id || (!mut.payload?.restore && isTesterDeleted(mut.payload.id))) {
               break;
             }
             await patchTestersToCloud(mut.payload as TesterPatch);
@@ -565,8 +567,12 @@ export const safeDeleteArchivedRun = async (runId: string) => {
 };
 
 export const safePatchDevices = async (patchesInput: DevicePatch | DevicePatch[]) => {
-  const patches = (Array.isArray(patchesInput) ? patchesInput : [patchesInput]).filter(
-    p => p && p.id && !isDeviceDeleted(p.id)
+  const rawPatches = Array.isArray(patchesInput) ? patchesInput : [patchesInput];
+  rawPatches.forEach(p => {
+    if (p?.id && p.restore) unmarkDeviceAsDeleted(p.id);
+  });
+  const patches = rawPatches.filter(
+    p => p && p.id && (p.restore || !isDeviceDeleted(p.id))
   );
   if (patches.length === 0) return;
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -579,14 +585,18 @@ export const safePatchDevices = async (patchesInput: DevicePatch | DevicePatch[]
     patches.forEach(p => supersedeQueued('patchDevices', p, startedAt));
   } catch (e) {
     patches.forEach(p => {
-      if (!isDeviceDeleted(p.id)) enqueueOfflineMutation('patchDevices', p);
+      if (p.restore || !isDeviceDeleted(p.id)) enqueueOfflineMutation('patchDevices', p);
     });
   }
 };
 
 export const safePatchTesters = async (patchesInput: TesterPatch | TesterPatch[]) => {
-  const patches = (Array.isArray(patchesInput) ? patchesInput : [patchesInput]).filter(
-    p => p && p.id && !isTesterDeleted(p.id)
+  const rawPatches = Array.isArray(patchesInput) ? patchesInput : [patchesInput];
+  rawPatches.forEach(p => {
+    if (p?.id && p.restore) unmarkTesterAsDeleted(p.id);
+  });
+  const patches = rawPatches.filter(
+    p => p && p.id && (p.restore || !isTesterDeleted(p.id))
   );
   if (patches.length === 0) return;
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -599,7 +609,7 @@ export const safePatchTesters = async (patchesInput: TesterPatch | TesterPatch[]
     patches.forEach(p => supersedeQueued('patchTesters', p, startedAt));
   } catch (e) {
     patches.forEach(p => {
-      if (!isTesterDeleted(p.id)) enqueueOfflineMutation('patchTesters', p);
+      if (p.restore || !isTesterDeleted(p.id)) enqueueOfflineMutation('patchTesters', p);
     });
   }
 };
