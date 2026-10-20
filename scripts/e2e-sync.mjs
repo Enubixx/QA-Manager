@@ -156,7 +156,8 @@ async function openClient(label) {
   page.on('dialog', d => d.accept().catch(() => {}));
   page.on('pageerror', e => vlog(`[${label} pageerror]`, String(e).slice(0, 200)));
   await page.setViewport({ width: 1400, height: 900 });
-  await page.goto(APP, { waitUntil: 'networkidle2' });
+  await page.goto(APP, { waitUntil: 'domcontentloaded', timeout: 120000 });
+  await page.waitForSelector('[data-testid="nav-tab-floor"]', { timeout: 120000 });
   await sleep(2500);
   await gotoTab(page, 'floor');
   return { ctx, page, label };
@@ -346,7 +347,8 @@ async function caseDeleteDevice() {
     };
     const r = await holds(check, { convergeMs: 12000 });
     if (r) return r;
-    await B.page.reload({ waitUntil: 'networkidle2' }); await sleep(2500); await gotoTab(B.page, 'floor');
+    await B.page.reload({ waitUntil: 'domcontentloaded', timeout: 120000 });
+    await B.page.waitForSelector('[data-testid="nav-tab-floor"]', { timeout: 120000 }); await sleep(2500); await gotoTab(B.page, 'floor');
     return holds(check, { convergeMs: 1000, holdMs: 6000 }).then(x => (x ? `after B reload: ${x}` : ''));
   });
 }
@@ -465,6 +467,8 @@ async function main() {
   try {
     await startServers();
     browser = await puppeteer.launch({ headless: argv.headful ? false : 'new', executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox'] });
+    // Warm-up: the first load makes vite optimize deps, which can take a while on a busy machine.
+    await (await openClient('warmup')).ctx.close();
     for (const [id, name, fn] of CASES) {
       if (ONLY && !ONLY.has(id)) continue;
       log(`case ${id}: ${name}`);
