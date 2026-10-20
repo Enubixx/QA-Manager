@@ -8,7 +8,9 @@
     "test": "vitest run",
     "test:e2e": "node scripts/e2e-smoke.mjs",
     "build": "vitest run && tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:e2e:sync": "node scripts/e2e-sync.mjs",
+    "sandbox:local": "bash scripts/local-sandbox.sh"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",
