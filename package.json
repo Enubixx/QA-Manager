@@ -10,7 +10,8 @@
     "build": "vitest run && tsc && vite build",
     "preview": "vite preview",
     "test:e2e:sync": "node scripts/e2e-sync.mjs",
-    "sandbox:local": "bash scripts/local-sandbox.sh"
+    "sandbox:local": "bash scripts/local-sandbox.sh",
+    "test:e2e:triage": "node scripts/e2e-triage-confirm.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",

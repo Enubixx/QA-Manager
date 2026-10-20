@@ -403,6 +403,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           markReviewed={c.markReviewed}
           moveToNew={c.moveToNew}
           handleUpdateBugCategorization={c.handleUpdateBugCategorization}
+          confirmBugCategorization={c.confirmBugCategorization}
           filedIssueDrafts={c.filedIssueDrafts}
           setFiledIssueDrafts={c.setFiledIssueDrafts}
           setSelectedImagePreviewUrl={c.setSelectedImagePreviewUrl}

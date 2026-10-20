@@ -44,6 +44,7 @@ import {
 import { bundleCuj, saveDismissed, type ShownSuggestion } from '../../utils/bundleDraft';
 import type { Rx95SuggestionsData } from '../../services/supabaseService';
 import { rx95Stalled } from '../../utils/rx95Health';
+import { stageTriage, isTriageDirty, nextTriageBugId, type TriageField, type TriagePatch } from '../../utils/feedTriage';
 
 export type FeedDraft = { title: string; note: string; time: string };
 
@@ -124,6 +125,8 @@ export interface BugsFeedTabProps {
     field: 'bugType' | 'priority' | 'status',
     value: any
   ) => void;
+  /** ① To review Confirm: applies the staged type/priority/status in one write and marks the bug reviewed. */
+  confirmBugCategorization?: (bugId: string, patch: TriagePatch) => void;
   filedIssueDrafts: Record<string, string>;
   setFiledIssueDrafts: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   setSelectedImagePreviewUrl: React.Dispatch<React.SetStateAction<string | null>>;
@@ -215,6 +218,7 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
   markReviewed,
   moveToNew,
   handleUpdateBugCategorization,
+  confirmBugCategorization,
   filedIssueDrafts,
   setFiledIssueDrafts,
   setSelectedImagePreviewUrl,
@@ -522,6 +526,79 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
     });
     return ids;
   }, [groupedSections, feedGroupBy, expandedGroups, collapsedInlineSugs]);
+
+  // ① To review: Type / Priority / Status changes on an expanded row are only staged. Confirm applies them,
+  // marks the bug reviewed, closes the row (it leaves To review) and opens the next bug.
+  const [stagedTriage, setStagedTriage] = useState<Record<string, TriagePatch>>({});
+  const triageStagingOn = (!buganizerEnabled || bugsView === 'feed') && feedTab === 'new';
+  const currentTriage = (bug: BugLog): Record<TriageField, string> => ({
+    bugType: bugCategorizations[bug.id]?.bugType || bug.bugType || 'Bug',
+    priority: bugCategorizations[bug.id]?.priority || bug.priority || 'P2',
+    status: effectiveStatus(bugCategorizations[bug.id]?.status || bug.status),
+  });
+  const stagesTriage = (bug: BugLog) =>
+    triageStagingOn && !!confirmBugCategorization && !!expandedBugIds[bug.id] && !reviewedOf(bug);
+  const triageValue = (bug: BugLog, field: TriageField) =>
+    stagedTriage[bug.id]?.[field] ?? currentTriage(bug)[field];
+  const triageDirty = (bug: BugLog) => isTriageDirty(stagedTriage[bug.id], currentTriage(bug));
+  const changeTriage = (bug: BugLog, field: TriageField, value: string) => {
+    if (!stagesTriage(bug)) {
+      handleUpdateBugCategorization(bug.id, field, value);
+      return;
+    }
+    const cur = currentTriage(bug)[field];
+    setStagedTriage(prev => {
+      const patch = stageTriage(prev[bug.id], field, value, cur);
+      const next = { ...prev };
+      if (Object.keys(patch).length) next[bug.id] = patch;
+      else delete next[bug.id];
+      return next;
+    });
+  };
+  const cancelTriage = (bugId: string) =>
+    setStagedTriage(prev => {
+      if (!prev[bugId]) return prev;
+      const next = { ...prev };
+      delete next[bugId];
+      return next;
+    });
+  const confirmTriage = (bug: BugLog) => {
+    const patch = stagedTriage[bug.id];
+    if (!confirmBugCategorization || !patch || !triageDirty(bug)) return;
+    const nextId = nextTriageBugId(visibleFeedBugIds, bug.id, id => {
+      const b = bugById.get(id);
+      return !!b && reviewedOf(b);
+    });
+    confirmBugCategorization(bug.id, patch);
+    cancelTriage(bug.id);
+    setStickyNewBugIds(prev => {
+      if (!prev.has(bug.id)) return prev;
+      const next = new Set(prev);
+      next.delete(bug.id);
+      return next;
+    });
+    if (expandedBugIds[bug.id]) toggleBugExpand(bug.id);
+    if (nextId) {
+      if (!expandedBugIds[nextId]) toggleBugExpand(nextId);
+      setFocusedBugId(nextId);
+      setTimeout(
+        () => document.getElementById(`feed-row-${nextId}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }),
+        80
+      );
+    } else {
+      setFocusedBugId(null);
+    }
+    flashFeed(nextId ? 'Reviewed → ② Ready to file. Next bug opened.' : 'Reviewed → ② Ready to file.');
+  };
+  // Staged changes are dropped when the row closes (or the stage changes) without Confirm
+  useEffect(() => {
+    setStagedTriage(prev => {
+      const ids = Object.keys(prev);
+      const keep = triageStagingOn ? ids.filter(id => expandedBugIds[id]) : [];
+      if (keep.length === ids.length) return prev;
+      return Object.fromEntries(keep.map(id => [id, prev[id]]));
+    });
+  }, [expandedBugIds, triageStagingOn]);
 
   // Keyboard shortcuts on Bugs Feed: J/K move focus, Enter expand, R mark reviewed, 1/2/3 set P0/P1/P2
   useEffect(() => {
@@ -1534,6 +1611,7 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
                         <>
                           <div className="flex flex-wrap items-center gap-2 mb-2">
                             {!strong &&
+                              !triageDirty(bug) &&
                               (reviewed ? (
                                 <button
                                   type="button"
@@ -1681,10 +1759,9 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
                                 <div>
                                   <label className={labelCls}>Bug Type</label>
                                   <select
-                                    value={bugCategorizations[bug.id]?.bugType || bug.bugType || 'Bug'}
-                                    onChange={e =>
-                                      handleUpdateBugCategorization(bug.id, 'bugType', e.target.value)
-                                    }
+                                    data-testid="feed-type"
+                                    value={triageValue(bug, 'bugType')}
+                                    onChange={e => changeTriage(bug, 'bugType', e.target.value)}
                                     className={`${inputCls} cursor-pointer`}
                                   >
                                     {(
@@ -1705,10 +1782,9 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
                                 <div>
                                   <label className={labelCls}>Priority</label>
                                   <select
-                                    value={bugCategorizations[bug.id]?.priority || bug.priority || 'P2'}
-                                    onChange={e =>
-                                      handleUpdateBugCategorization(bug.id, 'priority', e.target.value)
-                                    }
+                                    data-testid="feed-priority"
+                                    value={triageValue(bug, 'priority')}
+                                    onChange={e => changeTriage(bug, 'priority', e.target.value)}
                                     className={`${inputCls} cursor-pointer`}
                                   >
                                     {(['P0', 'P1', 'P2'] as const).map(opt => (
@@ -1722,16 +1798,10 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
                                   <label className={labelCls}>Status</label>
                                   <select
                                     data-testid="feed-status"
-                                    value={effectiveStatus(
-                                      bugCategorizations[bug.id]?.status || bug.status
-                                    )}
-                                    onChange={e =>
-                                      handleUpdateBugCategorization(bug.id, 'status', e.target.value)
-                                    }
+                                    value={triageValue(bug, 'status')}
+                                    onChange={e => changeTriage(bug, 'status', e.target.value)}
                                     className={`w-full bg-[#0f172a] border rounded-xl px-2.5 py-1.5 text-xs focus:outline-none focus:border-blue-500 cursor-pointer ${
-                                      effectiveStatus(
-                                        bugCategorizations[bug.id]?.status || bug.status
-                                      ) === REPROD
+                                      triageValue(bug, 'status') === REPROD
                                         ? 'border-violet-500/70 text-violet-200 bg-violet-500/10'
                                         : 'border-slate-700 text-slate-100'
                                     }`}
@@ -1744,7 +1814,31 @@ export const BugsFeedTab: React.FC<BugsFeedTabProps> = ({
                                   </select>
                                 </div>
                               </div>
-                              {effectiveStatus(bugCategorizations[bug.id]?.status || bug.status) ===
+                              {triageDirty(bug) && (
+                                <div
+                                  data-testid="feed-triage-confirm-bar"
+                                  className="flex items-center gap-2 rounded-xl border border-blue-500/40 bg-blue-500/10 px-2.5 py-1.5"
+                                >
+                                  <span className="flex-1 text-[11px] text-blue-200">Not saved yet</span>
+                                  <button
+                                    type="button"
+                                    data-testid="feed-triage-cancel"
+                                    onClick={() => cancelTriage(bug.id)}
+                                    className="px-2.5 h-7 rounded-xl text-xs font-semibold text-slate-300 hover:bg-slate-800"
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    type="button"
+                                    data-testid="feed-triage-confirm"
+                                    onClick={() => confirmTriage(bug)}
+                                    className="px-3 h-7 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white"
+                                  >
+                                    ✓ Confirm
+                                  </button>
+                                </div>
+                              )}
+                              {triageValue(bug, 'status') ===
                                 REPROD && (
                                 <p className="text-[11px] text-slate-400" data-testid="feed-repro-hint">
                                   💡 &ldquo;Repro&rsquo;d Issue&rdquo; tells RX95 to look for an existing Buganizer bug in this plan&rsquo;s hotlist (shown in ② Ready to file).

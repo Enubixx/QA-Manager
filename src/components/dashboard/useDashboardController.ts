@@ -462,10 +462,14 @@ export function useDashboardController({
   // Unsaved "b/ issue number" inputs next to the Filed switch (per bug)
   const [filedIssueDrafts, setFiledIssueDrafts] = useState<Record<string, string>>({});
 
-  const handleUpdateBugCategorization = (bugId: string, field: 'bugType' | 'priority' | 'status', value: any) => {
-    const nextCat = { ...(bugCategorizations[bugId] || {}), [field]: value };
+  type BugCategorization = (typeof bugCategorizations)[string];
+  /** Applies type / priority / status (one or several fields) in a single bug write and marks the bug reviewed. */
+  const applyBugCategorization = (bugId: string, patch: BugCategorization, opts: { stickyOnNewTab: boolean }) => {
+    const fields = Object.keys(patch).filter(k => (patch as Record<string, unknown>)[k] !== undefined);
+    if (!fields.length) return;
+    const nextCat = { ...(bugCategorizations[bugId] || {}), ...patch };
     setBugCategorizations(prev => {
-      const updated = { ...prev, [bugId]: { ...(prev[bugId] || {}), [field]: value } };
+      const updated = { ...prev, [bugId]: { ...(prev[bugId] || {}), ...patch } };
       try {
         localStorage.setItem('qa_bug_categorizations', JSON.stringify(updated));
       } catch (e) {}
@@ -475,11 +479,11 @@ export function useDashboardController({
     const targetBug = bugLogs.find(b => b.id === bugId);
     if (targetBug && onUpdateBugLog) {
       // A status change on a bug with the legacy stored status 'Filed' keeps its Filed stamp as real data.
-      const keepLegacyFiled = field === 'status' && targetBug.status === 'Filed' && !targetBug.filed
+      const keepLegacyFiled = patch.status !== undefined && targetBug.status === 'Filed' && !targetBug.filed
         ? { filed: { via: 'legacy' as const, at: targetBug.timestamp } }
         : {};
       // Setting type / priority / status is a review; keep expanded row open on the New tab until closed
-      if (feedTab === 'new' && expandedBugIds[bugId]) {
+      if (opts.stickyOnNewTab && feedTab === 'new' && expandedBugIds[bugId]) {
         setStickyNewBugIds(prev => new Set(prev).add(bugId));
         flashFeed('Marked reviewed · stays open until you close this row.');
       }
@@ -495,6 +499,11 @@ export function useDashboardController({
       });
     }
   };
+  const handleUpdateBugCategorization = (bugId: string, field: 'bugType' | 'priority' | 'status', value: any) =>
+    applyBugCategorization(bugId, { [field]: value } as BugCategorization, { stickyOnNewTab: true });
+  /** ① To review Confirm: applies the staged fields at once; the row is closed by the feed (not kept sticky). */
+  const confirmBugCategorization = (bugId: string, patch: Partial<Record<'bugType' | 'priority' | 'status', string>>) =>
+    applyBugCategorization(bugId, patch as BugCategorization, { stickyOnNewTab: false });
 
   // Global Escape key listener closes any active modal or popover
   useEffect(() => {
@@ -1866,6 +1875,7 @@ export function useDashboardController({
     filedIssueDrafts,
     setFiledIssueDrafts,
     handleUpdateBugCategorization,
+    confirmBugCategorization,
     handleCreateFeatureSubmit,
     fileInputRef,
     handleJSONFileImport,
