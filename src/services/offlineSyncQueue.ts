@@ -92,11 +92,27 @@ function deduplicateMutations(queue: OfflineMutation[]): OfflineMutation[] {
     if (key) {
       if ((mut.type === 'patchDevices' || mut.type === 'patchTesters') && mergedPayloadByKey.has(key)) {
         const prev = mergedPayloadByKey.get(key);
+        const prevFields = prev?.fieldUpdatedAt || prev?.changes?.fieldUpdatedAt || {};
+        const nextFields = mut.payload?.fieldUpdatedAt || mut.payload?.changes?.fieldUpdatedAt || {};
+        const mergedFieldUpdatedAt = { ...prevFields };
+        for (const [k, v] of Object.entries(nextFields)) {
+          if (v && (!mergedFieldUpdatedAt[k] || Date.parse(String(v)) >= Date.parse(String(mergedFieldUpdatedAt[k])))) {
+            mergedFieldUpdatedAt[k] = v;
+          } else if (!(k in mergedFieldUpdatedAt)) {
+            mergedFieldUpdatedAt[k] = v;
+          }
+        }
+        const hasFieldMap = Object.keys(mergedFieldUpdatedAt).length > 0;
         mergedPayloadByKey.set(key, {
           ...prev,
           ...mut.payload,
-          changes: { ...(prev?.changes || {}), ...(mut.payload?.changes || {}) },
+          changes: {
+            ...(prev?.changes || {}),
+            ...(mut.payload?.changes || {}),
+            ...(hasFieldMap ? { fieldUpdatedAt: mergedFieldUpdatedAt } : {}),
+          },
           updatedAt: mut.payload?.updatedAt || prev?.updatedAt,
+          ...(hasFieldMap ? { fieldUpdatedAt: mergedFieldUpdatedAt } : {}),
         });
       } else {
         mergedPayloadByKey.set(key, mut.payload);

@@ -4,7 +4,17 @@ import { PlanBuilder } from './components/PlanBuilder';
 import { MobileTester } from './components/MobileTester';
 import { Navbar, type DashboardTabKey, type NavbarTabCounts } from './components/Navbar';
 import { SAMPLE_PLANS, SAMPLE_RUNS, SAMPLE_BUG_LOGS } from './data/mockData';
-import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, RefinedBugText, ReproMatches } from './types';
+import {
+  TestPlan,
+  TestRun,
+  BugLog,
+  DeviceProfile,
+  DeviceEditableField,
+  TesterProfile,
+  TesterEditableField,
+  RefinedBugText,
+  ReproMatches,
+} from './types';
 import { bugTextSig } from './utils/bugRefine';
 import { exportAllQADataToJSON } from './utils/exportUtils';
 import {
@@ -618,6 +628,7 @@ export function App() {
         const currentDev = devicesRef.current.find(d => d.id === delta.deviceId);
         if (currentDev) {
           const hasQuotaDelta = delta.previousQuotas !== undefined;
+          const nowIso = new Date().toISOString();
           patches.push({
             id: currentDev.id,
             changes: hasQuotaDelta
@@ -631,7 +642,8 @@ export function App() {
                   activeTesterName: currentDev.activeTesterName,
                 },
             lockOnly: !hasQuotaDelta,
-            updatedAt: hasQuotaDelta ? new Date().toISOString() : undefined,
+            updatedAt: hasQuotaDelta ? nowIso : undefined,
+            fieldUpdatedAt: hasQuotaDelta ? { quotas: nowIso } : undefined,
           });
         }
       });
@@ -657,18 +669,31 @@ export function App() {
     (snapshot.bugs || []).forEach(b => safeSyncBugLog(b));
     (snapshot.modifiedBugs || []).forEach(b => safePatchBugColumns(b, ['bundle']));
     if ((snapshot.devices && snapshot.devices.length > 0) || (snapshot.deviceDeltas && snapshot.deviceDeltas.length > 0)) {
+      const fullDeviceIds = new Set((snapshot.devices || []).map(d => d.id));
       const affectedIds = new Set([
-        ...(snapshot.devices || []).map(d => d.id),
+        ...fullDeviceIds,
         ...(snapshot.deviceDeltas || []).map(d => d.deviceId),
       ]);
       const nowIso = new Date().toISOString();
       const patches: DevicePatch[] = [];
       restored.devices.forEach(d => {
         if (affectedIds.has(d.id)) {
+          const isFullRestore = fullDeviceIds.has(d.id);
+          const fieldUpdatedAt: Partial<Record<DeviceEditableField, string>> = isFullRestore
+            ? { name: nowIso, isReady: nowIso, quotas: nowIso }
+            : { quotas: nowIso };
           patches.push({
             id: d.id,
-            changes: { ...d, updatedAt: nowIso },
+            changes: isFullRestore
+              ? { ...d, updatedAt: nowIso, fieldUpdatedAt }
+              : {
+                  quotas: d.quotas,
+                  activeRunId: d.activeRunId,
+                  activeTesterName: d.activeTesterName,
+                  updatedAt: nowIso,
+                },
             updatedAt: nowIso,
+            fieldUpdatedAt,
           });
         }
       });
@@ -681,8 +706,9 @@ export function App() {
       safePatchTesters(
         snapshot.testers.map(t => ({
           id: t.id,
-          changes: { ...t, updatedAt: nowIso },
+          changes: { ...t, updatedAt: nowIso, fieldUpdatedAt: { name: nowIso, role: nowIso } },
           updatedAt: nowIso,
+          fieldUpdatedAt: { name: nowIso, role: nowIso },
         }))
       );
     }
@@ -2001,14 +2027,22 @@ export function App() {
 
     const nowIso = new Date().toISOString();
     setDevices(prev => {
-      const next = prev.map(d => ({
-        ...d,
-        quotas: [],
-        isReady: true,
-        activeRunId: undefined,
-        activeTesterName: undefined,
-        updatedAt: nowIso,
-      }));
+      const next = prev.map(d => {
+        const nextFieldUpdatedAt: Partial<Record<DeviceEditableField, string>> = {
+          name: d.fieldUpdatedAt && 'name' in d.fieldUpdatedAt ? d.fieldUpdatedAt.name || '' : d.updatedAt || '',
+          isReady: nowIso,
+          quotas: nowIso,
+        };
+        return {
+          ...d,
+          quotas: [],
+          isReady: true,
+          activeRunId: undefined,
+          activeTesterName: undefined,
+          updatedAt: nowIso,
+          fieldUpdatedAt: nextFieldUpdatedAt,
+        };
+      });
       devicesRef.current = next;
       safeSetStorageItem('qa_devices_list', JSON.stringify(next));
       safeSetStorageItem('qa_last_quota_reset_date', todayStr);
@@ -2016,12 +2050,14 @@ export function App() {
         next.map(d => ({
           id: d.id,
           updatedAt: nowIso,
+          fieldUpdatedAt: { isReady: nowIso, quotas: nowIso },
           changes: {
             quotas: [],
             isReady: true,
             activeRunId: undefined,
             activeTesterName: undefined,
             updatedAt: nowIso,
+            fieldUpdatedAt: d.fieldUpdatedAt,
           },
         }))
       );
@@ -3083,13 +3119,44 @@ export function App() {
     }
 
     const nowIso = new Date().toISOString();
+    const prevNameTs = existing
+      ? existing.fieldUpdatedAt && 'name' in existing.fieldUpdatedAt
+        ? existing.fieldUpdatedAt.name || ''
+        : existing.updatedAt || ''
+      : nowIso;
+    const prevReadyTs = existing
+      ? existing.fieldUpdatedAt && 'isReady' in existing.fieldUpdatedAt
+        ? existing.fieldUpdatedAt.isReady || ''
+        : existing.updatedAt || ''
+      : nowIso;
+    const prevQuotasTs = existing
+      ? existing.fieldUpdatedAt && 'quotas' in existing.fieldUpdatedAt
+        ? existing.fieldUpdatedAt.quotas || ''
+        : existing.updatedAt || ''
+      : nowIso;
+
+    const deviceFieldUpdatedAt: Partial<Record<DeviceEditableField, string>> = {
+      name: nameChanged ? nowIso : prevNameTs,
+      isReady: readyChanged ? nowIso : prevReadyTs,
+      quotas: quotasChanged ? nowIso : prevQuotasTs,
+    };
+
+    const patchFieldUpdatedAt: Partial<Record<DeviceEditableField, string>> = {};
+    if (!existing || nameChanged) patchFieldUpdatedAt.name = nowIso;
+    if (!existing || readyChanged) patchFieldUpdatedAt.isReady = nowIso;
+    if (!existing || quotasChanged) patchFieldUpdatedAt.quotas = nowIso;
+
     const stampedDevice: DeviceProfile = {
       ...device,
       name: trimmedName,
       updatedAt: nowIso,
+      fieldUpdatedAt: deviceFieldUpdatedAt,
     };
 
-    const changes: Partial<DeviceProfile> = { updatedAt: nowIso };
+    const changes: Partial<DeviceProfile> = {
+      updatedAt: nowIso,
+      fieldUpdatedAt: deviceFieldUpdatedAt,
+    };
     if (!existing) {
       changes.name = stampedDevice.name;
       changes.isReady = stampedDevice.isReady;
@@ -3116,7 +3183,14 @@ export function App() {
       return next;
     });
 
-    safePatchDevices([{ id: stampedDevice.id, updatedAt: nowIso, changes }]);
+    safePatchDevices([
+      {
+        id: stampedDevice.id,
+        updatedAt: nowIso,
+        fieldUpdatedAt: patchFieldUpdatedAt,
+        changes,
+      },
+    ]);
   };
 
   const handleDeleteDevice = (deviceId: string) => {
@@ -3185,18 +3259,67 @@ export function App() {
 
   const handleSaveTester = (tester: TesterProfile) => {
     markUserMutation();
-    const normName = (tester.name || '').toLowerCase().trim();
+    const trimmedName = (tester.name || '').trim();
+    if (!trimmedName) return;
+    const normName = trimmedName.toLowerCase();
     const nowIso = new Date().toISOString();
     setTesters(prev => {
       const existingById = prev.find(t => t.id === tester.id);
       const existingByName = !existingById ? prev.find(t => t.name.toLowerCase().trim() === normName) : undefined;
       const targetToUpdate = existingById || existingByName;
+      const nameChanged = !targetToUpdate || targetToUpdate.name.trim() !== trimmedName;
+      const roleChanged = !targetToUpdate || (targetToUpdate.role || undefined) !== (tester.role || undefined);
+
+      const prevNameTs = targetToUpdate
+        ? targetToUpdate.fieldUpdatedAt && 'name' in targetToUpdate.fieldUpdatedAt
+          ? targetToUpdate.fieldUpdatedAt.name || ''
+          : targetToUpdate.updatedAt || ''
+        : nowIso;
+      const prevRoleTs = targetToUpdate
+        ? targetToUpdate.fieldUpdatedAt && 'role' in targetToUpdate.fieldUpdatedAt
+          ? targetToUpdate.fieldUpdatedAt.role || ''
+          : targetToUpdate.updatedAt || ''
+        : nowIso;
+
+      const testerFieldUpdatedAt: Partial<Record<TesterEditableField, string>> = {
+        name: nameChanged ? nowIso : prevNameTs,
+        role: roleChanged ? nowIso : prevRoleTs,
+      };
+
+      const patchFieldUpdatedAt: Partial<Record<TesterEditableField, string>> = {};
+      if (!targetToUpdate || nameChanged) patchFieldUpdatedAt.name = nowIso;
+      if (!targetToUpdate || roleChanged) patchFieldUpdatedAt.role = nowIso;
+
       const canonicalTester: TesterProfile = targetToUpdate
-        ? { ...targetToUpdate, ...tester, id: targetToUpdate.id, name: tester.name.trim(), updatedAt: nowIso }
-        : { ...tester, name: tester.name.trim(), updatedAt: nowIso };
+        ? {
+            ...targetToUpdate,
+            ...tester,
+            id: targetToUpdate.id,
+            name: trimmedName,
+            updatedAt: nowIso,
+            fieldUpdatedAt: testerFieldUpdatedAt,
+          }
+        : {
+            ...tester,
+            name: trimmedName,
+            updatedAt: nowIso,
+            fieldUpdatedAt: testerFieldUpdatedAt,
+          };
+
+      const changes: Partial<TesterProfile> = {
+        updatedAt: nowIso,
+        fieldUpdatedAt: testerFieldUpdatedAt,
+      };
+      if (!targetToUpdate) {
+        changes.name = canonicalTester.name;
+        changes.role = canonicalTester.role;
+      } else {
+        if (nameChanged) changes.name = canonicalTester.name;
+        if (roleChanged) changes.role = canonicalTester.role;
+      }
 
       const next = targetToUpdate
-        ? prev.map(t => t.id === targetToUpdate.id ? canonicalTester : t)
+        ? prev.map(t => (t.id === targetToUpdate.id ? canonicalTester : t))
         : [...prev, canonicalTester];
       testersRef.current = next;
       safeSetStorageItem('qa_testers_list', JSON.stringify(next));
@@ -3204,7 +3327,8 @@ export function App() {
         {
           id: canonicalTester.id,
           updatedAt: nowIso,
-          changes: canonicalTester,
+          fieldUpdatedAt: patchFieldUpdatedAt,
+          changes,
         },
       ]);
       return next;

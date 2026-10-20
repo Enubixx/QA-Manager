@@ -1,5 +1,15 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, BundleSuggestion, BundleSuggestionSet } from '../types';
+import {
+  TestPlan,
+  TestRun,
+  BugLog,
+  DeviceProfile,
+  DeviceEditableField,
+  TesterProfile,
+  TesterEditableField,
+  BundleSuggestion,
+  BundleSuggestionSet,
+} from '../types';
 import { extractDeviceIdFromRunId } from '../utils/runUtils';
 
 export { extractDeviceIdFromRunId };
@@ -1041,6 +1051,7 @@ export interface DevicePatch {
   id: string;
   changes: Partial<DeviceProfile>;
   updatedAt?: string;
+  fieldUpdatedAt?: Partial<Record<DeviceEditableField, string>>;
   lockOnly?: boolean;
 }
 
@@ -1048,7 +1059,11 @@ export interface TesterPatch {
   id: string;
   changes: Partial<TesterProfile>;
   updatedAt?: string;
+  fieldUpdatedAt?: Partial<Record<TesterEditableField, string>>;
 }
+
+const DEVICE_EDITABLE_FIELDS: readonly DeviceEditableField[] = ['name', 'isReady', 'quotas'];
+const TESTER_EDITABLE_FIELDS: readonly TesterEditableField[] = ['name', 'role'];
 
 /**
  * Compares two optional ISO timestamps:
@@ -1067,13 +1082,61 @@ export const compareUpdatedAt = (a?: string, b?: string): number => {
   return 0;
 };
 
+const getDeviceFieldTs = (
+  dev: Partial<DeviceProfile> | undefined,
+  field: DeviceEditableField
+): string | undefined => {
+  if (!dev) return undefined;
+  if (dev.fieldUpdatedAt && field in dev.fieldUpdatedAt) {
+    return dev.fieldUpdatedAt[field] || undefined;
+  }
+  return dev.updatedAt || undefined;
+};
+
+const getDevicePatchFieldTs = (
+  patch: DevicePatch,
+  field: DeviceEditableField
+): string | undefined => {
+  if (patch.fieldUpdatedAt && field in patch.fieldUpdatedAt) {
+    return patch.fieldUpdatedAt[field] || undefined;
+  }
+  if (patch.changes?.fieldUpdatedAt && field in patch.changes.fieldUpdatedAt) {
+    return patch.changes.fieldUpdatedAt[field] || undefined;
+  }
+  return patch.updatedAt || patch.changes?.updatedAt || undefined;
+};
+
+const getTesterFieldTs = (
+  tester: Partial<TesterProfile> | undefined,
+  field: TesterEditableField
+): string | undefined => {
+  if (!tester) return undefined;
+  if (tester.fieldUpdatedAt && field in tester.fieldUpdatedAt) {
+    return tester.fieldUpdatedAt[field] || undefined;
+  }
+  return tester.updatedAt || undefined;
+};
+
+const getTesterPatchFieldTs = (
+  patch: TesterPatch,
+  field: TesterEditableField
+): string | undefined => {
+  if (patch.fieldUpdatedAt && field in patch.fieldUpdatedAt) {
+    return patch.fieldUpdatedAt[field] || undefined;
+  }
+  if (patch.changes?.fieldUpdatedAt && field in patch.changes.fieldUpdatedAt) {
+    return patch.changes.fieldUpdatedAt[field] || undefined;
+  }
+  return patch.updatedAt || patch.changes?.updatedAt || undefined;
+};
+
 /**
  * Applies per-device patches onto the current cloud device list:
  * - Honors `deletedIds` tombstones (never re-inserts a tombstoned device).
  * - For `lockOnly: true` patches: only updates `activeRunId` and `activeTesterName` on an existing device;
- *   never creates a missing device and never touches `name`, `isReady`, `quotas`, or `updatedAt`.
- * - For user-edit patches: if the cloud copy has a strictly newer `updatedAt` than the patch, the cloud
- *   copy wins (stale writer loses). Otherwise only `patch.changes` are merged onto that device.
+ *   never creates a missing device and never touches `name`, `isReady`, `quotas`, `updatedAt`, or `fieldUpdatedAt`.
+ * - For user-edit patches: resolves conflicts per field (`name`, `isReady`, `quotas`) using `fieldUpdatedAt`
+ *   (falling back to `updatedAt`), dropping only the specific fields where the cloud copy has a newer timestamp.
  */
 export const applyDevicePatches = (
   cloudDevices: DeviceProfile[],
@@ -1085,7 +1148,10 @@ export const applyDevicePatches = (
 
   for (const d of cloudDevices || []) {
     if (!d || !d.id || deletedIds.has(d.id) || byId.has(d.id)) continue;
-    const copy: DeviceProfile = { ...d };
+    const copy: DeviceProfile = {
+      ...d,
+      ...(d.fieldUpdatedAt ? { fieldUpdatedAt: { ...d.fieldUpdatedAt } } : {}),
+    };
     list.push(copy);
     byId.set(copy.id, copy);
   }
@@ -1096,28 +1162,77 @@ export const applyDevicePatches = (
 
     if (patch.lockOnly) {
       if (existing) {
-        if ('activeRunId' in patch.changes) existing.activeRunId = patch.changes.activeRunId;
-        if ('activeTesterName' in patch.changes) existing.activeTesterName = patch.changes.activeTesterName;
+        if ('activeRunId' in patch.changes) {
+          if (patch.changes.activeRunId === undefined) delete existing.activeRunId;
+          else existing.activeRunId = patch.changes.activeRunId;
+        }
+        if ('activeTesterName' in patch.changes) {
+          if (patch.changes.activeTesterName === undefined) delete existing.activeTesterName;
+          else existing.activeTesterName = patch.changes.activeTesterName;
+        }
       }
       continue;
     }
 
     const patchTs = patch.updatedAt ?? patch.changes.updatedAt;
     if (existing) {
-      if (existing.updatedAt && patchTs && compareUpdatedAt(existing.updatedAt, patchTs) > 0) {
-        // Stale writer loses against newer updatedAt in cloud
-        continue;
-      }
-      const next: DeviceProfile = {
-        ...existing,
-        ...patch.changes,
-        id: existing.id,
-        ...(patchTs || existing.updatedAt ? { updatedAt: patchTs || existing.updatedAt } : {}),
+      const nextFieldUpdatedAt: Partial<Record<DeviceEditableField, string>> = {
+        name: getDeviceFieldTs(existing, 'name') ?? '',
+        isReady: getDeviceFieldTs(existing, 'isReady') ?? '',
+        quotas: getDeviceFieldTs(existing, 'quotas') ?? '',
       };
-      Object.assign(existing, next);
-      if (next.activeRunId === undefined) delete existing.activeRunId;
-      if (next.activeTesterName === undefined) delete existing.activeTesterName;
+
+      for (const field of DEVICE_EDITABLE_FIELDS) {
+        if (!(field in patch.changes) || patch.changes[field] === undefined) continue;
+        const existingFieldTs = getDeviceFieldTs(existing, field);
+        const patchFieldTs = getDevicePatchFieldTs(patch, field);
+        if (compareUpdatedAt(existingFieldTs, patchFieldTs) > 0) {
+          // Cloud copy of this field is strictly newer; drop only this field
+          continue;
+        }
+        (existing as any)[field] = patch.changes[field];
+        const winningTs =
+          compareUpdatedAt(patchFieldTs, existingFieldTs) >= 0 ? patchFieldTs : existingFieldTs;
+        nextFieldUpdatedAt[field] = winningTs ?? '';
+      }
+
+      const canApplyLockFields =
+        !existing.updatedAt || !patchTs || compareUpdatedAt(patchTs, existing.updatedAt) >= 0;
+      if (canApplyLockFields) {
+        if ('activeRunId' in patch.changes) {
+          if (patch.changes.activeRunId === undefined) delete existing.activeRunId;
+          else existing.activeRunId = patch.changes.activeRunId;
+        }
+        if ('activeTesterName' in patch.changes) {
+          if (patch.changes.activeTesterName === undefined) delete existing.activeTesterName;
+          else existing.activeTesterName = patch.changes.activeTesterName;
+        }
+      }
+
+      const maxFieldTs = DEVICE_EDITABLE_FIELDS.map(f => nextFieldUpdatedAt[f] || undefined).reduce<
+        string | undefined
+      >((acc, ts) => (compareUpdatedAt(ts, acc) > 0 ? ts : acc), undefined);
+      const candidateTs =
+        compareUpdatedAt(patchTs, maxFieldTs) > 0 ? patchTs : maxFieldTs;
+      const overallTs =
+        compareUpdatedAt(candidateTs, existing.updatedAt) >= 0 ? candidateTs : existing.updatedAt;
+      if (overallTs) {
+        existing.updatedAt = overallTs;
+      }
+      if (Object.values(nextFieldUpdatedAt).some(Boolean)) {
+        existing.fieldUpdatedAt = nextFieldUpdatedAt;
+      }
     } else if (typeof patch.changes.name === 'string' && patch.changes.name.trim() !== '') {
+      const nameTs = getDevicePatchFieldTs(patch, 'name');
+      const readyTs =
+        'isReady' in patch.changes ? getDevicePatchFieldTs(patch, 'isReady') : nameTs;
+      const quotasTs =
+        'quotas' in patch.changes ? getDevicePatchFieldTs(patch, 'quotas') : nameTs;
+      const createdFieldUpdatedAt: Partial<Record<DeviceEditableField, string>> = {
+        name: nameTs ?? '',
+        isReady: readyTs ?? '',
+        quotas: quotasTs ?? '',
+      };
       const created: DeviceProfile = {
         id: patch.id,
         name: patch.changes.name,
@@ -1126,7 +1241,12 @@ export const applyDevicePatches = (
         activeRunId: patch.changes.activeRunId,
         activeTesterName: patch.changes.activeTesterName,
         ...(patchTs ? { updatedAt: patchTs } : {}),
+        ...(Object.values(createdFieldUpdatedAt).some(Boolean)
+          ? { fieldUpdatedAt: createdFieldUpdatedAt }
+          : {}),
       };
+      if (created.activeRunId === undefined) delete created.activeRunId;
+      if (created.activeTesterName === undefined) delete created.activeTesterName;
       list.push(created);
       byId.set(created.id, created);
     }
@@ -1136,7 +1256,8 @@ export const applyDevicePatches = (
 };
 
 /**
- * Merges `cloudDevices` and `localDevices` per device ID using `updatedAt` (newest wins) and honoring `deletedIds`.
+ * Merges `cloudDevices` and `localDevices` per device ID and per editable field (`name`, `isReady`, `quotas`)
+ * using `fieldUpdatedAt` (falling back to `updatedAt`), honoring `deletedIds`.
  */
 export const mergeDevicesLists = (
   cloudDevices: DeviceProfile[],
@@ -1154,33 +1275,130 @@ export const mergeDevicesLists = (
     seenIds.add(cloudDev.id);
     const localDev = localById.get(cloudDev.id);
     if (!localDev) {
-      result.push({ ...cloudDev });
+      result.push({
+        ...cloudDev,
+        ...(cloudDev.fieldUpdatedAt ? { fieldUpdatedAt: { ...cloudDev.fieldUpdatedAt } } : {}),
+      });
       continue;
     }
-    const cmp = compareUpdatedAt(cloudDev.updatedAt, localDev.updatedAt);
-    if (cmp > 0) {
-      result.push({ ...cloudDev });
-    } else if (cmp < 0) {
-      result.push({ ...localDev });
-    } else {
-      result.push({ ...(preferCloudOnTie ? cloudDev : localDev) });
+
+    const overallCmp = compareUpdatedAt(cloudDev.updatedAt, localDev.updatedAt);
+    const baseDev =
+      overallCmp > 0
+        ? cloudDev
+        : overallCmp < 0
+        ? localDev
+        : preferCloudOnTie
+        ? cloudDev
+        : localDev;
+    const mergedDev: DeviceProfile = { ...baseDev, id: cloudDev.id };
+    const mergedFieldUpdatedAt: Partial<Record<DeviceEditableField, string>> = {};
+
+    for (const field of DEVICE_EDITABLE_FIELDS) {
+      const cloudFieldTs = getDeviceFieldTs(cloudDev, field);
+      const localFieldTs = getDeviceFieldTs(localDev, field);
+      const fieldCmp = compareUpdatedAt(cloudFieldTs, localFieldTs);
+      if (fieldCmp > 0) {
+        (mergedDev as any)[field] = cloudDev[field];
+        mergedFieldUpdatedAt[field] = cloudFieldTs ?? '';
+      } else if (fieldCmp < 0) {
+        (mergedDev as any)[field] = localDev[field];
+        mergedFieldUpdatedAt[field] = localFieldTs ?? '';
+      } else {
+        (mergedDev as any)[field] = preferCloudOnTie ? cloudDev[field] : localDev[field];
+        mergedFieldUpdatedAt[field] = (preferCloudOnTie ? cloudFieldTs : localFieldTs) ?? '';
+      }
     }
+
+    const maxFieldTs = DEVICE_EDITABLE_FIELDS.map(f => mergedFieldUpdatedAt[f] || undefined).reduce<
+      string | undefined
+    >((acc, ts) => (compareUpdatedAt(ts, acc) > 0 ? ts : acc), undefined);
+    const finalUpdatedAt =
+      compareUpdatedAt(maxFieldTs, baseDev.updatedAt) >= 0 ? maxFieldTs : baseDev.updatedAt;
+    if (finalUpdatedAt) {
+      mergedDev.updatedAt = finalUpdatedAt;
+    } else {
+      delete mergedDev.updatedAt;
+    }
+
+    if (
+      cloudDev.fieldUpdatedAt ||
+      localDev.fieldUpdatedAt ||
+      Object.values(mergedFieldUpdatedAt).some(Boolean)
+    ) {
+      mergedDev.fieldUpdatedAt = mergedFieldUpdatedAt;
+    } else {
+      delete mergedDev.fieldUpdatedAt;
+    }
+
+    result.push(mergedDev);
   }
 
   for (const localDev of validLocal) {
     if (seenIds.has(localDev.id)) continue;
-    // Include local-only device if it has an updatedAt stamp, or if cloud was empty, or if local is preferred on tie
-    if (!preferCloudOnTie || Boolean(localDev.updatedAt) || validCloud.length === 0) {
+    // Include local-only device if it has an updatedAt or fieldUpdatedAt stamp, or if cloud was empty, or if local is preferred on tie
+    const hasLocalTimestamp =
+      Boolean(localDev.updatedAt) ||
+      Boolean(localDev.fieldUpdatedAt && Object.values(localDev.fieldUpdatedAt).some(Boolean));
+    if (!preferCloudOnTie || hasLocalTimestamp || validCloud.length === 0) {
       seenIds.add(localDev.id);
-      result.push({ ...localDev });
+      result.push({
+        ...localDev,
+        ...(localDev.fieldUpdatedAt ? { fieldUpdatedAt: { ...localDev.fieldUpdatedAt } } : {}),
+      });
     }
   }
 
   return result;
 };
 
+const applyPatchToExistingTester = (existing: TesterProfile, patch: TesterPatch) => {
+  const patchTs = patch.updatedAt ?? patch.changes.updatedAt;
+  const nextFieldUpdatedAt: Partial<Record<TesterEditableField, string>> = {
+    name: getTesterFieldTs(existing, 'name') ?? '',
+    role: getTesterFieldTs(existing, 'role') ?? '',
+  };
+
+  for (const field of TESTER_EDITABLE_FIELDS) {
+    if (!(field in patch.changes)) continue;
+    if (
+      field === 'name' &&
+      (typeof patch.changes.name !== 'string' || patch.changes.name.trim() === '')
+    ) {
+      continue;
+    }
+    const existingFieldTs = getTesterFieldTs(existing, field);
+    const patchFieldTs = getTesterPatchFieldTs(patch, field);
+    if (compareUpdatedAt(existingFieldTs, patchFieldTs) > 0) {
+      continue;
+    }
+    if (field === 'name' && typeof patch.changes.name === 'string') {
+      existing.name = patch.changes.name.trim();
+    } else {
+      (existing as any)[field] = patch.changes[field];
+    }
+    const winningTs =
+      compareUpdatedAt(patchFieldTs, existingFieldTs) >= 0 ? patchFieldTs : existingFieldTs;
+    nextFieldUpdatedAt[field] = winningTs ?? '';
+  }
+
+  const maxFieldTs = TESTER_EDITABLE_FIELDS.map(f => nextFieldUpdatedAt[f] || undefined).reduce<
+    string | undefined
+  >((acc, ts) => (compareUpdatedAt(ts, acc) > 0 ? ts : acc), undefined);
+  const candidateTs = compareUpdatedAt(patchTs, maxFieldTs) > 0 ? patchTs : maxFieldTs;
+  const overallTs =
+    compareUpdatedAt(candidateTs, existing.updatedAt) >= 0 ? candidateTs : existing.updatedAt;
+  if (overallTs) {
+    existing.updatedAt = overallTs;
+  }
+  if (Object.values(nextFieldUpdatedAt).some(Boolean)) {
+    existing.fieldUpdatedAt = nextFieldUpdatedAt;
+  }
+};
+
 /**
- * Applies per-tester patches onto the current cloud tester list, honoring `deletedIds` and `updatedAt`.
+ * Applies per-tester patches onto the current cloud tester list, honoring `deletedIds` and per-field
+ * `fieldUpdatedAt` (falling back to `updatedAt`).
  */
 export const applyTesterPatches = (
   cloudTesters: TesterProfile[],
@@ -1192,7 +1410,10 @@ export const applyTesterPatches = (
 
   for (const t of cloudTesters || []) {
     if (!t || !t.id || deletedIds.has(t.id) || byId.has(t.id)) continue;
-    const copy: TesterProfile = { ...t };
+    const copy: TesterProfile = {
+      ...t,
+      ...(t.fieldUpdatedAt ? { fieldUpdatedAt: { ...t.fieldUpdatedAt } } : {}),
+    };
     list.push(copy);
     byId.set(copy.id, copy);
   }
@@ -1203,34 +1424,28 @@ export const applyTesterPatches = (
     const patchTs = patch.updatedAt ?? patch.changes.updatedAt;
 
     if (existing) {
-      if (existing.updatedAt && patchTs && compareUpdatedAt(existing.updatedAt, patchTs) > 0) {
-        continue;
-      }
-      const next: TesterProfile = {
-        ...existing,
-        ...patch.changes,
-        id: existing.id,
-        ...(patchTs || existing.updatedAt ? { updatedAt: patchTs || existing.updatedAt } : {}),
-      };
-      Object.assign(existing, next);
+      applyPatchToExistingTester(existing, patch);
     } else if (typeof patch.changes.name === 'string' && patch.changes.name.trim() !== '') {
       const normName = patch.changes.name.trim().toLowerCase();
       const byName = list.find(t => t.name.trim().toLowerCase() === normName);
       if (byName) {
-        if (!byName.updatedAt || !patchTs || compareUpdatedAt(byName.updatedAt, patchTs) <= 0) {
-          Object.assign(byName, {
-            ...byName,
-            ...patch.changes,
-            id: byName.id,
-            ...(patchTs || byName.updatedAt ? { updatedAt: patchTs || byName.updatedAt } : {}),
-          });
-        }
+        applyPatchToExistingTester(byName, patch);
       } else {
+        const nameTs = getTesterPatchFieldTs(patch, 'name');
+        const roleTs =
+          'role' in patch.changes ? getTesterPatchFieldTs(patch, 'role') : nameTs;
+        const createdFieldUpdatedAt: Partial<Record<TesterEditableField, string>> = {
+          name: nameTs ?? '',
+          role: roleTs ?? '',
+        };
         const created: TesterProfile = {
           id: patch.id,
           name: patch.changes.name.trim(),
           role: patch.changes.role,
           ...(patchTs ? { updatedAt: patchTs } : {}),
+          ...(Object.values(createdFieldUpdatedAt).some(Boolean)
+            ? { fieldUpdatedAt: createdFieldUpdatedAt }
+            : {}),
         };
         list.push(created);
         byId.set(created.id, created);
@@ -1242,7 +1457,8 @@ export const applyTesterPatches = (
 };
 
 /**
- * Merges `cloudTesters` and `localTesters` per tester ID using `updatedAt` (newest wins) and honoring `deletedIds`.
+ * Merges `cloudTesters` and `localTesters` per tester ID and per editable field (`name`, `role`)
+ * using `fieldUpdatedAt` (falling back to `updatedAt`) and honoring `deletedIds`.
  */
 export const mergeTestersLists = (
   cloudTesters: TesterProfile[],
@@ -1262,10 +1478,59 @@ export const mergeTestersLists = (
     const localTester = localById.get(cloudTester.id);
     let chosen: TesterProfile;
     if (!localTester) {
-      chosen = { ...cloudTester };
+      chosen = {
+        ...cloudTester,
+        ...(cloudTester.fieldUpdatedAt ? { fieldUpdatedAt: { ...cloudTester.fieldUpdatedAt } } : {}),
+      };
     } else {
-      const cmp = compareUpdatedAt(cloudTester.updatedAt, localTester.updatedAt);
-      chosen = cmp > 0 ? { ...cloudTester } : cmp < 0 ? { ...localTester } : { ...(preferCloudOnTie ? cloudTester : localTester) };
+      const overallCmp = compareUpdatedAt(cloudTester.updatedAt, localTester.updatedAt);
+      const baseTester =
+        overallCmp > 0
+          ? cloudTester
+          : overallCmp < 0
+          ? localTester
+          : preferCloudOnTie
+          ? cloudTester
+          : localTester;
+      chosen = { ...baseTester, id: cloudTester.id };
+      const mergedFieldUpdatedAt: Partial<Record<TesterEditableField, string>> = {};
+
+      for (const field of TESTER_EDITABLE_FIELDS) {
+        const cloudFieldTs = getTesterFieldTs(cloudTester, field);
+        const localFieldTs = getTesterFieldTs(localTester, field);
+        const fieldCmp = compareUpdatedAt(cloudFieldTs, localFieldTs);
+        if (fieldCmp > 0) {
+          (chosen as any)[field] = cloudTester[field];
+          mergedFieldUpdatedAt[field] = cloudFieldTs ?? '';
+        } else if (fieldCmp < 0) {
+          (chosen as any)[field] = localTester[field];
+          mergedFieldUpdatedAt[field] = localFieldTs ?? '';
+        } else {
+          (chosen as any)[field] = preferCloudOnTie ? cloudTester[field] : localTester[field];
+          mergedFieldUpdatedAt[field] = (preferCloudOnTie ? cloudFieldTs : localFieldTs) ?? '';
+        }
+      }
+
+      const maxFieldTs = TESTER_EDITABLE_FIELDS.map(f => mergedFieldUpdatedAt[f] || undefined).reduce<
+        string | undefined
+      >((acc, ts) => (compareUpdatedAt(ts, acc) > 0 ? ts : acc), undefined);
+      const finalUpdatedAt =
+        compareUpdatedAt(maxFieldTs, baseTester.updatedAt) >= 0 ? maxFieldTs : baseTester.updatedAt;
+      if (finalUpdatedAt) {
+        chosen.updatedAt = finalUpdatedAt;
+      } else {
+        delete chosen.updatedAt;
+      }
+
+      if (
+        cloudTester.fieldUpdatedAt ||
+        localTester.fieldUpdatedAt ||
+        Object.values(mergedFieldUpdatedAt).some(Boolean)
+      ) {
+        chosen.fieldUpdatedAt = mergedFieldUpdatedAt;
+      } else {
+        delete chosen.fieldUpdatedAt;
+      }
     }
     seenNames.add((chosen.name || '').trim().toLowerCase());
     result.push(chosen);
@@ -1274,10 +1539,16 @@ export const mergeTestersLists = (
   for (const localTester of validLocal) {
     const normName = (localTester.name || '').trim().toLowerCase();
     if (seenIds.has(localTester.id) || (normName && seenNames.has(normName))) continue;
-    if (!preferCloudOnTie || Boolean(localTester.updatedAt) || validCloud.length === 0) {
+    const hasLocalTimestamp =
+      Boolean(localTester.updatedAt) ||
+      Boolean(localTester.fieldUpdatedAt && Object.values(localTester.fieldUpdatedAt).some(Boolean));
+    if (!preferCloudOnTie || hasLocalTimestamp || validCloud.length === 0) {
       seenIds.add(localTester.id);
       if (normName) seenNames.add(normName);
-      result.push({ ...localTester });
+      result.push({
+        ...localTester,
+        ...(localTester.fieldUpdatedAt ? { fieldUpdatedAt: { ...localTester.fieldUpdatedAt } } : {}),
+      });
     }
   }
 
@@ -1394,6 +1665,7 @@ export const syncDeviceToSupabase = async (device: DeviceProfile) => {
       id: device.id,
       changes: device,
       updatedAt: device.updatedAt,
+      fieldUpdatedAt: device.fieldUpdatedAt,
     });
   } catch (err) {
     console.error('syncDeviceToSupabase error:', err);
@@ -1431,6 +1703,7 @@ export const syncTesterToSupabase = async (tester: TesterProfile) => {
       id: tester.id,
       changes: tester,
       updatedAt: tester.updatedAt,
+      fieldUpdatedAt: tester.fieldUpdatedAt,
     });
   } catch (err) {
     console.error('syncTesterToSupabase error:', err);

@@ -181,6 +181,168 @@ describe('Items A & B: Per-device and per-tester patches & updatedAt reconciliat
     expect(merged.find(t => t.id === 't-1')?.role).toBe('Lead Tester');
     expect(merged.find(t => t.id === 't-2')?.name).toBe('Bob');
   });
+
+  it('per-field conflict resolution on devices: different fields edited on the same device both stick even when later timestamp lands first', () => {
+    const legacyCloud: DeviceProfile[] = [
+      { id: 'dev-1', name: 'WP01', isReady: true, quotas: [] },
+    ];
+
+    // User A edits quotas at t=1, User B toggles isReady at t=2.
+    // Suppose User B's write (t=2) lands in cloud FIRST:
+    const afterB = applyDevicePatches(legacyCloud, [
+      {
+        id: 'dev-1',
+        updatedAt: '2026-10-20T01:00:02.000Z',
+        fieldUpdatedAt: { isReady: '2026-10-20T01:00:02.000Z' },
+        changes: {
+          isReady: false,
+          updatedAt: '2026-10-20T01:00:02.000Z',
+        },
+      },
+    ]);
+
+    // Now User A's write (t=1, earlier timestamp than B's t=2) lands SECOND:
+    const afterA = applyDevicePatches(afterB, [
+      {
+        id: 'dev-1',
+        updatedAt: '2026-10-20T01:00:01.000Z',
+        fieldUpdatedAt: { quotas: '2026-10-20T01:00:01.000Z' },
+        changes: {
+          quotas: [{ planId: 'plan-1', targetRunsPerDay: 4 }],
+          updatedAt: '2026-10-20T01:00:01.000Z',
+        },
+      },
+    ]);
+
+    // Both edits on dev-1 must stick!
+    expect(afterA[0].isReady).toBe(false);
+    expect(afterA[0].quotas).toEqual([{ planId: 'plan-1', targetRunsPerDay: 4 }]);
+    expect(afterA[0].name).toBe('WP01');
+
+    // Also verify mergeDevicesLists merges per field when polling snapshots
+    const localSnapshot: DeviceProfile[] = [
+      {
+        id: 'dev-1',
+        name: 'WP01-Renamed',
+        isReady: true,
+        quotas: [],
+        updatedAt: '2026-10-20T01:00:01.500Z',
+        fieldUpdatedAt: { name: '2026-10-20T01:00:01.500Z', isReady: '', quotas: '' },
+      },
+    ];
+    const merged = mergeDevicesLists(afterA, localSnapshot);
+    expect(merged[0].name).toBe('WP01-Renamed');
+    expect(merged[0].isReady).toBe(false);
+    expect(merged[0].quotas).toEqual([{ planId: 'plan-1', targetRunsPerDay: 4 }]);
+  });
+
+  it('per-field conflict resolution on devices: same field newer timestamp wins and legacy devices without fieldUpdatedAt fall back to updatedAt', () => {
+    // Legacy device with updatedAt at t=5 and no fieldUpdatedAt map
+    const legacyWithUpdatedAt: DeviceProfile[] = [
+      {
+        id: 'dev-1',
+        name: 'WP01',
+        isReady: false,
+        quotas: [{ planId: 'plan-1', targetRunsPerDay: 5 }],
+        updatedAt: '2026-10-20T01:00:05.000Z',
+      },
+    ];
+
+    // Stale patch on quotas at t=3 is rejected, while newer patch on name at t=8 in another patch succeeds
+    const afterStaleQuotas = applyDevicePatches(legacyWithUpdatedAt, [
+      {
+        id: 'dev-1',
+        updatedAt: '2026-10-20T01:00:03.000Z',
+        fieldUpdatedAt: { quotas: '2026-10-20T01:00:03.000Z' },
+        changes: {
+          quotas: [{ planId: 'plan-1', targetRunsPerDay: 1 }],
+        },
+      },
+    ]);
+    expect(afterStaleQuotas[0].quotas).toEqual([{ planId: 'plan-1', targetRunsPerDay: 5 }]);
+
+    // Newer edit to same field (quotas at t=9) wins over t=5
+    const afterNewerQuotas = applyDevicePatches(afterStaleQuotas, [
+      {
+        id: 'dev-1',
+        updatedAt: '2026-10-20T01:00:09.000Z',
+        fieldUpdatedAt: { quotas: '2026-10-20T01:00:09.000Z' },
+        changes: {
+          quotas: [{ planId: 'plan-1', targetRunsPerDay: 9 }],
+        },
+      },
+    ]);
+    expect(afterNewerQuotas[0].quotas).toEqual([{ planId: 'plan-1', targetRunsPerDay: 9 }]);
+    expect(afterNewerQuotas[0].isReady).toBe(false);
+  });
+
+  it('per-field conflict resolution on testers: different fields (name vs role) both stick, same field newer wins, legacy testers fall back to updatedAt', () => {
+    const legacyTesters: TesterProfile[] = [
+      {
+        id: 't-1',
+        name: 'Alice',
+        role: 'Tester',
+        updatedAt: '2026-10-20T01:00:01.000Z',
+      },
+    ];
+
+    // User B updates role at t=4 first
+    const afterRole = applyTesterPatches(legacyTesters, [
+      {
+        id: 't-1',
+        updatedAt: '2026-10-20T01:00:04.000Z',
+        fieldUpdatedAt: { role: '2026-10-20T01:00:04.000Z' },
+        changes: { role: 'QA Lead' },
+      },
+    ]);
+
+    // User A updates name at t=3 (newer than legacy t=1, older than B's role edit at t=4)
+    // and also carries a stale role at t=2 (older than B's t=4)
+    const afterName = applyTesterPatches(afterRole, [
+      {
+        id: 't-1',
+        updatedAt: '2026-10-20T01:00:03.000Z',
+        fieldUpdatedAt: {
+          name: '2026-10-20T01:00:03.000Z',
+          role: '2026-10-20T01:00:02.000Z',
+        },
+        changes: { name: 'Alice Smith', role: 'Stale Role' },
+      },
+    ]);
+
+    expect(afterName[0].name).toBe('Alice Smith');
+    expect(afterName[0].role).toBe('QA Lead');
+
+    // mergeTestersLists also resolves name and role independently per field
+    const merged = mergeTestersLists(
+      [
+        {
+          id: 't-1',
+          name: 'Alice Cloud',
+          role: 'Junior QA',
+          updatedAt: '2026-10-20T01:00:10.000Z',
+          fieldUpdatedAt: {
+            name: '2026-10-20T01:00:10.000Z',
+            role: '2026-10-20T01:00:02.000Z',
+          },
+        },
+      ],
+      [
+        {
+          id: 't-1',
+          name: 'Alice Local',
+          role: 'Senior QA',
+          updatedAt: '2026-10-20T01:00:08.000Z',
+          fieldUpdatedAt: {
+            name: '2026-10-20T01:00:05.000Z',
+            role: '2026-10-20T01:00:08.000Z',
+          },
+        },
+      ]
+    );
+    expect(merged[0].name).toBe('Alice Cloud');
+    expect(merged[0].role).toBe('Senior QA');
+  });
 });
 
 describe('Items C, G, H: Tombstones for deleted devices, testers, bugs, and runs', () => {

@@ -213,6 +213,9 @@ export interface DevicePlanQuota {
   targetRunsPerDay: number;
 }
 
+export type DeviceEditableField = 'name' | 'isReady' | 'quotas';
+export type TesterEditableField = 'name' | 'role';
+
 export interface DeviceProfile {
   id: string;
   name: string;
@@ -221,6 +224,7 @@ export interface DeviceProfile {
   activeRunId?: string;
   activeTesterName?: string;
   updatedAt?: string;
+  fieldUpdatedAt?: Partial<Record<DeviceEditableField, string>>;
 }
 
 export interface TesterProfile {
@@ -228,4 +232,5 @@ export interface TesterProfile {
   name: string;
   role?: string;
   updatedAt?: string;
+  fieldUpdatedAt?: Partial<Record<TesterEditableField, string>>;
 }
