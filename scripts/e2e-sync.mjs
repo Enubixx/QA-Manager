@@ -14,6 +14,9 @@
  *   4      A deletes a bug that is also embedded in an archived run -> gone 20 s later in A, B and cloud
  *   5      a live run on one of two devices named DUP1 locks only that device
  *   6      Floor Ready/Maintenance toggle + quota edits from both clients stick
+ *   7a-7d  Undo (toast, within 10 s) of a deleted device / tester / bug embedded in a run / whole run brings it back
+ *          in A, B and the cloud (tombstone cleared, rows + embedded copies back) and it stays
+ *   8a-8d  same via Recently deleted -> Restore after the 10 s window
  * Exit code 0 = all passed.
  */
 import { spawn } from 'node:child_process';
@@ -133,6 +136,17 @@ async function cloudDevices() {
     list.push(...arr);
   }
   return list.filter(d => d && !deleted.has(d.id));
+}
+async function cloudTesters() {
+  const t = await cloudState();
+  const deleted = new Set();
+  for (const p of prefixed(t, '__GLOBAL_DELETED_TESTERS__:')) collectIds(p, deleted);
+  const list = [];
+  for (const p of prefixed(t, '__GLOBAL_TESTERS_CONFIG__:')) {
+    if (!Array.isArray(p) && p.deletedIds) collectIds(p.deletedIds, deleted);
+    list.push(...(Array.isArray(p) ? p : p.testers || p.list || []));
+  }
+  return list.filter(x => x && !deleted.has(x.id));
 }
 async function cloudBugPresent(bugId) {
   const t = await cloudState();
@@ -452,6 +466,135 @@ async function caseFloorToggleAndQuota() {
   });
 }
 
+
+// ---------- Undo / Restore ----------
+function undoRestoreSeed() {
+  const now = new Date();
+  const mkBug = (id, runId, dev, title) => ({
+    id, testRunId: runId, planId: 'plan-1', stepId: 's1', stepTitle: 'Step 1', feature: 'Spotify', testerName: 'Amy H', deviceName: dev,
+    severity: 'high', title, note: title, timestamp: now.toISOString(), formattedTime: now.toLocaleTimeString(), status: 'New',
+  });
+  const bugRow = b => ({ id: b.id, test_run_id: b.testRunId, plan_id: b.planId, step_id: b.stepId, step_title: b.stepTitle, feature: b.feature, tester_name: b.testerName, device_name: b.deviceName, severity: b.severity, note: b.note, title: b.title, timestamp: b.timestamp, formatted_time: b.formattedTime, status: b.status, image_url: null });
+  const run = (id, dev, devName, bugs, minsAgo) => ({
+    id, plan_id: 'plan-1', plan_name: PLAN.name, tester_name: 'Amy H', device_name: devName, device_id: dev, status: 'completed', current_step_index: 2,
+    results: { s1: { status: bugs.length ? 'red' : 'green', stepId: 's1', feature: 'Spotify', timestamp: now.toISOString() }, s2: { status: 'green', stepId: 's2', feature: 'Photo Capture', timestamp: now.toISOString() } },
+    bug_logs: bugs, started_at: new Date(now.getTime() - (minsAgo + 10) * 60000).toISOString(), completed_at: new Date(now.getTime() - minsAgo * 60000).toISOString(),
+  });
+  const bug = mkBug('bug-ur-1', 'run-plan-1-dev-300-ur1', 'WP02', 'E2E undo/restore bug');
+  const devs = [...BASE_DEVICES(), { id: 'dev-500', name: 'DEL1', isReady: true, quotas: q(2) }];
+  return {
+    seed: seedFor(devs, {
+      archived_runs: [run('run-plan-1-dev-300-ur1', 'dev-300', 'WP02', [bug], 30), run('run-plan-1-dev-400-ur2', 'dev-400', 'GM02', [], 20)],
+      bug_logs: [bugRow(bug)],
+    }),
+    bugId: bug.id, bugRunId: 'run-plan-1-dev-300-ur1', runId: 'run-plan-1-dev-400-ur2',
+  };
+}
+const lsHas = (page, key, id) => page.evaluate((k, i) => { try { return JSON.parse(localStorage.getItem(k) || '[]').some(x => x?.id === i); } catch { return false; } }, key, id);
+
+async function caseUndoRestore(kind, mode) {
+  const S = undoRestoreSeed();
+  const ENT = {
+    device: {
+      label: 'device DEL1',
+      del: async A => { await openTile(A.page, 'DEL1'); await deleteOpenDevice(A.page, 'DEL1'); },
+      cloud: async () => ((await cloudDevices()).some(d => d.id === 'dev-500') ? '' : 'missing from devices config / tombstoned'),
+      client: async c => ((await lsHas(c.page, 'qa_devices_list', 'dev-500')) ? '' : 'not in qa_devices_list'),
+    },
+    tester: {
+      label: 'tester Bo K',
+      del: async A => {
+        await A.page.evaluate(() => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Pool & Roster')?.click());
+        await sleep(400);
+        const ok = await A.page.evaluate(() => { const b = document.querySelector('button[title="Delete Bo K"]'); b?.click(); return !!b; });
+        if (!ok) throw new Error('SETUP: tester delete button not found');
+      },
+      cloud: async () => ((await cloudTesters()).some(t => t.id === 't2') ? '' : 'missing from testers config / tombstoned'),
+      client: async c => ((await lsHas(c.page, 'qa_testers_list', 't2')) ? '' : 'not in qa_testers_list'),
+    },
+    bug: {
+      label: 'bug embedded in a run',
+      del: async A => {
+        await gotoTab(A.page, 'bugs');
+        const ok = await A.page.evaluate(id => { const r = document.querySelector(`[data-testid="feed-row"][data-bug-id="${id}"]`); r?.click(); return !!r; }, S.bugId);
+        if (!ok) throw new Error('SETUP: bug row not visible in A');
+        await sleep(300);
+        const del = await A.page.evaluate(() => { const b = document.querySelector('[data-testid="feed-row-expanded"] [data-testid="feed-delete-bug"]'); b?.click(); return !!b; });
+        if (!del) throw new Error('SETUP: bug delete button not found');
+      },
+      cloud: async () => {
+        const t = await cloudState();
+        const tomb = new Set();
+        for (const p of prefixed(t, '__GLOBAL_DELETED_BUGS__:')) collectIds(p, tomb);
+        const probs = [];
+        if (tomb.has(S.bugId)) probs.push('still tombstoned');
+        if (!(t.bug_logs?.rows || []).some(r => r.id === S.bugId)) probs.push('no bug_logs row');
+        const run = (t.archived_runs?.rows || []).find(r => r.id === S.bugRunId);
+        let bl = run?.bug_logs;
+        if (typeof bl === 'string') { try { bl = JSON.parse(bl); } catch { bl = []; } }
+        if (!Array.isArray(bl) || !bl.some(b => b?.id === S.bugId)) probs.push('not embedded in its run again');
+        return probs.join(', ');
+      },
+      client: async c => ((await lsHas(c.page, 'qa_bug_logs', S.bugId)) ? '' : 'not in qa_bug_logs'),
+    },
+    run: {
+      label: 'archived run on GM02',
+      del: async A => {
+        await openTile(A.page, 'GM02');
+        const ok = await A.page.evaluate(() => { const b = document.querySelector('button[title="Delete run"]'); b?.click(); return !!b; });
+        if (!ok) throw new Error('SETUP: Delete run button not found in the GM02 panel');
+        await sleep(200);
+        await closeDrawer(A.page);
+      },
+      cloud: async () => {
+        const t = await cloudState();
+        const tomb = new Set();
+        for (const p of prefixed(t, '__GLOBAL_DELETED_RUNS__:')) collectIds(p, tomb);
+        const probs = [];
+        if (tomb.has(S.runId)) probs.push('still tombstoned');
+        if (!(t.archived_runs?.rows || []).some(r => r.id === S.runId)) probs.push('no archived_runs row');
+        return probs.join(', ');
+      },
+      client: async c => ((await lsHas(c.page, 'qa_archived_runs', S.runId)) || (await lsHas(c.page, 'qa_test_runs', S.runId)) ? '' : 'not in qa_archived_runs'),
+    },
+  }[kind];
+  return withClients(S.seed, async (A, B) => {
+    const present = async () => {
+      const probs = [];
+      const c = await ENT.cloud(); if (c) probs.push(`cloud: ${c}`);
+      for (const cl of [A, B]) { const x = await ENT.client(cl); if (x) probs.push(`${cl.label}: ${x}`); }
+      return probs;
+    };
+    const p0 = await present();
+    if (p0.length) throw new Error(`SETUP: ${ENT.label} not present at start: ${p0.join('; ')}`);
+    await ENT.del(A);
+    await sleep(800);
+    if (!(await ENT.client(A))) throw new Error(`SETUP: ${ENT.label} still in A after delete`);
+    if (mode === 'undo') {
+      const ok = await A.page.evaluate(() => { const b = document.querySelector('[data-testid="undo-toast-button"]'); b?.click(); return !!b; });
+      if (!ok) throw new Error('SETUP: undo toast button not found');
+      log(`  A deleted ${ENT.label} and clicked Undo`);
+    } else {
+      await sleep(12000); // past the 10 s undo window
+      await A.page.evaluate(() => document.querySelector('[data-testid="data-menu-button"]')?.click());
+      await sleep(300);
+      await A.page.evaluate(() => document.querySelector('[data-testid="data-menu-recently-deleted"]')?.click());
+      await sleep(500);
+      const ok = await A.page.evaluate(k => {
+        const row = document.querySelector(`[data-testid="recently-deleted-row"][data-deleted-type="${k}"]`);
+        const b = row?.querySelector('[data-testid="recently-deleted-restore"]');
+        b?.click();
+        return !!b;
+      }, kind);
+      if (!ok) throw new Error(`SETUP: no Recently deleted row of type ${kind}`);
+      await sleep(300);
+      await A.page.evaluate(() => document.querySelector('[data-testid="recently-deleted-close"]')?.click());
+      log(`  A deleted ${ENT.label}, waited 12s, restored it from Recently deleted`);
+    }
+    return holds(present, { convergeMs: 12000, holdMs: 15000 });
+  });
+}
+
 const CASES = [
   ['1a', 'concurrent activations 0.3 s apart', () => caseConcurrentActivate(300)],
   ['1b', 'concurrent activations 2 s apart', () => caseConcurrentActivate(2000)],
@@ -460,6 +603,14 @@ const CASES = [
   ['4', 'bug embedded in a run stays deleted', caseDeleteEmbeddedBug],
   ['5', 'run on one of two same-named devices locks only it', caseDuplicateNameLock],
   ['6', 'Floor Ready/Maintenance + quota edits stick', caseFloorToggleAndQuota],
+  ['7a', 'Undo brings back a deleted device', () => caseUndoRestore('device', 'undo')],
+  ['7b', 'Undo brings back a deleted tester', () => caseUndoRestore('tester', 'undo')],
+  ['7c', 'Undo brings back a deleted bug embedded in a run', () => caseUndoRestore('bug', 'undo')],
+  ['7d', 'Undo brings back a deleted run', () => caseUndoRestore('run', 'undo')],
+  ['8a', 'Recently deleted restores a device', () => caseUndoRestore('device', 'restore')],
+  ['8b', 'Recently deleted restores a tester', () => caseUndoRestore('tester', 'restore')],
+  ['8c', 'Recently deleted restores a bug embedded in a run', () => caseUndoRestore('bug', 'restore')],
+  ['8d', 'Recently deleted restores a run', () => caseUndoRestore('run', 'restore')],
 ];
 
 async function main() {
