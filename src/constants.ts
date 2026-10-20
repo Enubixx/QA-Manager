@@ -1,6 +1,6 @@
 // App Version Constants for Mobile APK and Server Compatibility Enforcement
-export const APP_VERSION_CODE = 9;
-export const APP_VERSION_NAME = '2.7.0';
+export const APP_VERSION_CODE = 10;
+export const APP_VERSION_NAME = '2.8.0';
 
 // Shared Google Drive folder holding the QA Tester Android APKs (newest file = latest version).
 // A folder link (not a single file) so links baked into older APKs never go stale.
@@ -16,7 +16,8 @@ export const APP_VERSION_OPTIONS: { code: number; version: string; label: string
   { code: 6, version: '2.4.0', label: 'v2.4.0 (Code 6)' },
   { code: 7, version: '2.5.0', label: 'v2.5.0 (Code 7)' },
   { code: 8, version: '2.6.0', label: 'v2.6.0 (Code 8)' },
-  { code: 9, version: '2.7.0', label: 'v2.7.0 (Code 9 - Latest)' },
+  { code: 9, version: '2.7.0', label: 'v2.7.0 (Code 9)' },
+  { code: 10, version: '2.8.0', label: 'v2.8.0 (Code 10 - Latest)' },
 ];
 
 export const formatAppVersionName = (code: number): string => {
