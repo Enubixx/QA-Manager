@@ -177,6 +177,177 @@ export const computeLiveInProgressRuns = (
 };
 
 /**
+ * Extracts the canonical device ID (e.g. "dev-1790876661069") from a run ID
+ * such as "run-plan-1791908761906-dev-1790876661069-mvb5nn18" or "run-plan-1-dev-1790876661069",
+ * stripping the trailing per-run timestamp suffix when present.
+ */
+export const extractDeviceIdFromRunId = (
+  runId: string,
+  knownDeviceIds?: Iterable<string | { id: string }>
+): string | undefined => {
+  if (!runId || typeof runId !== 'string' || !runId.includes('-dev-')) return undefined;
+  if (knownDeviceIds) {
+    const sortedKnown = Array.from(knownDeviceIds)
+      .map(item => (typeof item === 'string' ? item : item?.id))
+      .filter((x): x is string => Boolean(x))
+      .sort((a, b) => b.length - a.length);
+    for (const devId of sortedKnown) {
+      if (runId.endsWith(`-${devId}`) || runId.includes(`-${devId}-`)) {
+        return devId;
+      }
+    }
+  }
+  const afterDev = runId.split('-dev-').slice(1).join('-dev-');
+  if (!afterDev) return undefined;
+  const numericMatch = afterDev.match(/^(\d{10,})-[a-z0-9]{6,13}$/i);
+  if (numericMatch) return `dev-${numericMatch[1]}`;
+  const twoSegMatch = afterDev.match(/^([a-z0-9]+-[a-z0-9]+)-[a-z0-9]{6,13}$/i);
+  if (twoSegMatch) return `dev-${twoSegMatch[1]}`;
+  const parts = afterDev.split('-');
+  if (parts.length >= 2 && /^[a-z0-9]{6,13}$/i.test(parts[parts.length - 1])) {
+    return `dev-${parts.slice(0, -1).join('-')}`;
+  }
+  return `dev-${afterDev}`;
+};
+
+const normalizeDeviceName = (name?: string | null): string => (name || '').trim().toLowerCase();
+
+/**
+ * Returns true if `deviceName` matches the name of routine/exactly ONE device in `devices`.
+ */
+export const isDeviceNameUnique = (deviceName: string | undefined, devices: DeviceProfile[]): boolean => {
+  const target = normalizeDeviceName(deviceName);
+  if (!target || !Array.isArray(devices)) return false;
+  let matches = 0;
+  for (const d of devices) {
+    if (d && normalizeDeviceName(d.name) === target) {
+      matches++;
+      if (matches > 1) return false;
+    }
+  }
+  return matches === 1;
+};
+
+/**
+ * Returns true if another device (excluding `excludeDeviceId`) already uses `name` (case-insensitive, trimmed).
+ */
+export const hasDuplicateDeviceName = (
+  name: string,
+  devices: DeviceProfile[],
+  excludeDeviceId?: string
+): boolean => {
+  const target = normalizeDeviceName(name);
+  if (!target || !Array.isArray(devices)) return false;
+  return devices.some(d => d && d.id !== excludeDeviceId && normalizeDeviceName(d.name) === target);
+};
+
+/**
+ * Returns the set of device IDs whose normalized `name` is shared by 2 or more devices.
+ */
+export const getDuplicateDeviceIds = (devices: DeviceProfile[]): Set<string> => {
+  const counts = new Map<string, string[]>();
+  (devices || []).forEach(d => {
+    if (!d || !d.id) return;
+    const key = normalizeDeviceName(d.name);
+    if (!key) return;
+    const list = counts.get(key) || [];
+    list.push(d.id);
+    counts.set(key, list);
+  });
+  const dupIds = new Set<string>();
+  counts.forEach(ids => {
+    if (ids.length > 1) {
+      ids.forEach(id => dupIds.add(id));
+    }
+  });
+  return dupIds;
+};
+
+/**
+ * Resolves which device ID a run belongs to:
+ * 1. Exact `run.deviceId` match against `devices` (if `run.deviceId` is present, never falls back to a different device's name).
+ * 2. Device ID embedded in `run.id` (`extractDeviceIdFromRunId`).
+ * 3. Legacy fallback to `run.deviceName` ONLY when `!run.deviceId` and `isDeviceNameUnique(run.deviceName, devices)` is true.
+ */
+export const resolveRunDeviceId = (
+  run: Pick<TestRun, 'id' | 'deviceId' | 'deviceName'> | null | undefined,
+  devices: DeviceProfile[]
+): string | undefined => {
+  if (!run || !Array.isArray(devices) || devices.length === 0) return undefined;
+  const rawDeviceId = (run.deviceId || '').trim();
+  if (rawDeviceId) {
+    const byId = devices.find(d => d && d.id && d.id.toLowerCase().trim() === rawDeviceId.toLowerCase());
+    return byId?.id;
+  }
+  const knownIds = devices.map(d => d?.id).filter(Boolean) as string[];
+  const extracted = extractDeviceIdFromRunId(run.id, knownIds);
+  if (extracted) {
+    const byExtracted = devices.find(d => d && d.id && d.id.toLowerCase().trim() === extracted.toLowerCase());
+    if (byExtracted) return byExtracted.id;
+  }
+  if (run.deviceName && isDeviceNameUnique(run.deviceName, devices)) {
+    const targetName = normalizeDeviceName(run.deviceName);
+    const byUniqueName = devices.find(d => d && normalizeDeviceName(d.name) === targetName);
+    return byUniqueName?.id;
+  }
+  return undefined;
+};
+
+export type ReconciledDeviceLock = TestRun & {
+  run: TestRun;
+  testerName: string;
+};
+
+/**
+ * Reconciles active device locks from `liveInProgressRuns`.
+ * Guarantees:
+ * - Matching is performed by device ID first (`resolveRunDeviceId`), falling back to `device.activeRunId === run.id`
+ *   only when the run does not belong to a different device.
+ * - One run can lock AT MOST ONE device (never locks 2 devices with the same name).
+ */
+export const reconcileDeviceLocks = (
+  devices: DeviceProfile[],
+  liveInProgressRuns: TestRun[]
+): Map<string, ReconciledDeviceLock> => {
+  const result = new Map<string, ReconciledDeviceLock>();
+  const claimedRunIds = new Set<string>();
+  const safeDevices = devices || [];
+  const safeRuns = liveInProgressRuns || [];
+  const devById = new Map(safeDevices.filter(d => d && d.id).map(d => [d.id, d]));
+
+  // Pass 1: Match by resolved device ID (deviceId -> run.id embedded deviceId -> unique deviceName)
+  for (const run of safeRuns) {
+    if (!run || !run.id || claimedRunIds.has(run.id)) continue;
+    const devId = resolveRunDeviceId(run, safeDevices);
+    if (devId && !result.has(devId)) {
+      const dev = devById.get(devId);
+      result.set(devId, {
+        ...run,
+        run,
+        testerName: run.testerName || dev?.activeTesterName || 'Tester',
+      });
+      claimedRunIds.add(run.id);
+    }
+  }
+
+  // Pass 2: Match by explicit device.activeRunId if the run wasn't already claimed and doesn't specify another deviceId
+  for (const dev of safeDevices) {
+    if (!dev || !dev.id || result.has(dev.id) || !dev.activeRunId) continue;
+    const run = safeRuns.find(r => r && r.id === dev.activeRunId && !claimedRunIds.has(r.id));
+    if (!run) continue;
+    if (run.deviceId && run.deviceId.trim().toLowerCase() !== dev.id.trim().toLowerCase()) continue;
+    result.set(dev.id, {
+      ...run,
+      run,
+      testerName: run.testerName || dev.activeTesterName || 'Tester',
+    });
+    claimedRunIds.add(run.id);
+  }
+
+  return result;
+};
+
+/**
  * Calculate completed runs today per device ID and plan ID (expects deduplicated runs from mergeRunsById).
  */
 export const computeTodayRunsMap = (
@@ -194,14 +365,10 @@ export const computeTodayRunsMap = (
     const runDate = getLocalDateStr(run.completedAt);
     if (runDate !== todayStr) return;
 
-    const targetDev = (devices || []).find(
-      d =>
-        (run.deviceId && d.id.toLowerCase().trim() === run.deviceId.toLowerCase().trim()) ||
-        (run.deviceName && d.name && d.name.toLowerCase().trim() === run.deviceName.toLowerCase().trim())
-    );
-    if (targetDev) {
-      if (!map[targetDev.id]) map[targetDev.id] = {};
-      map[targetDev.id][run.planId] = (map[targetDev.id][run.planId] || 0) + 1;
+    const targetDevId = resolveRunDeviceId(run, devices || []);
+    if (targetDevId) {
+      if (!map[targetDevId]) map[targetDevId] = {};
+      map[targetDevId][run.planId] = (map[targetDevId][run.planId] || 0) + 1;
     }
   });
   return map;
@@ -495,29 +662,30 @@ export const autoReleaseStuckSessions = (
 
   // Any run that is now auto-released (either in this pass or a prior pass)
   const autoReleasedRuns = nextRuns.filter(r => r && r.status === 'terminated' && getRunAutoReleasedMeta(r) !== null);
+  const liveLockMap = reconcileDeviceLocks(devices || [], remainingLiveRuns);
 
   const releasedDevices: DeviceProfile[] = [];
   const nextDevices = (devices || []).map(d => {
     if (!d || (!d.activeRunId && !d.activeTesterName)) return d;
 
     // Keep lock if there is still a genuinely live in-progress run on this device
-    const hasLiveRun = remainingLiveRuns.some(
-      r =>
-        (d.activeRunId && r.id === d.activeRunId) ||
-        (r.deviceId && d.id && r.deviceId.toLowerCase().trim() === d.id.toLowerCase().trim()) ||
-        (r.deviceName && d.name && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim())
-    );
-    if (hasLiveRun) return d;
+    if (liveLockMap.has(d.id)) return d;
 
-    const matchesAutoReleased = autoReleasedRuns.some(
-      r =>
-        (d.activeRunId && r.id === d.activeRunId) ||
-        (r.deviceId && d.id && r.deviceId.toLowerCase().trim() === d.id.toLowerCase().trim()) ||
-        (r.deviceName && d.name && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim()) ||
-        (r.testerName &&
-          d.activeTesterName &&
-          r.testerName.toLowerCase().trim() === d.activeTesterName.toLowerCase().trim())
-    );
+    const matchesAutoReleased = autoReleasedRuns.some(r => {
+      if (d.activeRunId && r.id === d.activeRunId) return true;
+      const resolvedId = resolveRunDeviceId(r, devices || []);
+      if (resolvedId && resolvedId === d.id) return true;
+      if (
+        !resolvedId &&
+        !r.deviceId &&
+        r.testerName &&
+        d.activeTesterName &&
+        r.testerName.toLowerCase().trim() === d.activeTesterName.toLowerCase().trim()
+      ) {
+        return true;
+      }
+      return false;
+    });
 
     if (matchesAutoReleased) {
       const unlocked: DeviceProfile = {

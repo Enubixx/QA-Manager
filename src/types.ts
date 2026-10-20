@@ -220,10 +220,12 @@ export interface DeviceProfile {
   quotas: DevicePlanQuota[];
   activeRunId?: string;
   activeTesterName?: string;
+  updatedAt?: string;
 }
 
 export interface TesterProfile {
   id: string;
   name: string;
   role?: string;
+  updatedAt?: string;
 }

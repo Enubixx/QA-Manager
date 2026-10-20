@@ -11,6 +11,7 @@ import {
   unmarkArchivedRunDeleted,
   unmarkDeviceAsDeleted,
   unmarkTesterAsDeleted,
+  unmarkBugDeleted,
 } from '../services/supabaseService';
 
 export const UNDO_WINDOW_MS = 10_000;
@@ -208,13 +209,19 @@ export const removeRecentlyDeletedEntry = (
 export const clearSnapshotTombstones = (snapshot: DeleteSnapshotPayload): void => {
   if (!snapshot) return;
   (snapshot.testRuns || []).forEach(r => {
-    if (r?.id) unmarkTestRunDeleted(r.id);
+    if (r?.id) {
+      unmarkTestRunDeleted(r.id);
+      unmarkArchivedRunDeleted(r.id);
+    }
   });
   (snapshot.archivedRuns || []).forEach(r => {
     if (r?.id) {
       unmarkTestRunDeleted(r.id);
       unmarkArchivedRunDeleted(r.id);
     }
+  });
+  (snapshot.bugs || []).forEach(b => {
+    if (b?.id) unmarkBugDeleted(b.id);
   });
   (snapshot.devices || []).forEach(d => {
     if (d?.id) unmarkDeviceAsDeleted(d.id);

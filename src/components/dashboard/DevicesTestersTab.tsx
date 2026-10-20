@@ -2,7 +2,7 @@ import React from 'react';
 import { RefreshCw, Layers, X, Trash2 } from 'lucide-react';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, DevicePlanQuota } from '../../types';
 import { APP_VERSION_OPTIONS } from '../../constants';
-import { getRunAutoReleasedMeta } from '../../utils/runUtils';
+import { getRunAutoReleasedMeta, reconcileDeviceLocks, getDuplicateDeviceIds, hasDuplicateDeviceName, resolveRunDeviceId } from '../../utils/runUtils';
 import { getLocalDateStr as getLocalDateStrUtil } from '../../utils/dateUtils';
 
 export interface ActiveTesterMetrics {
@@ -68,6 +68,7 @@ export interface EnrichedDevice extends DeviceProfile {
   isInUse: boolean;
   inUseTesterName: string;
   activeTesterInfo: ActiveTesterMetrics | undefined;
+  isDuplicateName?: boolean;
 }
 
 export interface EnrichedTester extends UnifiedTesterItem {
@@ -147,6 +148,7 @@ export const PoolRosterDrawer: React.FC<PoolRosterDrawerProps> = ({
   onDeleteTester,
   onDeleteTestRun
 }) => {
+  const [addDeviceError, setAddDeviceError] = React.useState<string | null>(null);
   return (
     <div className="px-5 py-3.5 bg-[#0b1120] border-b border-[#162036] grid grid-cols-1 lg:grid-cols-2 gap-4">
       {/* Left: Device Pool */}
@@ -162,7 +164,10 @@ export const PoolRosterDrawer: React.FC<PoolRosterDrawerProps> = ({
             type="text"
             placeholder="New device ID (e.g. WP06)..."
             value={newDeviceName}
-            onChange={e => setNewDeviceName(e.target.value)}
+            onChange={e => {
+              setNewDeviceName(e.target.value);
+              if (addDeviceError) setAddDeviceError(null);
+            }}
             className="flex-1 bg-[#090d16] border border-slate-800 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
           />
           <button
@@ -170,15 +175,17 @@ export const PoolRosterDrawer: React.FC<PoolRosterDrawerProps> = ({
             onClick={() => {
               const trimmed = newDeviceName.trim();
               if (!trimmed) return;
-              if (devices.some(d => d.name.trim().toLowerCase() === trimmed.toLowerCase())) {
-                alert(`Device "${trimmed}" already exists.`);
+              if (hasDuplicateDeviceName(trimmed, devices)) {
+                setAddDeviceError(`Device "${trimmed}" already exists (duplicate name not allowed).`);
                 return;
               }
+              setAddDeviceError(null);
               const newDev: DeviceProfile = {
                 id: `dev-${Date.now()}`,
                 name: trimmed,
                 isReady: true,
-                quotas: []
+                quotas: [],
+                updatedAt: new Date().toISOString(),
               };
               if (onSaveDevice) onSaveDevice(newDev);
               setQuickActivateDeviceId(newDev.id);
@@ -189,11 +196,17 @@ export const PoolRosterDrawer: React.FC<PoolRosterDrawerProps> = ({
             ＋ Add
           </button>
         </div>
+        {addDeviceError && (
+          <div data-testid="device-name-error" className="text-[11px] text-rose-400 font-medium">
+            {addDeviceError}
+          </div>
+        )}
 
         <div className="flex flex-wrap gap-1.5 pt-0.5 max-h-32 overflow-y-auto">
           {enrichedDevices.map(dev => (
             <div
               key={dev.id}
+              data-device-id={dev.id}
               onClick={() => {
                 setQuickActivateDeviceId(dev.id);
                 setInspectorTarget({ type: 'device', id: dev.id });
@@ -214,6 +227,14 @@ export const PoolRosterDrawer: React.FC<PoolRosterDrawerProps> = ({
                 }`}
               />
               <span className="font-bold">{dev.name}</span>
+              {dev.isDuplicateName && (
+                <span
+                  data-testid="duplicate-device-name-chip"
+                  className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[9.5px] font-sans font-semibold"
+                >
+                  Duplicate name
+                </span>
+              )}
               {dev.hasAssignedPlan && (
                 <span className="text-[10px] text-emerald-300">
                   {dev.doneToday}/{dev.targetRuns}
@@ -376,6 +397,7 @@ export const FloorTile: React.FC<FloorTileProps> = ({
 
   return (
     <div
+      data-device-id={dev.id}
       onClick={onSelect}
       className={`bg-[#0b1120] border rounded-xl p-3 flex flex-col gap-1.5 min-h-[116px] transition cursor-pointer ${
         isSelected
@@ -383,11 +405,22 @@ export const FloorTile: React.FC<FloorTileProps> = ({
           : 'border-[#1b2740] hover:border-slate-700'
       }`}
     >
-      {/* Row 1: mono device name + status pill */}
+      {/* Row 1: mono device name + duplicate chip + status pill */}
       <div className="flex items-center justify-between gap-1.5 min-w-0">
-        <span className="font-mono font-bold text-[13px] text-slate-100 truncate">
-          {dev.name}
-        </span>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="font-mono font-bold text-[13px] text-slate-100 truncate">
+            {dev.name}
+          </span>
+          {dev.isDuplicateName && (
+            <span
+              data-testid="duplicate-device-name-chip"
+              className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[9.5px] font-semibold shrink-0"
+              title={`Another device in the pool also has the name "${dev.name}". Click to rename or delete.`}
+            >
+              Duplicate name
+            </span>
+          )}
+        </div>
 
         {dev.isInUse ? (
           dev.activeTesterInfo?.isAway ? (
@@ -474,6 +507,7 @@ interface InspectorSlideOverProps {
   resolvedInspector:
     | { type: 'device'; device: EnrichedDevice }
     | { type: 'tester'; tester: EnrichedTester };
+  devices: DeviceProfile[];
   enrichedTesters: EnrichedTester[];
   testPlans: TestPlan[];
   testRuns: TestRun[];
@@ -494,6 +528,7 @@ interface InspectorSlideOverProps {
 
 export const InspectorSlideOver: React.FC<InspectorSlideOverProps> = ({
   resolvedInspector,
+  devices,
   enrichedTesters,
   testPlans,
   testRuns,
@@ -511,6 +546,17 @@ export const InspectorSlideOver: React.FC<InspectorSlideOverProps> = ({
   onDeleteTestRun,
   onBootTester
 }) => {
+  const [renameDraft, setRenameDraft] = React.useState<string>('');
+  const [isRenamingDevice, setIsRenamingDevice] = React.useState<boolean>(false);
+  const [renameDeviceError, setRenameDeviceError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    setIsRenamingDevice(false);
+    setRenameDeviceError(null);
+    if (resolvedInspector.type === 'device') {
+      setRenameDraft(resolvedInspector.device.name);
+    }
+  }, [resolvedInspector.type, resolvedInspector.type === 'device' ? resolvedInspector.device.id : resolvedInspector.tester.testerKey]);
   const planTitleMap = new Map(testPlans.map(p => [p.id, p.name]));
   const autoReleasedRunsForScope = (() => {
     const byId = new Map<string, TestRun>();
@@ -592,12 +638,13 @@ export const InspectorSlideOver: React.FC<InspectorSlideOverProps> = ({
                 )
                 .map(r => ({ ...r, testerName: t.name }))
             );
-            const deviceAutoReleasedRuns = autoReleasedRunsForScope.filter(
-              r =>
-                (r.deviceId &&
-                  r.deviceId.toLowerCase().trim() === dev.id.toLowerCase().trim()) ||
-                r.deviceName.toLowerCase().trim() === dev.name.toLowerCase().trim()
-            );
+            const deviceAutoReleasedRuns = autoReleasedRunsForScope.filter(r => {
+              const resolvedId = resolveRunDeviceId(
+                { id: r.runId, deviceId: r.deviceId, deviceName: r.deviceName },
+                devices
+              );
+              return resolvedId === dev.id;
+            });
 
             const statusLabel = dev.isInUse
               ? dev.activeTesterInfo?.isAway
@@ -613,13 +660,88 @@ export const InspectorSlideOver: React.FC<InspectorSlideOverProps> = ({
               <>
                 {/* Top header with trash + ✕ button */}
                 <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
-                      DEVICE
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
+                        DEVICE
+                      </span>
+                      {dev.isDuplicateName && (
+                        <span
+                          data-testid="duplicate-device-name-chip"
+                          className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[9.5px] font-semibold"
+                        >
+                          Duplicate name
+                        </span>
+                      )}
                     </div>
-                    <div className="font-mono text-[17px] font-bold text-slate-100 truncate">
-                      {dev.name}
-                    </div>
+                    {isRenamingDevice ? (
+                      <div className="mt-1 space-y-1">
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="text"
+                            data-testid="rename-device-input"
+                            value={renameDraft}
+                            onChange={e => {
+                              setRenameDraft(e.target.value);
+                              if (renameDeviceError) setRenameDeviceError(null);
+                            }}
+                            className="flex-1 min-w-0 bg-[#090d16] border border-slate-700 rounded px-2 py-1 text-xs font-mono text-white focus:outline-none focus:border-blue-500"
+                          />
+                          <button
+                            type="button"
+                            data-testid="save-rename-device-btn"
+                            onClick={() => {
+                              const trimmed = renameDraft.trim();
+                              if (!trimmed) return;
+                              if (hasDuplicateDeviceName(trimmed, devices, dev.id)) {
+                                setRenameDeviceError(`Device "${trimmed}" already exists (duplicate name not allowed).`);
+                                return;
+                              }
+                              setRenameDeviceError(null);
+                              setIsRenamingDevice(false);
+                              onSaveDevice?.({ ...dev, name: trimmed });
+                            }}
+                            className="px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-semibold cursor-pointer"
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsRenamingDevice(false);
+                              setRenameDeviceError(null);
+                              setRenameDraft(dev.name);
+                            }}
+                            className="px-1.5 py-1 text-slate-400 hover:text-white text-xs cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                        {renameDeviceError && (
+                          <div data-testid="device-name-error" className="text-[11px] text-rose-400 font-medium">
+                            {renameDeviceError}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <div className="font-mono text-[17px] font-bold text-slate-100 truncate">
+                          {dev.name}
+                        </div>
+                        <button
+                          type="button"
+                          data-testid="rename-device-btn"
+                          onClick={() => {
+                            setRenameDraft(dev.name);
+                            setRenameDeviceError(null);
+                            setIsRenamingDevice(true);
+                          }}
+                          className="text-[11px] text-slate-400 hover:text-blue-300 underline cursor-pointer shrink-0"
+                        >
+                          Rename
+                        </button>
+                      </div>
+                    )}
                     <div className="text-xs text-slate-400 truncate">
                       {dev.hasAssignedPlan
                         ? `${dev.doneToday}/${dev.targetRuns} quota`
@@ -1479,7 +1601,13 @@ export const DevicesTestersTab: React.FC<DevicesTestersTabProps> = ({
     displayedTesters = sortedTesters.filter(t => t.isActive);
   }
 
-  // 2. Enrich devices with quota, today's completions, and live in-use tester
+  // 2. Enrich devices with quota, today's completions, and live in-use tester (reconciled by device.id)
+  const duplicateDeviceIds = React.useMemo(() => getDuplicateDeviceIds(devices), [devices]);
+  const deviceLockMap = React.useMemo(
+    () => reconcileDeviceLocks(devices, liveInProgressRuns),
+    [devices, liveInProgressRuns]
+  );
+
   const enrichedDevices: EnrichedDevice[] = devices.map(device => {
     const validQuota =
       (device.quotas &&
@@ -1495,14 +1623,12 @@ export const DevicesTestersTab: React.FC<DevicesTestersTabProps> = ({
     const remaining = assignedQuota ? Math.max(0, targetRuns - doneToday) : 0;
     const pct = assignedQuota && targetRuns > 0 ? Math.min(100, Math.round((doneToday / targetRuns) * 100)) : 0;
 
-    const activeRunForDevice = liveInProgressRuns.find(r =>
-      (device.activeRunId && r.id === device.activeRunId) ||
-      (r.deviceId && r.deviceId.toLowerCase().trim() === device.id.toLowerCase().trim()) ||
-      (r.deviceName && r.deviceName.toLowerCase().trim() === device.name.toLowerCase().trim())
-    );
+    const lockInfo = deviceLockMap.get(device.id);
+    const activeRunForDevice = lockInfo?.run;
     const isInUse = Boolean(activeRunForDevice);
-    const inUseTesterName = activeRunForDevice?.testerName || device.activeTesterName || 'Tester';
+    const inUseTesterName = lockInfo?.testerName || device.activeTesterName || 'Tester';
     const activeTesterInfo = isInUse ? activeTesterMap.get(inUseTesterName.toLowerCase().trim()) : undefined;
+    const isDuplicateName = duplicateDeviceIds.has(device.id);
 
     return {
       ...device,
@@ -1516,7 +1642,8 @@ export const DevicesTestersTab: React.FC<DevicesTestersTabProps> = ({
       activeRunForDevice,
       isInUse,
       inUseTesterName,
-      activeTesterInfo
+      activeTesterInfo,
+      isDuplicateName,
     };
   });
 
@@ -2176,6 +2303,7 @@ export const DevicesTestersTab: React.FC<DevicesTestersTabProps> = ({
       {resolvedInspector && (
         <InspectorSlideOver
           resolvedInspector={resolvedInspector}
+          devices={devices}
           enrichedTesters={enrichedTesters}
           testPlans={testPlans}
           testRuns={testRuns}

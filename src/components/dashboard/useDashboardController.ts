@@ -1,7 +1,7 @@
 import React, { useState, useRef, useMemo, useEffect } from "react";
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, RefinedBugText, ReproMatches } from "../../types";
 import { isReviewed, reviewedNow } from "../../utils/bugReview";
-import { isRunFullyCompleted, buildStepFirstSeenIndex, computeLiveInProgressRuns, computeTodayRunsMap, computeFleetProgress } from "../../utils/runUtils";
+import { isRunFullyCompleted, buildStepFirstSeenIndex, computeLiveInProgressRuns, computeTodayRunsMap, computeFleetProgress, reconcileDeviceLocks, resolveRunDeviceId } from "../../utils/runUtils";
 import { toLocalHHMM, withBugTime } from "../../utils/bugTime";
 import { ALL_PLANS, ALL_DATES, mergeRunsById, getKnownCujNames, computeCujReport, listReportDates, buildTimelinePoints, getPlanPickerOptions, buildCujReportText, buildReportScopeKey, formatReportDateLabel } from "../../utils/cujReportUtils";
 import type { CujMetric } from "../../utils/cujReportUtils";
@@ -243,18 +243,12 @@ export function useDashboardController({
       });
     };
 
-    // 1. Check devices that are currently locked by a tester WITH an actual live in_progress run on that device
+    // 1. Check devices that are currently locked by a tester WITH an actual live in_progress run resolved to that device ID
+    const lockMap = reconcileDeviceLocks(devices, liveInProgressRuns);
     devices.forEach(d => {
-      const activeTester = d.activeTesterName?.trim();
-      if (activeTester) {
-        const activeRun = liveInProgressRuns.find(r => 
-          (d.activeRunId && r.id === d.activeRunId) || 
-          (r.deviceId && r.deviceId.toLowerCase().trim() === d.id.toLowerCase().trim()) ||
-          (r.deviceName && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim())
-        );
-        if (activeRun) {
-          computeMetrics(activeRun.testerName || activeTester, d.name, activeRun, d.id);
-        }
+      const lockInfo = lockMap.get(d.id);
+      if (lockInfo) {
+        computeMetrics(lockInfo.testerName, d.name, lockInfo.run, d.id);
       }
     });
 
@@ -268,7 +262,9 @@ export function useDashboardController({
         ).length;
         const existingCount = existing ? (existing.greenCount + existing.yellowCount + existing.redCount) : -1;
         if (!existing || currentEntriesCount >= existingCount) {
-          computeMetrics(r.testerName, r.deviceName || 'Mobile Device', r, r.deviceId);
+          const resolvedDevId = resolveRunDeviceId(r, devices) || r.deviceId;
+          const matchedDev = resolvedDevId ? devices.find(d => d.id === resolvedDevId) : undefined;
+          computeMetrics(r.testerName, matchedDev?.name || r.deviceName || 'Mobile Device', r, resolvedDevId);
         }
       }
     });

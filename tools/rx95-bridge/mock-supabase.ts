@@ -41,7 +41,7 @@ let tables = new Map<string, Table>();
 
 const DEFAULT_SCHEMA: Record<string, string[]> = {
   bug_logs: ['id', 'test_run_id', 'plan_id', 'step_id', 'step_title', 'feature', 'tester_name', 'device_name', 'severity', 'note', 'image_url', 'timestamp', 'formatted_time',
-    'environment', 'title', 'refined', 'original_timestamp', 'status', 'filed', 'repro_matches', 'bundle', 'file_pending', 'updated_at'],
+    'environment', 'title', 'refined', 'original_timestamp', 'status', 'filed', 'repro_matches', 'bundle', 'file_pending', 'reviewed', 'updated_at'],
   test_runs: ['id', 'plan_id', 'plan_name', 'tester_name', 'device_name', 'device_id', 'status', 'current_step_index', 'results', 'bug_logs', 'started_at', 'completed_at', 'duration_ms'],
   archived_runs: ['id', 'plan_id', 'plan_name', 'tester_name', 'device_name', 'device_id', 'status', 'current_step_index', 'results', 'bug_logs', 'started_at', 'completed_at', 'duration_ms'],
   test_plans: ['id', 'name', 'description', 'steps', 'created_at'],
@@ -59,9 +59,16 @@ function load(seed?: any) {
   tables = new Map();
   for (const [name, cols] of Object.entries(DEFAULT_SCHEMA)) tables.set(name, { columns: new Set(cols), pk: name === 'populated_features' ? 'feature_name' : 'id', rows: [] });
   const s = seed ?? (args.state && fs.existsSync(args.state) ? JSON.parse(fs.readFileSync(args.state, 'utf8')) : args.seed ? JSON.parse(fs.readFileSync(args.seed, 'utf8')) : {});
-  for (const [name, rows] of Object.entries(s.tables || s || {})) {
-    if (!tables.has(name)) tables.set(name, { columns: new Set(Object.keys((rows as Row[])[0] || { id: 1 })), pk: 'id', rows: [] });
-    tables.get(name)!.rows = JSON.parse(JSON.stringify(rows));
+  for (const [name, entry] of Object.entries(s.tables || s || {})) {
+    const rawRows: Row[] = Array.isArray(entry) ? entry : Array.isArray((entry as any)?.rows) ? (entry as any).rows : [];
+    if (!tables.has(name)) tables.set(name, { columns: new Set(Object.keys(rawRows[0] || { id: 1 })), pk: 'id', rows: [] });
+    const t = tables.get(name)!;
+    for (const r of rawRows) {
+      if (r && typeof r === 'object') {
+        for (const col of Object.keys(r)) t.columns.add(col);
+      }
+    }
+    t.rows = JSON.parse(JSON.stringify(rawRows));
   }
   for (const m of String(args.missing || '').split(',').filter(Boolean)) {
     const [t, c] = m.split('.');

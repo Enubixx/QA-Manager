@@ -7,10 +7,18 @@ import {
   deleteTestRunFromSupabase,
   deleteArchivedRunFromSupabase,
   syncDevicesListToCloud,
+  patchDevicesToCloud,
+  patchTestersToCloud,
+  type DevicePatch,
+  type TesterPatch,
   isTestRunDeleted,
   markTestRunDeleted,
   isArchivedRunDeleted,
   markArchivedRunDeleted,
+  isBugDeleted,
+  getDeletedBugIds,
+  isDeviceDeleted,
+  isTesterDeleted,
   setCloudSyncStatus
 } from './supabaseService';
 import { isSupabaseConfigured } from '../lib/supabase';
@@ -23,7 +31,9 @@ export type OfflineMutationType =
   | 'patchBugColumns'
   | 'deleteTestRun'
   | 'deleteArchivedRun'
-  | 'syncDevices';
+  | 'syncDevices'
+  | 'patchDevices'
+  | 'patchTesters';
 
 export interface OfflineMutation {
   id: string;
@@ -65,6 +75,10 @@ function getMutationEntityKey(mut: OfflineMutation): string | null {
       return mut.payload?.bug?.id ? `bugCols:${mut.payload.bug.id}:${[...(mut.payload.fields || [])].sort().join(',')}` : null;
     case 'syncDevices':
       return 'devices:all';
+    case 'patchDevices':
+      return mut.payload?.id ? `devicePatch:${mut.payload.id}:${mut.payload.lockOnly ? 'lock' : 'edit'}` : null;
+    case 'patchTesters':
+      return mut.payload?.id ? `testerPatch:${mut.payload.id}` : null;
     default:
       return null;
   }
@@ -72,15 +86,37 @@ function getMutationEntityKey(mut: OfflineMutation): string | null {
 
 function deduplicateMutations(queue: OfflineMutation[]): OfflineMutation[] {
   const latestIndexByKey = new Map<string, number>();
+  const mergedPayloadByKey = new Map<string, any>();
   queue.forEach((mut, idx) => {
     const key = getMutationEntityKey(mut);
-    if (key) latestIndexByKey.set(key, idx);
+    if (key) {
+      if ((mut.type === 'patchDevices' || mut.type === 'patchTesters') && mergedPayloadByKey.has(key)) {
+        const prev = mergedPayloadByKey.get(key);
+        mergedPayloadByKey.set(key, {
+          ...prev,
+          ...mut.payload,
+          changes: { ...(prev?.changes || {}), ...(mut.payload?.changes || {}) },
+          updatedAt: mut.payload?.updatedAt || prev?.updatedAt,
+        });
+      } else {
+        mergedPayloadByKey.set(key, mut.payload);
+      }
+      latestIndexByKey.set(key, idx);
+    }
   });
-  return queue.filter((mut, idx) => {
-    const key = getMutationEntityKey(mut);
-    if (!key) return true;
-    return latestIndexByKey.get(key) === idx;
-  });
+  return queue
+    .filter((mut, idx) => {
+      const key = getMutationEntityKey(mut);
+      if (!key) return true;
+      return latestIndexByKey.get(key) === idx;
+    })
+    .map(mut => {
+      const key = getMutationEntityKey(mut);
+      if (key && (mut.type === 'patchDevices' || mut.type === 'patchTesters') && mergedPayloadByKey.has(key)) {
+        return { ...mut, payload: mergedPayloadByKey.get(key) };
+      }
+      return mut;
+    });
 }
 
 function stripBase64ImagesFromMutation(mut: OfflineMutation): OfflineMutation {
@@ -145,6 +181,18 @@ export const enqueueOfflineMutation = (type: OfflineMutationType, payload: any) 
     return;
   }
   if (type === 'syncArchivedRun' && (!payload?.id || isArchivedRunDeleted(payload.id))) {
+    return;
+  }
+  if (type === 'syncBugLog' && (!payload?.id || isBugDeleted(payload.id))) {
+    return;
+  }
+  if (type === 'patchBugColumns' && (!payload?.bug?.id || isBugDeleted(payload.bug.id))) {
+    return;
+  }
+  if (type === 'patchDevices' && (!payload?.id || isDeviceDeleted(payload.id))) {
+    return;
+  }
+  if (type === 'patchTesters' && (!payload?.id || isTesterDeleted(payload.id))) {
     return;
   }
   const queue = getOfflineQueue();
@@ -279,26 +327,48 @@ export const drainOfflineQueue = async () => {
     for (const mut of initialQueue) {
       try {
         switch (mut.type) {
-          case 'syncTestRun':
-            if (!mut.payload?.id || isTestRunDeleted(mut.payload.id) || mut.payload.status === 'completed') {
+          case 'syncTestRun': {
+            if (!mut.payload?.id || isTestRunDeleted(mut.payload.id) || isArchivedRunDeleted(mut.payload.id) || mut.payload.status === 'completed') {
               break;
             }
-            await syncTestRunToSupabase(mut.payload as TestRun);
+            const deletedBugs = getDeletedBugIds();
+            const cleanedRun: TestRun = {
+              ...(mut.payload as TestRun),
+              bugLogs: Array.isArray(mut.payload.bugLogs)
+                ? mut.payload.bugLogs.filter((b: BugLog) => b && b.id && !deletedBugs.has(b.id))
+                : [],
+            };
+            await syncTestRunToSupabase(cleanedRun);
             anySucceeded = true;
             break;
-          case 'syncArchivedRun':
+          }
+          case 'syncArchivedRun': {
             if (!mut.payload?.id || isArchivedRunDeleted(mut.payload.id)) {
               break;
             }
             markTestRunDeleted(mut.payload.id);
-            await syncArchivedRunToSupabase(mut.payload as TestRun);
+            const deletedBugs = getDeletedBugIds();
+            const cleanedRun: TestRun = {
+              ...(mut.payload as TestRun),
+              bugLogs: Array.isArray(mut.payload.bugLogs)
+                ? mut.payload.bugLogs.filter((b: BugLog) => b && b.id && !deletedBugs.has(b.id))
+                : [],
+            };
+            await syncArchivedRunToSupabase(cleanedRun);
             anySucceeded = true;
             break;
+          }
           case 'syncBugLog':
+            if (!mut.payload?.id || isBugDeleted(mut.payload.id)) {
+              break;
+            }
             await syncBugLogToSupabase(mut.payload as BugLog);
             anySucceeded = true;
             break;
           case 'patchBugColumns':
+            if (!mut.payload?.bug?.id || isBugDeleted(mut.payload.bug.id)) {
+              break;
+            }
             await patchBugWorkerColumns(mut.payload.bug as BugLog, mut.payload.fields as BugWorkerField[]);
             anySucceeded = true;
             break;
@@ -312,6 +382,20 @@ export const drainOfflineQueue = async () => {
             break;
           case 'syncDevices':
             await syncDevicesListToCloud(mut.payload as DeviceProfile[]);
+            anySucceeded = true;
+            break;
+          case 'patchDevices':
+            if (!mut.payload?.id || isDeviceDeleted(mut.payload.id)) {
+              break;
+            }
+            await patchDevicesToCloud(mut.payload as DevicePatch);
+            anySucceeded = true;
+            break;
+          case 'patchTesters':
+            if (!mut.payload?.id || isTesterDeleted(mut.payload.id)) {
+              break;
+            }
+            await patchTestersToCloud(mut.payload as TesterPatch);
             anySucceeded = true;
             break;
         }
@@ -344,20 +428,25 @@ export const drainOfflineQueue = async () => {
 
 // Safe wrappers that automatically queue mutations if offline or network fails
 export const safeSyncTestRun = async (run: TestRun) => {
-  if (!run?.id || isTestRunDeleted(run.id) || run.status === 'completed') {
+  if (!run?.id || isTestRunDeleted(run.id) || isArchivedRunDeleted(run.id) || run.status === 'completed') {
     return;
   }
+  const deletedBugs = getDeletedBugIds();
+  const cleanRun: TestRun = {
+    ...run,
+    bugLogs: Array.isArray(run.bugLogs) ? run.bugLogs.filter(b => b && b.id && !deletedBugs.has(b.id)) : [],
+  };
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
-    enqueueOfflineMutation('syncTestRun', run);
+    enqueueOfflineMutation('syncTestRun', cleanRun);
     return;
   }
   const startedAt = Date.now();
   try {
-    await withSyncActivity(() => syncTestRunToSupabase(run));
-    supersedeQueued('syncTestRun', run, startedAt);
+    await withSyncActivity(() => syncTestRunToSupabase(cleanRun));
+    supersedeQueued('syncTestRun', cleanRun, startedAt);
   } catch (e) {
-    if (!isTestRunDeleted(run.id) && (run.status as string) !== 'completed') {
-      enqueueOfflineMutation('syncTestRun', run);
+    if (!isTestRunDeleted(cleanRun.id) && !isArchivedRunDeleted(cleanRun.id) && (cleanRun.status as string) !== 'completed') {
+      enqueueOfflineMutation('syncTestRun', cleanRun);
     }
   }
 };
@@ -368,22 +457,28 @@ export const safeSyncArchivedRun = async (run: TestRun) => {
   }
   markTestRunDeleted(run.id);
   supersedeQueued('syncTestRun', { id: run.id }, Date.now());
+  const deletedBugs = getDeletedBugIds();
+  const cleanRun: TestRun = {
+    ...run,
+    bugLogs: Array.isArray(run.bugLogs) ? run.bugLogs.filter(b => b && b.id && !deletedBugs.has(b.id)) : [],
+  };
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
-    enqueueOfflineMutation('syncArchivedRun', run);
+    enqueueOfflineMutation('syncArchivedRun', cleanRun);
     return;
   }
   const startedAt = Date.now();
   try {
-    await withSyncActivity(() => syncArchivedRunToSupabase(run));
-    supersedeQueued('syncArchivedRun', run, startedAt);
+    await withSyncActivity(() => syncArchivedRunToSupabase(cleanRun));
+    supersedeQueued('syncArchivedRun', cleanRun, startedAt);
   } catch (e) {
-    if (!isArchivedRunDeleted(run.id)) {
-      enqueueOfflineMutation('syncArchivedRun', run);
+    if (!isArchivedRunDeleted(cleanRun.id)) {
+      enqueueOfflineMutation('syncArchivedRun', cleanRun);
     }
   }
 };
 
 export const safeSyncBugLog = async (bug: BugLog) => {
+  if (!bug?.id || isBugDeleted(bug.id)) return;
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
     enqueueOfflineMutation('syncBugLog', bug);
     return;
@@ -393,13 +488,15 @@ export const safeSyncBugLog = async (bug: BugLog) => {
     await withSyncActivity(() => syncBugLogToSupabase(bug));
     supersedeQueued('syncBugLog', bug, startedAt);
   } catch (e) {
-    enqueueOfflineMutation('syncBugLog', bug);
+    if (!isBugDeleted(bug.id)) {
+      enqueueOfflineMutation('syncBugLog', bug);
+    }
   }
 };
 
 /** Targeted write of worker-owned bug columns (filed, file_pending, bundle, ...), queued when offline. */
 export const safePatchBugColumns = async (bug: BugLog, fields: BugWorkerField[]) => {
-  if (!fields.length) return;
+  if (!bug?.id || isBugDeleted(bug.id) || !fields.length) return;
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
     enqueueOfflineMutation('patchBugColumns', { bug, fields });
     return;
@@ -409,7 +506,9 @@ export const safePatchBugColumns = async (bug: BugLog, fields: BugWorkerField[])
     await withSyncActivity(() => patchBugWorkerColumns(bug, fields));
     supersedeQueued('patchBugColumns', { bug, fields }, startedAt);
   } catch (e) {
-    enqueueOfflineMutation('patchBugColumns', { bug, fields });
+    if (!isBugDeleted(bug.id)) {
+      enqueueOfflineMutation('patchBugColumns', { bug, fields });
+    }
   }
 };
 
@@ -446,6 +545,46 @@ export const safeDeleteArchivedRun = async (runId: string) => {
     supersedeQueued('deleteArchivedRun', runId, Date.now());
   } catch (e) {
     enqueueOfflineMutation('deleteArchivedRun', runId);
+  }
+};
+
+export const safePatchDevices = async (patchesInput: DevicePatch | DevicePatch[]) => {
+  const patches = (Array.isArray(patchesInput) ? patchesInput : [patchesInput]).filter(
+    p => p && p.id && !isDeviceDeleted(p.id)
+  );
+  if (patches.length === 0) return;
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    patches.forEach(p => enqueueOfflineMutation('patchDevices', p));
+    return;
+  }
+  const startedAt = Date.now();
+  try {
+    await withSyncActivity(() => patchDevicesToCloud(patches));
+    patches.forEach(p => supersedeQueued('patchDevices', p, startedAt));
+  } catch (e) {
+    patches.forEach(p => {
+      if (!isDeviceDeleted(p.id)) enqueueOfflineMutation('patchDevices', p);
+    });
+  }
+};
+
+export const safePatchTesters = async (patchesInput: TesterPatch | TesterPatch[]) => {
+  const patches = (Array.isArray(patchesInput) ? patchesInput : [patchesInput]).filter(
+    p => p && p.id && !isTesterDeleted(p.id)
+  );
+  if (patches.length === 0) return;
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    patches.forEach(p => enqueueOfflineMutation('patchTesters', p));
+    return;
+  }
+  const startedAt = Date.now();
+  try {
+    await withSyncActivity(() => patchTestersToCloud(patches));
+    patches.forEach(p => supersedeQueued('patchTesters', p, startedAt));
+  } catch (e) {
+    patches.forEach(p => {
+      if (!isTesterDeleted(p.id)) enqueueOfflineMutation('patchTesters', p);
+    });
   }
 };
 

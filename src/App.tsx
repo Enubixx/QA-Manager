@@ -21,11 +21,17 @@ import {
   syncDeviceToSupabase,
   deleteDeviceFromSupabase,
   getDeletedDeviceIds,
+  markDeviceAsDeleted,
+  markDeviceDeleted,
   syncTesterToSupabase,
   deleteTesterFromSupabase,
   getDeletedTesterIds,
+  markTesterAsDeleted,
   syncDevicesListToCloud,
   syncTestersListToCloud,
+  mergeDevicesLists,
+  mergeTestersLists,
+  type DevicePatch,
   subscribeToSupabaseRealtime,
   subscribeToSystemCommands,
   broadcastBootSignal,
@@ -33,6 +39,13 @@ import {
   isTestRunDeleted,
   isArchivedRunDeleted,
   markTestRunDeleted,
+  markArchivedRunDeleted,
+  getDeletedTestRunIds,
+  getDeletedArchivedRunIds,
+  isBugDeleted,
+  markBugDeleted,
+  getDeletedBugIds,
+  onCloudTombstonesUpdated,
 } from './services/supabaseService';
 import { isSupabaseConfigured } from './lib/supabase';
 import { getLocalDateStr } from './utils/dateUtils';
@@ -48,6 +61,10 @@ import {
   getRunLastActivityMs,
   markRunAutoReleased,
   autoReleaseStuckSessions,
+  resolveRunDeviceId,
+  reconcileDeviceLocks,
+  hasDuplicateDeviceName,
+  isDeviceNameUnique,
 } from './utils/runUtils';
 import {
   createPendingDeleteQueue,
@@ -59,7 +76,9 @@ import {
   type PendingDeleteEntry,
   type RecentlyDeletedEntry,
   type DeleteSnapshotPayload,
+  type DeleteSnapshotPayload as DeleteSnapshot,
   type DeleteDeviceDelta,
+  type QAStateSlice,
 } from './utils/undoDeleteStore';
 import { mergeRunsById } from './utils/cujReportUtils';
 import {
@@ -70,9 +89,13 @@ import {
   safePatchBugColumns,
   safeDeleteTestRun,
   safeDeleteArchivedRun,
-  safeSyncDevices
+  safeSyncDevices,
+  safePatchDevices,
+  safePatchTesters,
 } from './services/offlineSyncQueue';
 import { APP_VERSION_CODE, CONFIG_MIN_APP_VERSION, CONFIG_DAILY_RESET_DATE, AUTO_RELEASE_IDLE_MINUTES } from './constants';
+
+const safeDeleteBugLog = deleteBugLogFromSupabase;
 
 const safeSetStorageItem = (key: string, value: string, fallbackFn?: () => string) => {
   try {
@@ -107,6 +130,7 @@ const normalizePlans = (raw: unknown): TestPlan[] => {
 
 const normalizeRuns = (raw: unknown): TestRun[] => {
   if (!Array.isArray(raw)) return [];
+  const deletedBugIds = getDeletedBugIds();
   return raw
     .filter((r: any) => r && typeof r === 'object' && typeof r.id === 'string' && r.id.trim() !== '')
     .map((r: any) => {
@@ -133,7 +157,9 @@ const normalizeRuns = (raw: unknown): TestRun[] => {
           ? { _meta: { ...(r._meta || {}), autoReleased } }
           : {}),
         bugLogs: Array.isArray(r.bugLogs)
-          ? r.bugLogs.filter((b: any) => b && typeof b === 'object' && typeof b.id === 'string')
+          ? r.bugLogs.filter(
+              (b: any) => b && typeof b === 'object' && typeof b.id === 'string' && !deletedBugIds.has(b.id)
+            )
           : [],
         startedAt: typeof r.startedAt === 'string' ? r.startedAt : new Date().toISOString()
       };
@@ -142,7 +168,10 @@ const normalizeRuns = (raw: unknown): TestRun[] => {
 
 const normalizeBugs = (raw: unknown): BugLog[] => {
   if (!Array.isArray(raw)) return [];
-  return raw.filter((b: any) => b && typeof b === 'object' && typeof b.id === 'string' && b.id.trim() !== '');
+  const deletedBugIds = getDeletedBugIds();
+  return raw.filter(
+    (b: any) => b && typeof b === 'object' && typeof b.id === 'string' && b.id.trim() !== '' && !deletedBugIds.has(b.id)
+  );
 };
 
 const normalizeDevices = (raw: unknown): DeviceProfile[] => {
@@ -191,9 +220,15 @@ export function App() {
   // Merge any local `qa_in_progress_run_*` entries into the runs array so step activity is up-to-date
   // and stuck local-only in-progress runs are also swept and preserved.
   const mergeLocalInProgressRuns = (baseRuns: TestRun[]): TestRun[] => {
+    const deletedBugIds = getDeletedBugIds();
     const byId = new Map<string, TestRun>();
     (baseRuns || []).forEach(r => {
-      if (r && r.id) byId.set(r.id, r);
+      if (r && r.id && !isTestRunDeleted(r.id) && !isArchivedRunDeleted(r.id)) {
+        byId.set(r.id, {
+          ...r,
+          bugLogs: (r.bugLogs || []).filter(b => b && b.id && !deletedBugIds.has(b.id)),
+        });
+      }
     });
     try {
       for (let i = 0; i < localStorage.length; i++) {
@@ -204,6 +239,10 @@ export function App() {
         const parsedList = normalizeRuns([JSON.parse(raw)]);
         const saved = parsedList[0];
         if (!saved || !saved.id || saved.status !== 'in_progress') continue;
+        if (isTestRunDeleted(saved.id) || isArchivedRunDeleted(saved.id)) {
+          localStorage.removeItem(k);
+          continue;
+        }
         const existing = byId.get(saved.id);
         if (!existing) {
           byId.set(saved.id, saved);
@@ -211,7 +250,7 @@ export function App() {
           const mergedBugs = [
             ...(existing.bugLogs || []),
             ...(saved.bugLogs || []).filter(b => !(existing.bugLogs || []).some(eb => eb.id === b.id)),
-          ];
+          ].filter(b => b && b.id && !deletedBugIds.has(b.id));
           byId.set(saved.id, {
             ...existing,
             results: { ...(existing.results || {}), ...(saved.results || {}) },
@@ -512,32 +551,47 @@ export function App() {
     return restored;
   };
 
-  const commitPendingDeleteRef = useRef<(entry: PendingDeleteEntry) => void>(() => {});
-  commitPendingDeleteRef.current = (entry: PendingDeleteEntry) => {
-    const { snapshot } = entry;
+  const syncDeleteSnapshotToCloud = (snapshot: DeleteSnapshotPayload) => {
+    const deletedBugIds = new Set((snapshot.bugs || []).map(b => b.id).filter(Boolean));
+    deletedBugIds.forEach(id => markBugDeleted(id));
 
     (snapshot.plans || []).forEach(p => {
       deleteTestPlanFromSupabase(p.id);
     });
 
     (snapshot.testRuns || []).forEach(r => {
-      safeDeleteTestRun(r.id);
       markTestRunDeleted(r.id);
+      markArchivedRunDeleted(r.id);
+      safeDeleteTestRun(r.id);
+      safeDeleteArchivedRun(r.id);
     });
 
     (snapshot.archivedRuns || []).forEach(r => {
-      safeDeleteArchivedRun(r.id);
       markTestRunDeleted(r.id);
+      markArchivedRunDeleted(r.id);
+      safeDeleteArchivedRun(r.id);
     });
 
     (snapshot.modifiedTestRuns || []).forEach(orig => {
       const current = testRunsRef.current.find(r => r.id === orig.id);
-      if (current) safeSyncTestRun(current);
+      if (current) {
+        const cleaned: TestRun = {
+          ...current,
+          bugLogs: (current.bugLogs || []).filter(b => b && b.id && !deletedBugIds.has(b.id) && !isBugDeleted(b.id)),
+        };
+        safeSyncTestRun(cleaned);
+      }
     });
 
     (snapshot.modifiedArchivedRuns || []).forEach(orig => {
       const current = archivedRunsRef.current.find(r => r.id === orig.id);
-      if (current) safeSyncArchivedRun(current);
+      if (current) {
+        const cleaned: TestRun = {
+          ...current,
+          bugLogs: (current.bugLogs || []).filter(b => b && b.id && !deletedBugIds.has(b.id) && !isBugDeleted(b.id)),
+        };
+        safeSyncArchivedRun(cleaned);
+      }
     });
 
     (snapshot.bugs || []).forEach(b => {
@@ -552,23 +606,91 @@ export function App() {
     });
 
     if (snapshot.devices && snapshot.devices.length > 0) {
-      snapshot.devices.forEach(d => deleteDeviceFromSupabase(d.id));
-      syncDevicesListToCloud(devicesRef.current);
+      snapshot.devices.forEach(d => {
+        markDeviceAsDeleted(d.id);
+        deleteDeviceFromSupabase(d.id);
+      });
     }
 
     if (snapshot.deviceDeltas && snapshot.deviceDeltas.length > 0) {
+      const patches: DevicePatch[] = [];
       snapshot.deviceDeltas.forEach(delta => {
         const currentDev = devicesRef.current.find(d => d.id === delta.deviceId);
-        if (currentDev) syncDeviceToSupabase(currentDev);
+        if (currentDev) {
+          const hasQuotaDelta = delta.previousQuotas !== undefined;
+          patches.push({
+            id: currentDev.id,
+            changes: hasQuotaDelta
+              ? {
+                  quotas: currentDev.quotas,
+                  activeRunId: currentDev.activeRunId,
+                  activeTesterName: currentDev.activeTesterName,
+                }
+              : {
+                  activeRunId: currentDev.activeRunId,
+                  activeTesterName: currentDev.activeTesterName,
+                },
+            lockOnly: !hasQuotaDelta,
+            updatedAt: hasQuotaDelta ? new Date().toISOString() : undefined,
+          });
+        }
       });
-      syncDevicesListToCloud(devicesRef.current);
+      if (patches.length > 0) {
+        safePatchDevices(patches);
+      }
     }
 
     if (snapshot.testers && snapshot.testers.length > 0) {
-      snapshot.testers.forEach(t => deleteTesterFromSupabase(t.id));
-      syncTestersListToCloud(testersRef.current);
+      snapshot.testers.forEach(t => {
+        markTesterAsDeleted(t.id);
+        deleteTesterFromSupabase(t.id);
+      });
     }
+  };
 
+  const syncRestoreSnapshotToCloud = (snapshot: DeleteSnapshotPayload, restored: QAStateSlice) => {
+    (snapshot.plans || []).forEach(p => syncTestPlanToSupabase(p));
+    (snapshot.testRuns || []).forEach(r => safeSyncTestRun(r));
+    (snapshot.modifiedTestRuns || []).forEach(r => safeSyncTestRun(r));
+    (snapshot.archivedRuns || []).forEach(r => safeSyncArchivedRun(r));
+    (snapshot.modifiedArchivedRuns || []).forEach(r => safeSyncArchivedRun(r));
+    (snapshot.bugs || []).forEach(b => safeSyncBugLog(b));
+    (snapshot.modifiedBugs || []).forEach(b => safePatchBugColumns(b, ['bundle']));
+    if ((snapshot.devices && snapshot.devices.length > 0) || (snapshot.deviceDeltas && snapshot.deviceDeltas.length > 0)) {
+      const affectedIds = new Set([
+        ...(snapshot.devices || []).map(d => d.id),
+        ...(snapshot.deviceDeltas || []).map(d => d.deviceId),
+      ]);
+      const nowIso = new Date().toISOString();
+      const patches: DevicePatch[] = [];
+      restored.devices.forEach(d => {
+        if (affectedIds.has(d.id)) {
+          patches.push({
+            id: d.id,
+            changes: { ...d, updatedAt: nowIso },
+            updatedAt: nowIso,
+          });
+        }
+      });
+      if (patches.length > 0) {
+        safePatchDevices(patches);
+      }
+    }
+    if (snapshot.testers && snapshot.testers.length > 0) {
+      const nowIso = new Date().toISOString();
+      safePatchTesters(
+        snapshot.testers.map(t => ({
+          id: t.id,
+          changes: { ...t, updatedAt: nowIso },
+          updatedAt: nowIso,
+        }))
+      );
+    }
+  };
+
+  const commitPendingDeleteRef = useRef<(entry: PendingDeleteEntry) => void>(() => {});
+  commitPendingDeleteRef.current = (entry: PendingDeleteEntry) => {
+    syncDeleteSnapshotToCloud(entry.snapshot);
     const updatedRecent = saveRecentlyDeletedEntry({
       id: entry.id,
       type: entry.type,
@@ -588,7 +710,8 @@ export function App() {
     (entry.snapshot.inProgressCache || []).forEach(({ key, value }) => {
       safeSetStorageItem(key, value);
     });
-    applyRestoredSnapshotToState(entry.snapshot);
+    const restored = applyRestoredSnapshotToState(entry.snapshot);
+    syncRestoreSnapshotToCloud(entry.snapshot, restored);
   };
 
   const pendingDeleteQueueRef = useRef<ReturnType<typeof createPendingDeleteQueue> | null>(null);
@@ -612,33 +735,92 @@ export function App() {
     lastDeviceEditTimeRef.current = Date.now();
     clearSnapshotTombstones(entry.snapshot);
     const restored = applyRestoredSnapshotToState(entry.snapshot);
-
-    const { snapshot } = entry;
-    (snapshot.plans || []).forEach(p => syncTestPlanToSupabase(p));
-    (snapshot.testRuns || []).forEach(r => safeSyncTestRun(r));
-    (snapshot.modifiedTestRuns || []).forEach(r => safeSyncTestRun(r));
-    (snapshot.archivedRuns || []).forEach(r => safeSyncArchivedRun(r));
-    (snapshot.modifiedArchivedRuns || []).forEach(r => safeSyncArchivedRun(r));
-    (snapshot.bugs || []).forEach(b => safeSyncBugLog(b));
-    (snapshot.modifiedBugs || []).forEach(b =>
-      safePatchBugColumns(b, ['bundle'])
-    );
-    if ((snapshot.devices && snapshot.devices.length > 0) || (snapshot.deviceDeltas && snapshot.deviceDeltas.length > 0)) {
-      const affectedIds = new Set([
-        ...(snapshot.devices || []).map(d => d.id),
-        ...(snapshot.deviceDeltas || []).map(d => d.deviceId),
-      ]);
-      restored.devices.forEach(d => {
-        if (affectedIds.has(d.id)) syncDeviceToSupabase(d);
-      });
-      syncDevicesListToCloud(restored.devices);
-    }
-    if (snapshot.testers && snapshot.testers.length > 0) {
-      snapshot.testers.forEach(t => syncTesterToSupabase(t));
-      syncTestersListToCloud(restored.testers);
-    }
-
+    syncRestoreSnapshotToCloud(entry.snapshot, restored);
     setRecentlyDeleted(removeRecentlyDeletedEntry(entryId));
+  };
+
+  const pruneLocalStateWithTombstones = () => {
+    const deletedBugIds = getDeletedBugIds();
+    const deletedTestIds = getDeletedTestRunIds();
+    const deletedArchIds = getDeletedArchivedRunIds();
+    const deletedDevIds = getDeletedDeviceIds();
+    const deletedTesterIds = getDeletedTesterIds();
+
+    try {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith('qa_in_progress_run_')) continue;
+        const raw = localStorage.getItem(k);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        if (!parsed || !parsed.id) continue;
+        if (deletedTestIds.has(parsed.id) || deletedArchIds.has(parsed.id)) {
+          localStorage.removeItem(k);
+        } else if (Array.isArray(parsed.bugLogs) && parsed.bugLogs.some((b: any) => b?.id && deletedBugIds.has(b.id))) {
+          parsed.bugLogs = parsed.bugLogs.filter((b: any) => b?.id && !deletedBugIds.has(b.id));
+          localStorage.setItem(k, JSON.stringify(parsed));
+        }
+      }
+    } catch {}
+
+    if (deletedBugIds.size > 0 && bugLogsRef.current.some(b => deletedBugIds.has(b.id))) {
+      const nextBugs = bugLogsRef.current.filter(b => !deletedBugIds.has(b.id));
+      bugLogsRef.current = nextBugs;
+      setBugLogs(nextBugs);
+      safeSetStorageItem(
+        'qa_bug_logs',
+        JSON.stringify(nextBugs),
+        () => JSON.stringify(nextBugs.map((b, idx) => (idx >= 5 && b?.imageUrl?.startsWith('data:')) ? { ...b, imageUrl: undefined } : b))
+      );
+    }
+
+    if (
+      testRunsRef.current.some(
+        r => deletedTestIds.has(r.id) || deletedArchIds.has(r.id) || (r.bugLogs || []).some(b => deletedBugIds.has(b.id))
+      )
+    ) {
+      const nextRuns = testRunsRef.current
+        .filter(r => !deletedTestIds.has(r.id) && !deletedArchIds.has(r.id))
+        .map(r =>
+          (r.bugLogs || []).some(b => deletedBugIds.has(b.id))
+            ? { ...r, bugLogs: (r.bugLogs || []).filter(b => !deletedBugIds.has(b.id)) }
+            : r
+        );
+      testRunsRef.current = nextRuns;
+      setTestRuns(nextRuns);
+      safeSetStorageItem('qa_test_runs', JSON.stringify(nextRuns));
+    }
+
+    if (
+      archivedRunsRef.current.some(
+        r => deletedArchIds.has(r.id) || (r.bugLogs || []).some(b => deletedBugIds.has(b.id))
+      )
+    ) {
+      const nextArch = archivedRunsRef.current
+        .filter(r => !deletedArchIds.has(r.id))
+        .map(r =>
+          (r.bugLogs || []).some(b => deletedBugIds.has(b.id))
+            ? { ...r, bugLogs: (r.bugLogs || []).filter(b => !deletedBugIds.has(b.id)) }
+            : r
+        );
+      archivedRunsRef.current = nextArch;
+      setArchivedRuns(nextArch);
+      safeSetStorageItem('qa_archived_runs', JSON.stringify(nextArch));
+    }
+
+    if (deletedDevIds.size > 0 && devicesRef.current.some(d => deletedDevIds.has(d.id))) {
+      const nextDevs = devicesRef.current.filter(d => !deletedDevIds.has(d.id));
+      devicesRef.current = nextDevs;
+      setDevices(nextDevs);
+      safeSetStorageItem('qa_devices_list', JSON.stringify(nextDevs));
+    }
+
+    if (deletedTesterIds.size > 0 && testersRef.current.some(t => deletedTesterIds.has(t.id))) {
+      const nextTesters = testersRef.current.filter(t => !deletedTesterIds.has(t.id));
+      testersRef.current = nextTesters;
+      setTesters(nextTesters);
+      safeSetStorageItem('qa_testers_list', JSON.stringify(nextTesters));
+    }
   };
 
   // Reads the most recent __DAILY_QUOTA_RESET_DATE__ marker recorded in the cloud.
@@ -662,8 +844,10 @@ export function App() {
         if (k.startsWith('qa_in_progress_run_')) localStorage.removeItem(k);
       });
       localStorage.removeItem('qa_device_name');
+      localStorage.removeItem('qa_selected_device_id');
       localStorage.removeItem('qa_session_setup_date');
       sessionStorage.removeItem('qa_device_name');
+      sessionStorage.removeItem('qa_selected_device_id');
     } catch (e) {}
   };
 
@@ -703,12 +887,14 @@ export function App() {
         safeSyncTestRun(terminated);
       }
     });
+    const nowIso = new Date().toISOString();
     const resetList = devList.map(d => ({
       ...d,
       quotas: [],
       isReady: true,
       activeRunId: undefined,
-      activeTesterName: undefined
+      activeTesterName: undefined,
+      updatedAt: nowIso,
     }));
     safeSetStorageItem('qa_last_quota_reset_date', todayStr);
     safeSetStorageItem('qa_devices_list', JSON.stringify(resetList));
@@ -760,8 +946,13 @@ export function App() {
       devicesRef.current = sweep.devices;
       setDevices(sweep.devices);
       safeSetStorageItem('qa_devices_list', JSON.stringify(sweep.devices));
-      sweep.releasedDevices.forEach(d => syncDeviceToSupabase(d));
-      safeSyncDevices(sweep.devices);
+      safePatchDevices(
+        sweep.releasedDevices.map(d => ({
+          id: d.id,
+          changes: { activeRunId: d.activeRunId, activeTesterName: d.activeTesterName },
+          lockOnly: true,
+        }))
+      );
     }
   };
 
@@ -772,12 +963,13 @@ export function App() {
     const fetchStartedAt = Date.now();
     await drainOfflineQueue();
     const cloudData = await fetchAllSupabaseData();
-    // Discard stale out-of-order responses or responses racing a recent local user mutation
+    // Discard stale out-of-order responses or responses that started before a local user mutation
     if (mySeq !== pollSeqRef.current) return;
-    if (lastUserMutationRef.current >= fetchStartedAt || Date.now() - lastUserMutationRef.current < 2500) {
+    if (lastUserMutationRef.current >= fetchStartedAt) {
       return;
     }
     if (cloudData) {
+      pruneLocalStateWithTombstones();
       // M4: Exclude any entities currently in the 10s pending-delete queue so cloud polls never resurrect them
       const pendingPlanIds = new Set<string>();
       const pendingRunIds = new Set<string>();
@@ -801,6 +993,8 @@ export function App() {
         }
       });
 
+      const deletedBugIds = getDeletedBugIds();
+
       if (cloudData.testPlans) {
         const normalizedPlans = normalizePlans(cloudData.testPlans).filter(
           p => !pendingPlanIds.has(p.id)
@@ -816,8 +1010,14 @@ export function App() {
       const validArchivedRuns = filterCloudArchivedRuns(
         normalizeRuns(cloudData.archivedRuns || []),
         isArchivedRunDeleted
-      ).filter(r => !pendingRunIds.has(r.id) && !pendingPlanIds.has(r.planId));
+      )
+        .filter(r => !pendingRunIds.has(r.id) && !pendingPlanIds.has(r.planId))
+        .map(r => ({
+          ...r,
+          bugLogs: (r.bugLogs || []).filter(b => b && b.id && !deletedBugIds.has(b.id) && !pendingBugIds.has(b.id)),
+        }));
       if (cloudData.archivedRuns && JSON.stringify(validArchivedRuns) !== JSON.stringify(archivedRunsRef.current)) {
+        archivedRunsRef.current = validArchivedRuns;
         setArchivedRuns(validArchivedRuns);
       }
 
@@ -838,20 +1038,24 @@ export function App() {
       const rawCloudRuns = normalizeRuns(cloudData.testRuns || [])
         .filter(cr => !pendingRunIds.has(cr.id) && !pendingPlanIds.has(cr.planId))
         .map(cr => {
-          if (cr.status !== 'in_progress') return cr;
+          const cleanCrBugs = (cr.bugLogs || []).filter(b => b && b.id && !deletedBugIds.has(b.id) && !pendingBugIds.has(b.id));
+          if (cr.status !== 'in_progress') return { ...cr, bugLogs: cleanCrBugs };
           const localCopy = localRunsById.get(cr.id);
           if (localCopy && localCopy.status === 'in_progress') {
             const localLast = getRunLastActivityMs(localCopy, combinedBugsForSweep);
             const cloudLast = getRunLastActivityMs(cr, combinedBugsForSweep);
             if (Number.isFinite(localLast) && (!Number.isFinite(cloudLast) || localLast > cloudLast)) {
+              const cleanLocalBugs = (localCopy.bugLogs || []).filter(
+                b => b && b.id && !deletedBugIds.has(b.id) && !pendingBugIds.has(b.id)
+              );
               return {
                 ...cr,
                 results: { ...(cr.results || {}), ...(localCopy.results || {}) },
-                bugLogs: localCopy.bugLogs?.length ? localCopy.bugLogs : cr.bugLogs,
+                bugLogs: cleanLocalBugs.length ? cleanLocalBugs : cleanCrBugs,
               };
             }
           }
-          return cr;
+          return { ...cr, bugLogs: cleanCrBugs };
         });
       const cloudSweep = autoReleaseStuckSessions(rawCloudRuns, devicesRef.current, nowMs, AUTO_RELEASE_IDLE_MINUTES, combinedBugsForSweep);
       if (cloudSweep.releasedRuns.length > 0) {
@@ -871,6 +1075,7 @@ export function App() {
         todayStr
       ).filter(r => !pendingRunIds.has(r.id) && !pendingPlanIds.has(r.planId));
       if (cloudData.testRuns && JSON.stringify(validTestRuns) !== JSON.stringify(testRunsRef.current)) {
+        testRunsRef.current = validTestRuns;
         setTestRuns(validTestRuns);
       }
       if (cloudData.bugLogs) {
@@ -885,9 +1090,9 @@ export function App() {
         const localWipedAt = localWipedAtStr ? parseInt(localWipedAtStr, 10) : 0;
         const effectiveWipedAt = Math.max(cloudWipedAt, localWipedAt);
 
-        // Filter out any bugs recorded before the wipe timestamp or currently pending delete
+        // Filter out any bugs recorded before the wipe timestamp, deleted bugs, or currently pending delete
         const validCloudBugs = normalizeBugs(cloudData.bugLogs).filter(b => {
-          if (pendingBugIds.has(b.id) || (b.testRunId && pendingRunIds.has(b.testRunId))) {
+          if (deletedBugIds.has(b.id) || pendingBugIds.has(b.id) || (b.testRunId && (pendingRunIds.has(b.testRunId) || isArchivedRunDeleted(b.testRunId)))) {
             return false;
           }
           if (effectiveWipedAt > 0) {
@@ -919,15 +1124,18 @@ export function App() {
           setPopulatedFeatures(cleanFeatures);
         }
       }
-      if (cloudData.devices && (cloudData.devices.length > 0 || devicesRef.current.length === 0)) {
-        const deletedDevIds = getDeletedDeviceIds();
+      if (cloudData.devices) {
+        const deletedDevIds = new Set([...Array.from(getDeletedDeviceIds()), ...Array.from(pendingDeviceIds)]);
         const filteredCloudDevices = normalizeDevices(cloudData.devices).filter(
-          cd => !deletedDevIds.has(cd.id) && !pendingDeviceIds.has(cd.id)
+          cd => !deletedDevIds.has(cd.id)
         );
         const isRecentUserEdit = Date.now() - lastDeviceEditTimeRef.current < 4000;
-        const baseDevices = isRecentUserEdit
-          ? devicesRef.current
-          : filteredCloudDevices;
+        const baseDevices = mergeDevicesLists(
+          filteredCloudDevices,
+          devicesRef.current.filter(d => !deletedDevIds.has(d.id)),
+          deletedDevIds,
+          !isRecentUserEdit
+        );
 
         const currentDevices = checkDailyQuotaReset(baseDevices, cloudData.populatedFeatures);
 
@@ -954,65 +1162,76 @@ export function App() {
           })
         ]);
 
-        // Calculate today's completed runs per device and plan for quota automation
+        // Calculate today's completed runs per device ID and plan for quota automation
         const stepFirstSeen = buildStepFirstSeenIndex(mergeRunsById(validArchivedRuns, validTestRuns));
         const runsTodayPerDevice: Record<string, Record<string, number>> = {};
         allCompletedRuns.forEach(r => {
           if (!r.completedAt || !isRunFullyCompleted(r, plansForQuota, stepFirstSeen)) return;
           const rDate = getLocalDateStr(r.completedAt);
           if (rDate !== todayStr) return;
-          const targetDev = currentDevices.find(d =>
-            (r.deviceId && d.id.toLowerCase().trim() === r.deviceId.toLowerCase().trim()) ||
-            (r.deviceName && d.name && d.name.toLowerCase().trim() === r.deviceName.toLowerCase().trim())
-          );
-          if (targetDev) {
-            if (!runsTodayPerDevice[targetDev.id]) runsTodayPerDevice[targetDev.id] = {};
-            runsTodayPerDevice[targetDev.id][r.planId] = (runsTodayPerDevice[targetDev.id][r.planId] || 0) + 1;
+          const targetDevId = resolveRunDeviceId(r, currentDevices);
+          if (targetDevId) {
+            if (!runsTodayPerDevice[targetDevId]) runsTodayPerDevice[targetDevId] = {};
+            runsTodayPerDevice[targetDevId][r.planId] = (runsTodayPerDevice[targetDevId][r.planId] || 0) + 1;
           }
         });
 
-        let needsSync = false;
+        const liveLockMap = reconcileDeviceLocks(currentDevices, inProgressRuns);
+        const lockPatches: DevicePatch[] = [];
         const syncedDevices = currentDevices.map(d => {
           const dev = { ...d };
-
-          // 1. Align active run lock using exact matching against live in-progress runs today
-          const matchingRun = inProgressRuns.find(r =>
-            (d.activeRunId && r.id === d.activeRunId) ||
-            (r.deviceId && r.deviceId.toLowerCase().trim() === d.id.toLowerCase().trim()) ||
-            (r.deviceName && r.deviceName.toLowerCase().trim() === d.name.toLowerCase().trim())
-          );
+          const matchingRun = liveLockMap.get(d.id);
 
           if (matchingRun) {
             if (d.activeRunId !== matchingRun.id || d.activeTesterName !== matchingRun.testerName) {
-              needsSync = true;
               dev.activeRunId = matchingRun.id;
               dev.activeTesterName = matchingRun.testerName;
+              lockPatches.push({
+                id: dev.id,
+                changes: { activeRunId: dev.activeRunId, activeTesterName: dev.activeTesterName },
+                lockOnly: true,
+              });
             }
           } else if ((d.activeRunId || d.activeTesterName) && !isRecentUserEdit) {
             // No live in-progress run exists for this device -> release orphaned device lock
-            needsSync = true;
             dev.activeRunId = undefined;
             dev.activeTesterName = undefined;
+            lockPatches.push({
+              id: dev.id,
+              changes: { activeRunId: undefined, activeTesterName: undefined },
+              lockOnly: true,
+            });
           }
 
           return dev;
         });
 
         if (JSON.stringify(syncedDevices) !== JSON.stringify(devicesRef.current)) {
+          devicesRef.current = syncedDevices;
           setDevices(syncedDevices);
-        }
-        if (needsSync) {
           safeSetStorageItem('qa_devices_list', JSON.stringify(syncedDevices));
-          safeSyncDevices(syncedDevices);
+        }
+        if (lockPatches.length > 0) {
+          safePatchDevices(lockPatches);
         }
       }
       if (cloudData.testers) {
-        const deletedTesterIds = getDeletedTesterIds();
+        const deletedTesterIds = new Set([...Array.from(getDeletedTesterIds()), ...Array.from(pendingTesterIds)]);
         const filteredCloudTesters = normalizeTesters(cloudData.testers).filter(
-          ct => !deletedTesterIds.has(ct.id) && !pendingTesterIds.has(ct.id) && !pendingTesterNames.has(ct.name.toLowerCase().trim())
+          ct => !deletedTesterIds.has(ct.id) && !pendingTesterNames.has(ct.name.toLowerCase().trim())
         );
-        if (JSON.stringify(filteredCloudTesters) !== JSON.stringify(testersRef.current)) {
-          setTesters(filteredCloudTesters);
+        const mergedTesters = mergeTestersLists(
+          filteredCloudTesters,
+          testersRef.current.filter(
+            t => !deletedTesterIds.has(t.id) && !pendingTesterNames.has(t.name.toLowerCase().trim())
+          ),
+          deletedTesterIds,
+          true
+        );
+        if (JSON.stringify(mergedTesters) !== JSON.stringify(testersRef.current)) {
+          testersRef.current = mergedTesters;
+          setTesters(mergedTesters);
+          safeSetStorageItem('qa_testers_list', JSON.stringify(mergedTesters));
         }
       }
     }
@@ -1023,6 +1242,9 @@ export function App() {
     setRecentlyDeleted(loadRecentlyDeleted());
     runLocalAutoReleaseSweep();
     loadCloudData();
+    const unsubTombstones = onCloudTombstonesUpdated(() => {
+      if (!disposed) pruneLocalStateWithTombstones();
+    });
     let debounceTimer: any = null;
     const unsubscribe = subscribeToSupabaseRealtime(() => {
       if (debounceTimer) clearTimeout(debounceTimer);
@@ -1090,6 +1312,7 @@ export function App() {
       disposed = true;
       unsubscribe();
       unsubCmds();
+      unsubTombstones();
       clearInterval(pollTimer);
       if (debounceTimer) clearTimeout(debounceTimer);
       if (capSub && typeof capSub.remove === 'function') capSub.remove();
@@ -1558,21 +1781,26 @@ export function App() {
     }
 
     if (deletedPlan) {
+      const snapshot: DeleteSnapshot = {
+        plans: [deletedPlan],
+        testRuns: runsToRemove.length > 0 ? runsToRemove : undefined,
+        deviceDeltas: deviceDeltas.length > 0 ? deviceDeltas : undefined,
+        selectedPlanId: prevSelectedPlanId === planId ? planId : undefined,
+        inProgressCache: inProgressCache.length > 0 ? inProgressCache : undefined,
+      };
+      syncDeleteSnapshotToCloud(snapshot);
       pendingDeleteQueueRef.current?.enqueue({
         type: 'plan',
         targetId: planId,
         label: deletedPlan.name || 'Test Plan',
-        snapshot: {
-          plans: [deletedPlan],
-          testRuns: runsToRemove.length > 0 ? runsToRemove : undefined,
-          deviceDeltas: deviceDeltas.length > 0 ? deviceDeltas : undefined,
-          selectedPlanId: prevSelectedPlanId === planId ? planId : undefined,
-          inProgressCache: inProgressCache.length > 0 ? inProgressCache : undefined,
-        },
+        snapshot,
       });
     } else {
       deleteTestPlanFromSupabase(planId);
-      runsToRemove.forEach(r => safeDeleteTestRun(r.id));
+      runsToRemove.forEach(r => {
+        markTestRunDeleted(r.id);
+        safeDeleteTestRun(r.id);
+      });
     }
   };
 
@@ -1589,9 +1817,10 @@ export function App() {
     if (options?.keepBugs) {
       setTestRuns(prev => prev.filter(r => r.id !== runId));
       setArchivedRuns(prev => prev.filter(r => r.id !== runId));
+      markTestRunDeleted(runId);
+      markArchivedRunDeleted(runId);
       safeDeleteTestRun(runId);
       safeDeleteArchivedRun(runId);
-      markTestRunDeleted(runId);
       if (deletedRun?.planId) {
         try {
           const raw = localStorage.getItem(`qa_in_progress_run_${deletedRun.planId}`);
@@ -1601,29 +1830,31 @@ export function App() {
         } catch (e) {}
       }
       setDevices(prev => {
-        let changed = false;
+        const targetDevId = deletedRun ? resolveRunDeviceId(deletedRun, prev) : null;
+        const lockPatches: DevicePatch[] = [];
         const next = prev.map(d => {
           const matchesRunId = d.activeRunId === runId;
-          const matchesTesterAndDev = Boolean(
-            deletedRun &&
-            deletedRun.testerName &&
-            d.activeTesterName &&
-            d.activeTesterName.toLowerCase().trim() === deletedRun.testerName.toLowerCase().trim() &&
-            deletedRun.deviceName &&
-            d.name &&
-            d.name.toLowerCase().trim() === deletedRun.deviceName.toLowerCase().trim()
+          const matchesResolvedDev = Boolean(
+            targetDevId &&
+            d.id === targetDevId &&
+            (!deletedRun?.testerName ||
+              !d.activeTesterName ||
+              d.activeTesterName.toLowerCase().trim() === deletedRun.testerName.toLowerCase().trim())
           );
-          if (matchesRunId || matchesTesterAndDev) {
-            changed = true;
-            const released = { ...d, activeRunId: undefined, activeTesterName: undefined };
-            syncDeviceToSupabase(released);
-            return released;
+          if (matchesRunId || matchesResolvedDev) {
+            lockPatches.push({
+              id: d.id,
+              lockOnly: true,
+              changes: { activeRunId: undefined, activeTesterName: undefined },
+            });
+            return { ...d, activeRunId: undefined, activeTesterName: undefined };
           }
           return d;
         });
-        if (changed) {
+        if (lockPatches.length > 0) {
+          devicesRef.current = next;
           safeSetStorageItem('qa_devices_list', JSON.stringify(next));
-          syncDevicesListToCloud(next);
+          safePatchDevices(lockPatches);
         }
         return next;
       });
@@ -1649,19 +1880,18 @@ export function App() {
       options
     );
 
+    const targetDevId = deletedRun ? resolveRunDeviceId(deletedRun, devicesRef.current) : null;
     const deviceDeltas: DeleteDeviceDelta[] = [];
     const nextDevices = devicesRef.current.map(d => {
       const matchesRunId = d.activeRunId === runId;
-      const matchesTesterAndDev = Boolean(
-        deletedRun &&
-        deletedRun.testerName &&
-        d.activeTesterName &&
-        d.activeTesterName.toLowerCase().trim() === deletedRun.testerName.toLowerCase().trim() &&
-        deletedRun.deviceName &&
-        d.name &&
-        d.name.toLowerCase().trim() === deletedRun.deviceName.toLowerCase().trim()
+      const matchesResolvedDev = Boolean(
+        targetDevId &&
+        d.id === targetDevId &&
+        (!deletedRun?.testerName ||
+          !d.activeTesterName ||
+          d.activeTesterName.toLowerCase().trim() === deletedRun.testerName.toLowerCase().trim())
       );
-      if (matchesRunId || matchesTesterAndDev) {
+      if (matchesRunId || matchesResolvedDev) {
         deviceDeltas.push({
           deviceId: d.id,
           activeRunId: d.activeRunId,
@@ -1706,17 +1936,20 @@ export function App() {
       ? `${deletedRun.planName || 'Test Run'}${deletedRun.testerName ? ` (${deletedRun.testerName})` : ''}`
       : `Run ${runId}`;
 
+    const snapshot: DeleteSnapshot = {
+      testRuns: deletedTestRun ? [deletedTestRun] : (!deletedArchivedRun ? [{ id: runId } as TestRun] : undefined),
+      archivedRuns: deletedArchivedRun ? [deletedArchivedRun] : undefined,
+      bugs: deletedBugs.length > 0 ? deletedBugs : undefined,
+      deviceDeltas: deviceDeltas.length > 0 ? deviceDeltas : undefined,
+      inProgressCache: inProgressCache.length > 0 ? inProgressCache : undefined,
+    };
+    syncDeleteSnapshotToCloud(snapshot);
+
     pendingDeleteQueueRef.current?.enqueue({
       type: 'run',
       targetId: runId,
       label: runLabel,
-      snapshot: {
-        testRuns: deletedTestRun ? [deletedTestRun] : undefined,
-        archivedRuns: deletedArchivedRun ? [deletedArchivedRun] : undefined,
-        bugs: deletedBugs.length > 0 ? deletedBugs : undefined,
-        deviceDeltas: deviceDeltas.length > 0 ? deviceDeltas : undefined,
-        inProgressCache: inProgressCache.length > 0 ? inProgressCache : undefined,
-      },
+      snapshot,
     });
   };
 
@@ -1766,17 +1999,32 @@ export function App() {
     }));
     clearLocalDailySessionCache();
 
+    const nowIso = new Date().toISOString();
     setDevices(prev => {
       const next = prev.map(d => ({
         ...d,
         quotas: [],
         isReady: true,
         activeRunId: undefined,
-        activeTesterName: undefined
+        activeTesterName: undefined,
+        updatedAt: nowIso,
       }));
+      devicesRef.current = next;
       safeSetStorageItem('qa_devices_list', JSON.stringify(next));
       safeSetStorageItem('qa_last_quota_reset_date', todayStr);
-      syncDevicesListToCloud(next);
+      safePatchDevices(
+        next.map(d => ({
+          id: d.id,
+          updatedAt: nowIso,
+          changes: {
+            quotas: [],
+            isReady: true,
+            activeRunId: undefined,
+            activeTesterName: undefined,
+            updatedAt: nowIso,
+          },
+        }))
+      );
       return next;
     });
 
@@ -1834,8 +2082,15 @@ export function App() {
           isTarget = r.id === runId;
         } else if (r.status === 'in_progress') {
           const matchesTester = Boolean(trimmedTester && r.testerName && r.testerName.toLowerCase().trim() === trimmedTester.toLowerCase());
-          const matchesDev = Boolean(trimmedDevName && r.deviceName && r.deviceName.toLowerCase().trim() === trimmedDevName.toLowerCase());
-          const matchesId = Boolean(trimmedDevId && r.deviceId && r.deviceId.toLowerCase().trim() === trimmedDevId.toLowerCase());
+          const rDevId = resolveRunDeviceId(r, devicesRef.current);
+          const matchesId = Boolean(trimmedDevId && rDevId && rDevId.toLowerCase().trim() === trimmedDevId.toLowerCase());
+          const matchesDev = Boolean(
+            !trimmedDevId &&
+            trimmedDevName &&
+            r.deviceName &&
+            r.deviceName.toLowerCase().trim() === trimmedDevName.toLowerCase() &&
+            isDeviceNameUnique(trimmedDevName, devicesRef.current)
+          );
           isTarget = matchesTester && (matchesId || matchesDev || (!trimmedDevId && !trimmedDevName));
         }
         if (isTarget) {
@@ -1870,28 +2125,36 @@ export function App() {
 
     // 4. Free device lock using exact matching (keep readiness intact)
     setDevices(prev => {
-      let changed = false;
+      const lockPatches: DevicePatch[] = [];
       const next = prev.map(d => {
         const matchesDevId = Boolean(trimmedDevId && d.id.toLowerCase().trim() === trimmedDevId.toLowerCase());
-        const matchesDevName = Boolean(trimmedDevName && d.name.toLowerCase().trim() === trimmedDevName.toLowerCase());
+        const matchesDevName = Boolean(
+          !trimmedDevId &&
+          trimmedDevName &&
+          d.name.toLowerCase().trim() === trimmedDevName.toLowerCase() &&
+          isDeviceNameUnique(trimmedDevName, prev)
+        );
         const matchesRunId = Boolean(runId && d.activeRunId === runId);
         // Only fall back to tester-name matching when no run/device was identified
         const matchesTester = Boolean(!runId && !trimmedDevId && !trimmedDevName && trimmedTester && d.activeTesterName && d.activeTesterName.toLowerCase().trim() === trimmedTester.toLowerCase());
         if (matchesDevId || matchesDevName || matchesRunId || matchesTester) {
-          changed = true;
-          const released = {
+          lockPatches.push({
+            id: d.id,
+            lockOnly: true,
+            changes: { activeRunId: undefined, activeTesterName: undefined },
+          });
+          return {
             ...d,
             activeRunId: undefined,
             activeTesterName: undefined,
           };
-          syncDeviceToSupabase(released);
-          return released;
         }
         return d;
       });
-      if (changed) {
+      if (lockPatches.length > 0) {
+        devicesRef.current = next;
         safeSetStorageItem('qa_devices_list', JSON.stringify(next));
-        syncDevicesListToCloud(next);
+        safePatchDevices(lockPatches);
       }
       return next;
     });
@@ -1979,17 +2242,19 @@ export function App() {
     }
 
     const label = (testerName || '').trim() || 'Tester';
+    const snapshot: DeleteSnapshot = {
+      testers: matchingProfiles.length > 0 ? matchingProfiles : undefined,
+      testRuns: deletedTestRuns.length > 0 ? deletedTestRuns : undefined,
+      archivedRuns: deletedArchivedRuns.length > 0 ? deletedArchivedRuns : undefined,
+      bugs: deletedBugs.length > 0 ? deletedBugs : undefined,
+      deviceDeltas: deviceDeltas.length > 0 ? deviceDeltas : undefined,
+    };
+    syncDeleteSnapshotToCloud(snapshot);
     pendingDeleteQueueRef.current?.enqueue({
       type: 'tester',
       targetId: matchingProfiles[0]?.id || normTarget,
       label,
-      snapshot: {
-        testers: matchingProfiles.length > 0 ? matchingProfiles : undefined,
-        testRuns: deletedTestRuns.length > 0 ? deletedTestRuns : undefined,
-        archivedRuns: deletedArchivedRuns.length > 0 ? deletedArchivedRuns : undefined,
-        bugs: deletedBugs.length > 0 ? deletedBugs : undefined,
-        deviceDeltas: deviceDeltas.length > 0 ? deviceDeltas : undefined,
-      },
+      snapshot,
     });
   };
 
@@ -2102,7 +2367,10 @@ export function App() {
           toKeep.push(b);
         }
       });
-      toDelete.forEach(b => deleteBugLogFromSupabase(b.id));
+      toDelete.forEach(b => {
+        markBugDeleted(b.id);
+        safeDeleteBugLog(b.id);
+      });
       return toKeep;
     });
 
@@ -2115,19 +2383,22 @@ export function App() {
       } catch (e) {}
 
       setDevices(prev => {
-        let changed = false;
+        const lockPatches: DevicePatch[] = [];
         const next = prev.map(d => {
           if (d.activeRunId || d.activeTesterName) {
-            changed = true;
-            const released = { ...d, activeRunId: undefined, activeTesterName: undefined };
-            syncDeviceToSupabase(released);
-            return released;
+            lockPatches.push({
+              id: d.id,
+              lockOnly: true,
+              changes: { activeRunId: undefined, activeTesterName: undefined },
+            });
+            return { ...d, activeRunId: undefined, activeTesterName: undefined };
           }
           return d;
         });
-        if (changed) {
+        if (lockPatches.length > 0) {
+          devicesRef.current = next;
           safeSetStorageItem('qa_devices_list', JSON.stringify(next));
-          syncDevicesListToCloud(next);
+          safePatchDevices(lockPatches);
         }
         return next;
       });
@@ -2240,19 +2511,22 @@ export function App() {
 
     if (target) {
       const bugLabel = target.stepTitle ? `Bug: ${target.stepTitle}` : 'Bug report';
+      const snapshot: DeleteSnapshot = {
+        bugs: [target],
+        modifiedBugs: modifiedBugs.length > 0 ? modifiedBugs : undefined,
+        modifiedTestRuns: modifiedTestRuns.length > 0 ? modifiedTestRuns : undefined,
+        modifiedArchivedRuns: modifiedArchivedRuns.length > 0 ? modifiedArchivedRuns : undefined,
+      };
+      syncDeleteSnapshotToCloud(snapshot);
       pendingDeleteQueueRef.current?.enqueue({
         type: 'bug',
         targetId: bugId,
         label: bugLabel,
-        snapshot: {
-          bugs: [target],
-          modifiedBugs: modifiedBugs.length > 0 ? modifiedBugs : undefined,
-          modifiedTestRuns: modifiedTestRuns.length > 0 ? modifiedTestRuns : undefined,
-          modifiedArchivedRuns: modifiedArchivedRuns.length > 0 ? modifiedArchivedRuns : undefined,
-        },
+        snapshot,
       });
     } else {
-      deleteBugLogFromSupabase(bugId);
+      markBugDeleted(bugId);
+      safeDeleteBugLog(bugId);
     }
   };
 
@@ -2465,11 +2739,12 @@ export function App() {
     // Run is only done when explicitly marked 'completed' at the final step and has actual step data recorded
     const isDone = updatedRun.status === 'completed' && stepResultsEntries.length > 0;
 
-    // Respect global bug wipe timestamp so stale phone bug arrays don't resurrect wiped bugs
+    // Respect global bug wipe timestamp and bug tombstones so stale phone bug arrays don't resurrect wiped/deleted bugs
     const localWipedAtStr = localStorage.getItem('qa_bugs_wiped_at');
     const localWipedAt = localWipedAtStr ? parseInt(localWipedAtStr, 10) : 0;
     const isBugValidAfterWipe = (b: BugLog) => {
       if (!b || !b.id) return false;
+      if (isBugDeleted(b.id)) return false;
       if (localWipedAt > 0 && b.timestamp) {
         const bTs = new Date(b.timestamp).getTime();
         if (bTs > 0 && bTs <= localWipedAt) return false;
@@ -2541,23 +2816,27 @@ export function App() {
       safeDeleteTestRun(completedRun.id);
       safeSyncArchivedRun(completedRun);
 
-      // Release device lock using exact matching: if test is finished, device is no longer in use
+      // Release device lock using resolved device ID: if test is finished, device is no longer in use
       setDevices(prev => {
-        let changed = false;
+        const resolvedDevId = resolveRunDeviceId(completedRun, prev);
+        const lockPatches: DevicePatch[] = [];
         const next = prev.map(d => {
-          const matchesId = d.activeRunId === completedRun.id || Boolean(completedRun.deviceId && d.id.toLowerCase().trim() === completedRun.deviceId.toLowerCase().trim());
-          const matchesName = Boolean(completedRun.deviceName && d.name.toLowerCase().trim() === completedRun.deviceName.toLowerCase().trim());
-          if (matchesId || matchesName) {
-            changed = true;
-            const released = { ...d, activeRunId: undefined, activeTesterName: undefined };
-            syncDeviceToSupabase(released);
-            return released;
+          const matchesRunId = d.activeRunId === completedRun.id;
+          const matchesResolvedDev = Boolean(resolvedDevId && d.id === resolvedDevId);
+          if (matchesRunId || matchesResolvedDev) {
+            lockPatches.push({
+              id: d.id,
+              lockOnly: true,
+              changes: { activeRunId: undefined, activeTesterName: undefined },
+            });
+            return { ...d, activeRunId: undefined, activeTesterName: undefined };
           }
           return d;
         });
-        if (changed) {
+        if (lockPatches.length > 0) {
+          devicesRef.current = next;
           safeSetStorageItem('qa_devices_list', JSON.stringify(next));
-          safeSyncDevices(next);
+          safePatchDevices(lockPatches);
         }
         return next;
       });
@@ -2565,7 +2844,7 @@ export function App() {
       // Guard against resurrecting a run that is already archived/completed, deleted, or terminated
       const alreadyArchived = archivedRunsRef.current.some(r => r.id === updatedRun.id);
       const alreadyTerminated = testRunsRef.current.some(r => r.id === updatedRun.id && (r.status as any) === 'terminated');
-      if (alreadyArchived || isTestRunDeleted(updatedRun.id) || (alreadyTerminated && updatedRun.status === 'in_progress')) {
+      if (alreadyArchived || isTestRunDeleted(updatedRun.id) || isArchivedRunDeleted(updatedRun.id) || (alreadyTerminated && updatedRun.status === 'in_progress')) {
         if (alreadyArchived && updatedRun.status === 'completed') {
           setArchivedRuns(prev => prev.map(r => r.id === updatedRun.id ? { ...r, bugLogs: fullBugLogs } : r));
           const existingArchived = archivedRunsRef.current.find(r => r.id === updatedRun.id);
@@ -2586,8 +2865,10 @@ export function App() {
         return;
       }
 
+      const resolvedNewDevId = resolveRunDeviceId(updatedRun, devicesRef.current);
       const runWithBugs: TestRun = {
         ...updatedRun,
+        deviceId: updatedRun.deviceId || resolvedNewDevId || undefined,
         bugLogs: fullBugLogs
       };
 
@@ -2596,22 +2877,27 @@ export function App() {
         if (runWithBugs.status === 'in_progress') {
           const superseded = prev.filter(r => {
             if (!r || r.id === runWithBugs.id || r.status !== 'in_progress') return false;
-            const sameDevId = Boolean(
-              r.deviceId &&
-              runWithBugs.deviceId &&
-              r.deviceId.toLowerCase().trim() === runWithBugs.deviceId.toLowerCase().trim()
-            );
-            const sameDevName = Boolean(
+            const rDevId = resolveRunDeviceId(r, devicesRef.current);
+            if (resolvedNewDevId && rDevId) {
+              return resolvedNewDevId === rDevId;
+            }
+            if (resolvedNewDevId || rDevId) {
+              return false;
+            }
+            const sameUniqueDevName = Boolean(
               r.deviceName &&
               runWithBugs.deviceName &&
-              r.deviceName.toLowerCase().trim() === runWithBugs.deviceName.toLowerCase().trim()
+              r.deviceName.toLowerCase().trim() === runWithBugs.deviceName.toLowerCase().trim() &&
+              isDeviceNameUnique(runWithBugs.deviceName, devicesRef.current)
             );
-            const sameTester = Boolean(
+            const sameTesterNoDev = Boolean(
+              !r.deviceName &&
+              !runWithBugs.deviceName &&
               r.testerName &&
               runWithBugs.testerName &&
               r.testerName.toLowerCase().trim() === runWithBugs.testerName.toLowerCase().trim()
             );
-            return sameDevId || sameDevName || sameTester;
+            return sameUniqueDevName || sameTesterNoDev;
           });
           if (superseded.length > 0) {
             const supersededIds = new Set(superseded.map(r => r.id));
@@ -2699,19 +2985,22 @@ export function App() {
     // Release device lock if held by ownRunId
     if (ownRunId) {
       setDevices(prev => {
-        let changed = false;
+        const lockPatches: DevicePatch[] = [];
         const next = prev.map(d => {
           if (d.activeRunId === ownRunId) {
-            changed = true;
-            const released = { ...d, activeRunId: undefined, activeTesterName: undefined };
-            syncDeviceToSupabase(released);
-            return released;
+            lockPatches.push({
+              id: d.id,
+              lockOnly: true,
+              changes: { activeRunId: undefined, activeTesterName: undefined },
+            });
+            return { ...d, activeRunId: undefined, activeTesterName: undefined };
           }
           return d;
         });
-        if (changed) {
+        if (lockPatches.length > 0) {
+          devicesRef.current = next;
           safeSetStorageItem('qa_devices_list', JSON.stringify(next));
-          safeSyncDevices(next);
+          safePatchDevices(lockPatches);
         }
         return next;
       });
@@ -2747,30 +3036,102 @@ export function App() {
   };
 
   const handleSaveDevice = (device: DeviceProfile) => {
+    if (!device || !device.id || !(device.name || '').trim()) return;
+    const trimmedName = device.name.trim();
+    const existing = devicesRef.current.find(d => d.id === device.id);
+    const isNewOrRenamed = !existing || existing.name.toLowerCase().trim() !== trimmedName.toLowerCase();
+    if (isNewOrRenamed && hasDuplicateDeviceName(trimmedName, devicesRef.current, device.id)) {
+      return;
+    }
+
     markUserMutation();
     lastDeviceEditTimeRef.current = Date.now();
-    syncDeviceToSupabase(device);
+
+    const nameChanged = !existing || existing.name !== trimmedName;
+    const readyChanged = !existing || Boolean(existing.isReady) !== Boolean(device.isReady);
+    const quotasChanged = !existing || JSON.stringify(existing.quotas || []) !== JSON.stringify(device.quotas || []);
+    const lockChanged =
+      !existing ||
+      (existing.activeRunId || undefined) !== (device.activeRunId || undefined) ||
+      (existing.activeTesterName || undefined) !== (device.activeTesterName || undefined);
+    const isConfigEdit = !existing || nameChanged || readyChanged || quotasChanged;
+
+    if (!isConfigEdit) {
+      // Lock-only update: never overwrite name, isReady, quotas, or updatedAt
+      if (!lockChanged) return;
+      setDevices(prev => {
+        const next = prev.map(d =>
+          d.id === device.id
+            ? { ...d, activeRunId: device.activeRunId, activeTesterName: device.activeTesterName }
+            : d
+        );
+        devicesRef.current = next;
+        safeSetStorageItem('qa_devices_list', JSON.stringify(next));
+        return next;
+      });
+      safePatchDevices([
+        {
+          id: device.id,
+          lockOnly: true,
+          changes: {
+            activeRunId: device.activeRunId,
+            activeTesterName: device.activeTesterName,
+          },
+        },
+      ]);
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    const stampedDevice: DeviceProfile = {
+      ...device,
+      name: trimmedName,
+      updatedAt: nowIso,
+    };
+
+    const changes: Partial<DeviceProfile> = { updatedAt: nowIso };
+    if (!existing) {
+      changes.name = stampedDevice.name;
+      changes.isReady = stampedDevice.isReady;
+      changes.quotas = stampedDevice.quotas || [];
+      changes.activeRunId = stampedDevice.activeRunId;
+      changes.activeTesterName = stampedDevice.activeTesterName;
+    } else {
+      if (nameChanged) changes.name = stampedDevice.name;
+      if (readyChanged) changes.isReady = stampedDevice.isReady;
+      if (quotasChanged) changes.quotas = stampedDevice.quotas || [];
+      if (lockChanged) {
+        changes.activeRunId = stampedDevice.activeRunId;
+        changes.activeTesterName = stampedDevice.activeTesterName;
+      }
+    }
+
     setDevices(prev => {
-      const exists = prev.some(d => d.id === device.id);
-      const next = exists ? prev.map(d => d.id === device.id ? device : d) : [...prev, device];
+      const exists = prev.some(d => d.id === stampedDevice.id);
+      const next = exists
+        ? prev.map(d => (d.id === stampedDevice.id ? stampedDevice : d))
+        : [...prev, stampedDevice];
+      devicesRef.current = next;
       safeSetStorageItem('qa_devices_list', JSON.stringify(next));
-      syncDevicesListToCloud(next);
       return next;
     });
+
+    safePatchDevices([{ id: stampedDevice.id, updatedAt: nowIso, changes }]);
   };
 
   const handleDeleteDevice = (deviceId: string) => {
     markUserMutation();
     lastDeviceEditTimeRef.current = Date.now();
-    const targetDev = devicesRef.current.find(d => d.id === deviceId);
+    const prevDevices = devicesRef.current;
+    const targetDev = prevDevices.find(d => d.id === deviceId);
 
-    const nextDevices = devicesRef.current.filter(d => d.id !== deviceId);
+    const nextDevices = prevDevices.filter(d => d.id !== deviceId);
     devicesRef.current = nextDevices;
     setDevices(nextDevices);
     safeSetStorageItem('qa_devices_list', JSON.stringify(nextDevices));
 
     let removedPopulated: string[] = [];
-    if (targetDev?.name) {
+    if (targetDev?.name && isDeviceNameUnique(targetDev.name, prevDevices)) {
       const normName = targetDev.name.toLowerCase().trim();
       removedPopulated = populatedDevicesRef.current.filter(
         n => n.toLowerCase().trim() === normName
@@ -2785,19 +3146,12 @@ export function App() {
       }
     }
 
-    // Terminate any active in-progress runs on this deleted device
+    // Terminate any active in-progress runs resolved to this deleted device ID
     const modifiedTestRuns: TestRun[] = [];
     const nextTestRuns = testRunsRef.current.map(r => {
       if (r.status === 'in_progress') {
-        const matchesId = Boolean(
-          r.deviceId && r.deviceId.toLowerCase().trim() === deviceId.toLowerCase().trim()
-        );
-        const matchesName = Boolean(
-          targetDev?.name &&
-            r.deviceName &&
-            r.deviceName.toLowerCase().trim() === targetDev.name.toLowerCase().trim()
-        );
-        if (matchesId || matchesName) {
+        const resolvedId = resolveRunDeviceId(r, prevDevices);
+        if (resolvedId === deviceId) {
           modifiedTestRuns.push(r);
           return { ...r, status: 'terminated' as any };
         }
@@ -2811,39 +3165,48 @@ export function App() {
     }
 
     if (targetDev) {
+      const snapshot: DeleteSnapshot = {
+        devices: [targetDev],
+        populatedDevices: removedPopulated.length > 0 ? removedPopulated : undefined,
+        modifiedTestRuns: modifiedTestRuns.length > 0 ? modifiedTestRuns : undefined,
+      };
+      syncDeleteSnapshotToCloud(snapshot);
       pendingDeleteQueueRef.current?.enqueue({
         type: 'device',
         targetId: deviceId,
         label: targetDev.name || deviceId,
-        snapshot: {
-          devices: [targetDev],
-          populatedDevices: removedPopulated.length > 0 ? removedPopulated : undefined,
-          modifiedTestRuns: modifiedTestRuns.length > 0 ? modifiedTestRuns : undefined,
-        },
+        snapshot,
       });
     } else {
+      markDeviceDeleted(deviceId);
       deleteDeviceFromSupabase(deviceId);
-      syncDevicesListToCloud(nextDevices);
     }
   };
 
   const handleSaveTester = (tester: TesterProfile) => {
     markUserMutation();
     const normName = (tester.name || '').toLowerCase().trim();
+    const nowIso = new Date().toISOString();
     setTesters(prev => {
       const existingById = prev.find(t => t.id === tester.id);
       const existingByName = !existingById ? prev.find(t => t.name.toLowerCase().trim() === normName) : undefined;
       const targetToUpdate = existingById || existingByName;
       const canonicalTester: TesterProfile = targetToUpdate
-        ? { ...targetToUpdate, ...tester, id: targetToUpdate.id, name: tester.name.trim() }
-        : { ...tester, name: tester.name.trim() };
+        ? { ...targetToUpdate, ...tester, id: targetToUpdate.id, name: tester.name.trim(), updatedAt: nowIso }
+        : { ...tester, name: tester.name.trim(), updatedAt: nowIso };
 
-      syncTesterToSupabase(canonicalTester);
       const next = targetToUpdate
         ? prev.map(t => t.id === targetToUpdate.id ? canonicalTester : t)
         : [...prev, canonicalTester];
+      testersRef.current = next;
       safeSetStorageItem('qa_testers_list', JSON.stringify(next));
-      syncTestersListToCloud(next);
+      safePatchTesters([
+        {
+          id: canonicalTester.id,
+          updatedAt: nowIso,
+          changes: canonicalTester,
+        },
+      ]);
       return next;
     });
   };

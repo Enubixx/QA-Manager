@@ -14,11 +14,15 @@ import {
   getAutoReleaseReason,
   getRunAutoReleasedMeta,
   getAutoReleaseMessage,
+  resolveRunDeviceId,
+  reconcileDeviceLocks,
+  isDeviceNameUnique,
+  computeTodayRunsMap,
 } from '../utils/runUtils';
 import { mergeRunsById } from '../utils/cujReportUtils';
 import { getLocalDateStr } from '../utils/dateUtils';
 import { APP_VERSION_CODE, APP_VERSION_NAME, APK_DOWNLOAD_URL, formatAppVersionName } from '../constants';
-import { BootSignal, subscribeToSystemCommands, isTestRunDeleted } from '../services/supabaseService';
+import { BootSignal, subscribeToSystemCommands, isTestRunDeleted, isArchivedRunDeleted, getDeletedBugIds, isBugDeleted } from '../services/supabaseService';
 
 /** Buganizer titles stay readable at ~120 chars. */
 const BUG_TITLE_MAX = 120;
@@ -86,8 +90,17 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     }
   };
 
+  const getStoredSelectedDeviceId = () => {
+    try {
+      return localStorage.getItem('qa_selected_device_id') || sessionStorage.getItem('qa_selected_device_id') || '';
+    } catch (e) {
+      return '';
+    }
+  };
+
   const [inputReporterName, setInputReporterName] = useState(() => getStoredTesterName());
   const [inputDeviceName, setInputDeviceName] = useState(() => getStoredDeviceName());
+  const [selectedDeviceId, setSelectedDeviceId] = useState(() => getStoredSelectedDeviceId());
 
   // Persistent Device Identifier for multi-tester isolation
   const getDeviceId = () => {
@@ -124,15 +137,28 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     }
   };
 
-  // Match device currently in use by this phone / tester
+  // Match device currently in use by this phone / tester (by device.id first, falling back to unique name)
   const currentSavedDevName = inputDeviceName || getStoredDeviceName();
+  const currentSavedDevId = selectedDeviceId || getStoredSelectedDeviceId();
   const currentDevice = useMemo(() => {
-    return devices.find(d => 
-      (currentSavedDevName && d.name.toLowerCase().trim() === currentSavedDevName.toLowerCase().trim()) ||
-      d.id === currentSavedDevName ||
-      d.id === deviceId
-    );
-  }, [devices, currentSavedDevName, deviceId]);
+    if (currentSavedDevId) {
+      const byId = devices.find(
+        d => d.id === currentSavedDevId || d.id.toLowerCase().trim() === currentSavedDevId.toLowerCase().trim()
+      );
+      if (byId) return byId;
+    }
+    if (currentSavedDevName) {
+      const byExactId = devices.find(d => d.id === currentSavedDevName);
+      if (byExactId) return byExactId;
+      if (isDeviceNameUnique(currentSavedDevName, devices)) {
+        const byUniqueName = devices.find(
+          d => d.name.toLowerCase().trim() === currentSavedDevName.toLowerCase().trim()
+        );
+        if (byUniqueName) return byUniqueName;
+      }
+    }
+    return devices.find(d => d.id === deviceId);
+  }, [devices, currentSavedDevId, currentSavedDevName, deviceId]);
 
   const todayStr = useMemo(() => {
     return getLocalDateStr(new Date());
@@ -142,27 +168,11 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   const stepFirstSeen = useMemo(() => buildStepFirstSeenIndex(mergedRuns), [mergedRuns]);
   const archivedIdSet = useMemo(() => new Set(archivedRuns.map(r => r.id)), [archivedRuns]);
 
-  // Compute completed runs per device and plan for today (deduplicated by run.id using mergeRunsById)
-  const todayRunsMap = useMemo(() => {
-    const map: Record<string, Record<string, number>> = {};
-
-    mergedRuns.forEach(run => {
-      // Same rule as the dashboard: only runs that recorded every step that existed when they finished count (history-aware, see runUtils).
-      if (!run.completedAt || !isRunFullyCompleted(run, testPlans, stepFirstSeen)) return;
-      const runDate = getLocalDateStr(run.completedAt);
-      if (runDate !== todayStr) return;
-
-      const targetDev = devices.find(dev => 
-        (run.deviceId && (dev.id === run.deviceId || dev.id.toLowerCase().trim() === run.deviceId.toLowerCase().trim())) ||
-        (run.deviceName && dev.name && dev.name.toLowerCase().trim() === run.deviceName.toLowerCase().trim())
-      );
-      if (targetDev) {
-        if (!map[targetDev.id]) map[targetDev.id] = {};
-        map[targetDev.id][run.planId] = (map[targetDev.id][run.planId] || 0) + 1;
-      }
-    });
-    return map;
-  }, [mergedRuns, devices, todayStr, testPlans, stepFirstSeen]);
+  // Compute completed runs per device and plan for today (deduplicated by run.id using mergeRunsById and resolved by device.id)
+  const todayRunsMap = useMemo(
+    () => computeTodayRunsMap(mergedRuns, devices, testPlans, stepFirstSeen, todayStr),
+    [mergedRuns, devices, testPlans, stepFirstSeen, todayStr]
+  );
 
   // "The only test plan that should be available to that Device is the one it has a quota set for"
   // Prefer plans with remaining daily quota today before falling back to exhausted quota plans.
@@ -283,16 +293,20 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       (cloudCopy && ((cloudCopy.status as any) === 'terminated' || cloudCopy.status === 'completed')) ||
       archivedIdSet.has(localSavedRun.id) ||
       isTestRunDeleted(localSavedRun.id) ||
+      isArchivedRunDeleted(localSavedRun.id) ||
       cloudResetToEmpty
     );
+    const resolvedLocalRunDevId = resolveRunDeviceId(localSavedRun, devices);
     const isDifferentDevice = Boolean(
       currentDevice &&
-      ((localSavedRun.deviceId &&
-        localSavedRun.deviceId.startsWith('dev-') &&
-        localSavedRun.deviceId !== deviceId &&
-        localSavedRun.deviceId.toLowerCase().trim() !== currentDevice.id.toLowerCase().trim()) ||
-        (localSavedRun.deviceName &&
-          localSavedRun.deviceName.toLowerCase().trim() !== currentDevice.name.toLowerCase().trim()))
+      (resolvedLocalRunDevId
+        ? resolvedLocalRunDevId !== currentDevice.id
+        : (localSavedRun.deviceId &&
+            localSavedRun.deviceId.startsWith('dev-') &&
+            localSavedRun.deviceId !== deviceId &&
+            localSavedRun.deviceId.toLowerCase().trim() !== currentDevice.id.toLowerCase().trim()) ||
+          (localSavedRun.deviceName &&
+            localSavedRun.deviceName.toLowerCase().trim() !== currentDevice.name.toLowerCase().trim()))
     );
     if (isInvalidInCloud || isDifferentDevice) {
       try {
@@ -310,19 +324,17 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     getAutoReleaseReason(r, Date.now(), undefined, bugLogs) === null &&
     !archivedIdSet.has(r.id) &&
     !isTestRunDeleted(r.id) &&
+    !isArchivedRunDeleted(r.id) &&
     (!r.startedAt || getLocalDateStr(r.startedAt) === todayStr) &&
     (
       (localSavedRun && r.id === localSavedRun.id) ||
-      (currentDevice && (
-        (r.deviceId && r.deviceId.toLowerCase().trim() === currentDevice.id.toLowerCase().trim()) ||
-        (r.deviceName && r.deviceName.toLowerCase().trim() === currentDevice.name.toLowerCase().trim())
-      )) ||
+      (currentDevice && resolveRunDeviceId(r, devices) === currentDevice.id) ||
       r.deviceId === deviceId ||
       r.id.includes(deviceId)
     )
   );
 
-  const deletedBugSet = new Set(deletedBugIds);
+  const deletedBugSet = new Set([...deletedBugIds, ...getDeletedBugIds()]);
 
   // Merge with locally persisted in-progress run so step results are NEVER lost
   if (localSavedRun && localSavedRun.planId === currentPlan?.id) {
@@ -372,34 +384,47 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     };
   }
 
+  const liveRunsForDeviceLocks = useMemo(
+    () =>
+      testRuns.filter(
+        r =>
+          r &&
+          r.id &&
+          r.id !== activeRun?.id &&
+          !archivedIdSet.has(r.id) &&
+          !isTestRunDeleted(r.id) &&
+          !isArchivedRunDeleted(r.id) &&
+          r.status === 'in_progress' &&
+          getEffectiveRunStatus(r, testPlans) === 'in_progress' &&
+          (!r.startedAt || getLocalDateStr(r.startedAt) === todayStr)
+      ),
+    [testRuns, activeRun?.id, archivedIdSet, testPlans, todayStr]
+  );
+
+  const deviceLocksByOtherRuns = useMemo(
+    () => reconcileDeviceLocks(devices, liveRunsForDeviceLocks),
+    [devices, liveRunsForDeviceLocks]
+  );
+
   // Selectable devices: Ready, not locked by another tester, and has configured daily test quota(s)
   const selectableDevices = useMemo(() => {
     const currentSavedName = getStoredDeviceName() || inputDeviceName || '';
+    const currentSavedId = getStoredSelectedDeviceId() || selectedDeviceId || '';
     const myTesterLower = (getStoredTesterName() || inputReporterName || '').toLowerCase().trim();
 
     return devices.filter(dev => {
       if (!dev.isReady) return false;
 
-      // Lock out if locked by another tester's active, in-progress run (via dev.activeRunId OR live testRuns match)
-      const liveRunOnDevice = testRuns.find(r =>
-        r &&
-        r.id &&
-        r.id !== activeRun?.id &&
-        !archivedIdSet.has(r.id) &&
-        !isTestRunDeleted(r.id) &&
-        r.status === 'in_progress' &&
-        getEffectiveRunStatus(r, testPlans) === 'in_progress' &&
-        (!r.startedAt || getLocalDateStr(r.startedAt) === todayStr) &&
-        (
-          (dev.activeRunId && r.id === dev.activeRunId) ||
-          (r.deviceId && r.deviceId.toLowerCase().trim() === dev.id.toLowerCase().trim()) ||
-          (r.deviceName && r.deviceName.toLowerCase().trim() === dev.name.toLowerCase().trim())
-        )
-      );
+      // Lock out if locked by another tester's active, in-progress run (reconciled by device.id)
+      const lockInfo = deviceLocksByOtherRuns.get(dev.id);
+      const liveRunOnDevice = lockInfo?.run;
 
       if (liveRunOnDevice) {
         const isSelfDevice = Boolean(
-          (currentSavedName &&
+          (currentSavedId && dev.id === currentSavedId && liveRunOnDevice.deviceId === deviceId) ||
+          (!currentSavedId &&
+            currentSavedName &&
+            isDeviceNameUnique(currentSavedName, devices) &&
             dev.name.toLowerCase().trim() === currentSavedName.toLowerCase().trim() &&
             liveRunOnDevice.deviceId === deviceId) ||
           (myTesterLower &&
@@ -419,6 +444,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           dev.activeRunId && (
             archivedIdSet.has(dev.activeRunId) ||
             isTestRunDeleted(dev.activeRunId) ||
+            isArchivedRunDeleted(dev.activeRunId) ||
             (knownRun && (
               knownRun.status === 'completed' ||
               knownRun.status === 'terminated' ||
@@ -431,7 +457,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           const isSelfLock = Boolean(
             (dev.activeRunId && activeRun?.id && dev.activeRunId === activeRun.id) ||
             (myTesterLower && dev.activeTesterName && dev.activeTesterName.toLowerCase().trim() === myTesterLower) ||
-            (currentSavedName &&
+            (currentSavedId && dev.id === currentSavedId && !dev.activeTesterName) ||
+            (!currentSavedId &&
+              currentSavedName &&
+              isDeviceNameUnique(currentSavedName, devices) &&
               dev.name.toLowerCase().trim() === currentSavedName.toLowerCase().trim() &&
               !dev.activeTesterName)
           );
@@ -457,7 +486,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
       return hasRemaining;
     });
-  }, [devices, todayRunsMap, activeRun?.id, testRuns, archivedIdSet, todayStr, inputDeviceName, inputReporterName, deviceId]);
+  }, [devices, deviceLocksByOtherRuns, todayRunsMap, activeRun?.id, testRuns, archivedRuns, archivedIdSet, todayStr, inputDeviceName, selectedDeviceId, inputReporterName, deviceId, testPlans]);
 
   const hasValidLiveRun = Boolean(
     activeRun &&
@@ -512,7 +541,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       if (lastSetupDate !== todayStr && !hasValidLiveRun) {
         localStorage.removeItem('qa_device_name');
         sessionStorage.removeItem('qa_device_name');
+        localStorage.removeItem('qa_selected_device_id');
+        sessionStorage.removeItem('qa_selected_device_id');
         setInputDeviceName('');
+        setSelectedDeviceId('');
       } else if (dev) {
         localStorage.setItem('qa_device_name', dev);
         sessionStorage.setItem('qa_device_name', dev);
@@ -662,17 +694,30 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   const isTesterSelectable = Boolean(inputReporterName.trim() && !selectedTesterLiveDevice);
 
-  // Ready devices with active quotas for "2 · Device" cards (sorted A-Z)
+  // Ready devices with active quotas for "2 · Device" cards (sorted A-Z, tie-broken by id)
   const readyQuotaDevices = useMemo(() => {
     return devices
       .filter(d => d.isReady && (d.quotas || []).some(q => q.targetRunsPerDay > 0))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   }, [devices]);
 
-  // Computed helper for currently selected device profile
+  // Computed helper for currently selected device profile (matched by selectedDeviceId first)
   const selectedDeviceProfile = useMemo(() => {
-    return devices.find(d => d.name.toLowerCase().trim() === inputDeviceName.toLowerCase().trim() || d.id === inputDeviceName) || null;
-  }, [devices, inputDeviceName]);
+    if (selectedDeviceId) {
+      const byId = devices.find(
+        d => d.id === selectedDeviceId || d.id.toLowerCase().trim() === selectedDeviceId.toLowerCase().trim()
+      );
+      if (byId) return byId;
+    }
+    if (inputDeviceName) {
+      const byExactId = devices.find(d => d.id === inputDeviceName);
+      if (byExactId) return byExactId;
+      if (isDeviceNameUnique(inputDeviceName, devices)) {
+        return devices.find(d => d.name.toLowerCase().trim() === inputDeviceName.toLowerCase().trim()) || null;
+      }
+    }
+    return null;
+  }, [devices, selectedDeviceId, inputDeviceName]);
 
   const isDeviceSelectable = useMemo(() => {
     if (!selectedDeviceProfile) return false;
@@ -731,15 +776,18 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       if (!showSetupModal) {
         setShowSetupModal(true);
       }
-      if (devices.length > 0 && inputDeviceName && !isDeviceSelectable) {
+      if (devices.length > 0 && (inputDeviceName || selectedDeviceId) && !isDeviceSelectable) {
         try {
           localStorage.removeItem('qa_device_name');
           sessionStorage.removeItem('qa_device_name');
+          localStorage.removeItem('qa_selected_device_id');
+          sessionStorage.removeItem('qa_selected_device_id');
         } catch {}
         setInputDeviceName('');
+        setSelectedDeviceId('');
       }
     }
-  }, [completedRunSummary, hasValidLiveRun, showSetupModal, devices.length, inputDeviceName, isDeviceSelectable]);
+  }, [completedRunSummary, hasValidLiveRun, showSetupModal, devices.length, inputDeviceName, selectedDeviceId, isDeviceSelectable]);
 
   // Active run completion state (strictly gated to this session or explicitly completed activeRun)
   const isCompleted = completedRunSummary !== null;
@@ -747,7 +795,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   // Dynamically compute active bugs for current plan/run
   const activeBugs = useMemo(() => {
-    const deletedSet = new Set(deletedBugIds);
+    const deletedSet = new Set([...deletedBugIds, ...getDeletedBugIds()]);
     const rawRunBugs = ((activeOrSummaryCompleted || activeRun)?.bugLogs || []).filter(b => !deletedSet.has(b.id));
     if (rawRunBugs.length > 0) {
       if (bugLogs && bugLogs.length > 0) {
@@ -789,17 +837,27 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
   const handleQuitAndReleaseSession = () => {
     // 1. Release active lock on target device and tester
-    const currentDeviceName = getStoredDeviceName() || activeRun?.deviceName || inputDeviceName;
     const currentTesterName = getStoredTesterName() || activeRun?.testerName || inputReporterName;
+    const resolvedActiveDevId =
+      selectedDeviceId ||
+      getStoredSelectedDeviceId() ||
+      (activeRun ? resolveRunDeviceId(activeRun, devices) : null) ||
+      currentDevice?.id;
 
     if (onSaveDevice) {
       devices.forEach(d => {
-        const matchesName = currentDeviceName && d.name.toLowerCase().trim() === currentDeviceName.toLowerCase().trim();
-        const matchesRunId = activeRun && d.activeRunId === activeRun.id;
-        const matchesDeviceId = (activeRun?.deviceId && d.id === activeRun.deviceId) || (d.id === deviceId);
-        const matchesTester = currentTesterName && d.activeTesterName && d.activeTesterName.toLowerCase().trim() === currentTesterName.toLowerCase().trim();
+        const matchesRunId = Boolean(activeRun && d.activeRunId === activeRun.id);
+        const matchesDeviceId = Boolean(
+          (resolvedActiveDevId && d.id === resolvedActiveDevId) || d.id === deviceId
+        );
+        const matchesTester = Boolean(
+          currentTesterName &&
+            d.activeTesterName &&
+            d.activeTesterName.toLowerCase().trim() === currentTesterName.toLowerCase().trim() &&
+            (!resolvedActiveDevId || d.id === resolvedActiveDevId)
+        );
 
-        if (matchesName || matchesRunId || matchesDeviceId || matchesTester) {
+        if (matchesRunId || matchesDeviceId || matchesTester) {
           onSaveDevice({
             ...d,
             activeRunId: undefined,
@@ -814,8 +872,8 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       r.status !== 'completed' && (
         (activeRun && r.id === activeRun.id) ||
         (deviceId && r.deviceId === deviceId) ||
-        (currentTesterName && r.testerName && r.testerName.toLowerCase().trim() === currentTesterName.toLowerCase().trim()) ||
-        (currentDeviceName && r.deviceName && r.deviceName.toLowerCase().trim() === currentDeviceName.toLowerCase().trim())
+        (resolvedActiveDevId && resolveRunDeviceId(r, devices) === resolvedActiveDevId) ||
+        (currentTesterName && r.testerName && r.testerName.toLowerCase().trim() === currentTesterName.toLowerCase().trim())
       )
     );
 
@@ -858,11 +916,14 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     try {
       sessionStorage.removeItem('qa_tester_name');
       sessionStorage.removeItem('qa_device_name');
+      sessionStorage.removeItem('qa_selected_device_id');
       localStorage.removeItem('qa_tester_name');
       localStorage.removeItem('qa_device_name');
+      localStorage.removeItem('qa_selected_device_id');
     } catch {}
     setInputReporterName('');
     setInputDeviceName('');
+    setSelectedDeviceId('');
     setActiveStepIndex(0);
     setSelectedStatus(null);
     setCompletedRunSummary(null);
@@ -1032,13 +1093,16 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     const deviceIdToSave = selectedDeviceProfile.id;
     const deviceNameToSave = selectedDeviceProfile.name;
     const testerNameToSave = selectedTesterProfile ? selectedTesterProfile.name : trimmedReporter;
+    const prevSavedDeviceId = getStoredSelectedDeviceId();
     const prevSavedDevice = getStoredDeviceName();
 
-    // Unlock any device previously locked by this session if selecting a new device
+    // Unlock any device previously locked by this session if selecting a new device (matched by ID)
     devices.forEach(d => {
-      const isPrevDev = prevSavedDevice && d.name.toLowerCase().trim() === prevSavedDevice.toLowerCase().trim();
+      const isPrevDev = prevSavedDeviceId
+        ? d.id === prevSavedDeviceId
+        : Boolean(prevSavedDevice && isDeviceNameUnique(prevSavedDevice, devices) && d.name.toLowerCase().trim() === prevSavedDevice.toLowerCase().trim());
       const isLockedByThisRun = d.activeRunId === activeRun.id;
-      const isNewDev = d.id === deviceIdToSave || d.name.toLowerCase().trim() === deviceNameToSave.toLowerCase().trim();
+      const isNewDev = d.id === deviceIdToSave;
 
       if ((isPrevDev || isLockedByThisRun) && !isNewDev) {
         if (onSaveDevice) {
@@ -1055,18 +1119,17 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     try {
       sessionStorage.setItem('qa_tester_name', testerNameToSave);
       sessionStorage.setItem('qa_device_name', deviceNameToSave);
+      sessionStorage.setItem('qa_selected_device_id', deviceIdToSave);
       localStorage.setItem('qa_tester_name', testerNameToSave);
       localStorage.setItem('qa_device_name', deviceNameToSave);
+      localStorage.setItem('qa_selected_device_id', deviceIdToSave);
       localStorage.setItem('qa_session_setup_date', todayStr);
     } catch {}
+    setSelectedDeviceId(deviceIdToSave);
 
     onAddPopulatedDevice(deviceNameToSave);
 
-    const isSameDevice = Boolean(
-      activeRun.deviceId === deviceIdToSave &&
-      activeRun.deviceName &&
-      activeRun.deviceName.toLowerCase().trim() === deviceNameToSave.toLowerCase().trim()
-    );
+    const isSameDevice = Boolean(activeRun.deviceId === deviceIdToSave);
     const isSamePlan = activeRun.planId === targetPlan.id;
     const isSameTester = Boolean(
       activeRun.testerName &&
@@ -1093,9 +1156,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
     if (isBrandNew) {
       const prevTesterLower = (getStoredTesterName() || '').toLowerCase().trim();
       const newTesterLower = testerNameToSave.toLowerCase().trim();
-      const prevDevLower = (prevSavedDevice || '').toLowerCase().trim();
-      const newDevLower = deviceNameToSave.toLowerCase().trim();
-      const newDevIdLower = deviceIdToSave.toLowerCase().trim();
 
       const runsToSupersede = new Map<string, TestRun>();
       if (activeRun.id && activeRun.id !== mintedId && activeRun.status === 'in_progress' && !archivedIdSet.has(activeRun.id)) {
@@ -1104,14 +1164,18 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
       testRuns.forEach(r => {
         if (!r || !r.id || r.id === mintedId || r.status !== 'in_progress' || archivedIdSet.has(r.id)) return;
         const rTester = (r.testerName || '').toLowerCase().trim();
-        const rDevName = (r.deviceName || '').toLowerCase().trim();
-        const rDevId = (r.deviceId || '').toLowerCase().trim();
-        const matchesTester = Boolean(rTester && (rTester === newTesterLower || (prevTesterLower && rTester === prevTesterLower)));
+        const rResolvedDevId = resolveRunDeviceId(r, devices);
         const matchesDevice = Boolean(
-          (rDevId && rDevId === newDevIdLower) ||
-          (rDevName && (rDevName === newDevLower || (prevDevLower && rDevName === prevDevLower)))
+          rResolvedDevId &&
+            (rResolvedDevId === deviceIdToSave ||
+              (prevSavedDeviceId && rResolvedDevId === prevSavedDeviceId))
         );
-        if (matchesTester || matchesDevice) {
+        const matchesSamePhoneTester = Boolean(
+          rTester &&
+            (rTester === newTesterLower || (prevTesterLower && rTester === prevTesterLower)) &&
+            (!rResolvedDevId || rResolvedDevId === deviceIdToSave || (prevSavedDeviceId && rResolvedDevId === prevSavedDeviceId))
+        );
+        if (matchesDevice || matchesSamePhoneTester) {
           runsToSupersede.set(r.id, r);
         }
       });
@@ -1223,7 +1287,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
   // Current step defects (for reviewing or removing mistaken bugs)
   const currentStepBugs = useMemo(() => {
     if (!currentStep || !activeRun) return [];
-    const deletedSet = new Set(deletedBugIds);
+    const deletedSet = new Set([...deletedBugIds, ...getDeletedBugIds()]);
     return (activeRun.bugLogs || []).filter(b => b.stepId === currentStep.id && !deletedSet.has(b.id));
   }, [currentStep?.id, activeRun?.bugLogs, deletedBugIds]);
 
@@ -1327,10 +1391,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
         }
       } catch {}
       const activeDevName = activeRun.deviceName;
+      const resolvedCompletedDevId = resolveRunDeviceId(updatedRun, devices) || resolvedDeviceId;
       const matchedDev = devices.find(
         d =>
-          (resolvedDeviceId && d.id.toLowerCase().trim() === resolvedDeviceId.toLowerCase().trim()) ||
-          (activeDevName && d.name.toLowerCase().trim() === activeDevName.toLowerCase().trim()) ||
+          (resolvedCompletedDevId && d.id.toLowerCase().trim() === resolvedCompletedDevId.toLowerCase().trim()) ||
           d.activeRunId === activeRun.id
       );
       if (matchedDev) {
@@ -1351,8 +1415,11 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
           try {
             localStorage.removeItem('qa_device_name');
             sessionStorage.removeItem('qa_device_name');
+            localStorage.removeItem('qa_selected_device_id');
+            sessionStorage.removeItem('qa_selected_device_id');
           } catch {}
           setInputDeviceName('');
+          setSelectedDeviceId('');
         }
       }
       setBugSuccessMessage(`🎉 Run complete! ${activeDevName || 'Device'} progress updated for today.`);
@@ -2419,7 +2486,7 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
               ? `${Math.floor(durationSecs / 60)}m ${durationSecs % 60 < 10 ? '0' : ''}${durationSecs % 60}s`
               : `${durationSecs}s`;
 
-            const bugLogsList = (summaryRun?.bugLogs || []).filter(b => !deletedBugIds.includes(b.id));
+            const bugLogsList = (summaryRun?.bugLogs || []).filter(b => !deletedBugIds.includes(b.id) && !isBugDeleted(b.id));
 
             return (
               <div className="p-6 flex-1 flex flex-col justify-between items-center text-center space-y-4 overflow-y-auto max-h-[580px]">
@@ -2569,10 +2636,10 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
 
                 {/* Test Again Action */}
                 {(() => {
-                  const summaryDevice = devices.find(d =>
-                    (summaryRun?.deviceId && d.id.toLowerCase().trim() === summaryRun.deviceId.toLowerCase().trim()) ||
-                    (summaryRun?.deviceName && d.name.toLowerCase().trim() === summaryRun.deviceName.toLowerCase().trim())
-                  );
+                  const resolvedSummaryDevId = summaryRun ? resolveRunDeviceId(summaryRun, devices) : null;
+                  const summaryDevice = resolvedSummaryDevId
+                    ? devices.find(d => d.id === resolvedSummaryDevId)
+                    : undefined;
                   const summaryDeviceHasQuotaLeft = Boolean(
                     summaryDevice &&
                     (summaryDevice.quotas || []).some(q => {
@@ -2592,7 +2659,6 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                         type="button"
                         onClick={() => {
                           const completedId = summaryRun?.id || activeRun?.id;
-                          const completedDevName = summaryRun?.deviceName || activeRun?.deviceName;
                           setCompletedRunSummary(null);
                           setSelectedStatus(null);
                           setActiveStepIndex(0);
@@ -2603,33 +2669,38 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                             // Pass THIS device's run id so restart never closes another tester's run on the same plan.
                             onRestartRun(currentPlan.id, completedId);
                           }
-                          if (completedDevName && onSaveDevice) {
-                            const matchedDev = devices.find(d => d.name.toLowerCase().trim() === completedDevName.toLowerCase().trim());
-                            if (matchedDev) {
-                              onSaveDevice({
-                                ...matchedDev,
-                                activeRunId: undefined,
-                                activeTesterName: undefined
-                              });
-                            }
+                          if (summaryDevice && onSaveDevice) {
+                            onSaveDevice({
+                              ...summaryDevice,
+                              activeRunId: undefined,
+                              activeTesterName: undefined
+                            });
                           }
                           const savedName = getStoredTesterName() || summaryRun?.testerName || activeRun?.testerName || '';
                           if (savedName) setInputReporterName(savedName);
+                          const savedDeviceId = getStoredSelectedDeviceId() || summaryDevice?.id || '';
                           const savedDevice = getStoredDeviceName();
                           const savedDevStillSelectable = Boolean(
-                            savedDevice &&
-                            selectableDevices.some(
-                              d => d.name.toLowerCase().trim() === savedDevice.toLowerCase().trim() || d.id === savedDevice
-                            )
+                            savedDeviceId
+                              ? selectableDevices.some(d => d.id === savedDeviceId)
+                              : savedDevice &&
+                                isDeviceNameUnique(savedDevice, devices) &&
+                                selectableDevices.some(
+                                  d => d.name.toLowerCase().trim() === savedDevice.toLowerCase().trim()
+                                )
                           );
                           if (savedDevStillSelectable && summaryDeviceHasQuotaLeft) {
-                            setInputDeviceName(savedDevice);
+                            if (savedDevice) setInputDeviceName(savedDevice);
+                            if (savedDeviceId) setSelectedDeviceId(savedDeviceId);
                           } else {
                             try {
                               localStorage.removeItem('qa_device_name');
                               sessionStorage.removeItem('qa_device_name');
+                              localStorage.removeItem('qa_selected_device_id');
+                              sessionStorage.removeItem('qa_selected_device_id');
                             } catch {}
                             setInputDeviceName('');
+                            setSelectedDeviceId('');
                           }
                           setShowSetupModal(true);
                         }}
@@ -2936,9 +3007,12 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                             const isSelectable = selectableDevices.some(d => d.id === dev.id);
                             const isSelected =
                               isSelectable &&
-                              (dev.name.toLowerCase().trim() ===
-                                inputDeviceName.toLowerCase().trim() ||
-                                dev.id === inputDeviceName);
+                              (selectedDeviceId
+                                ? dev.id === selectedDeviceId
+                                : (isDeviceNameUnique(dev.name, devices) &&
+                                    dev.name.toLowerCase().trim() ===
+                                      inputDeviceName.toLowerCase().trim()) ||
+                                  dev.id === inputDeviceName);
                             const devActiveQuotas = (dev.quotas || []).filter(
                               q => q.targetRunsPerDay > 0
                             );
@@ -2963,29 +3037,12 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                             const targetCount = primaryQuota?.targetRunsPerDay || 0;
                             const quotaMet = devRemQuotas.length === 0;
 
-                            // Check if locked by another tester when not selectable and quota not met
+                            // Check if locked by another tester when not selectable and quota not met (reconciled by device.id)
                             let lockedByTester: string | undefined;
                             if (!isSelectable && !quotaMet) {
-                              const liveRunOnDev = testRuns.find(
-                                r =>
-                                  r &&
-                                  r.id &&
-                                  r.id !== activeRun?.id &&
-                                  !archivedIdSet.has(r.id) &&
-                                  !isTestRunDeleted(r.id) &&
-                                  r.status === 'in_progress' &&
-                                  getEffectiveRunStatus(r, testPlans) === 'in_progress' &&
-                                  (!r.startedAt || getLocalDateStr(r.startedAt) === todayStr) &&
-                                  ((dev.activeRunId && r.id === dev.activeRunId) ||
-                                    (r.deviceId &&
-                                      r.deviceId.toLowerCase().trim() ===
-                                        dev.id.toLowerCase().trim()) ||
-                                    (r.deviceName &&
-                                      r.deviceName.toLowerCase().trim() ===
-                                        dev.name.toLowerCase().trim()))
-                              );
+                              const lockInfo = deviceLocksByOtherRuns.get(dev.id);
                               lockedByTester =
-                                liveRunOnDev?.testerName || dev.activeTesterName || 'in use';
+                                lockInfo?.testerName || dev.activeTesterName || 'in use';
                             }
 
                             return (
@@ -2993,12 +3050,18 @@ export const MobileTester: React.FC<MobileTesterProps> = ({
                                 key={dev.id}
                                 type="button"
                                 data-testid="mobile-device-card"
+                                data-device-id={dev.id}
                                 data-device-name={dev.name}
                                 disabled={!isSelectable}
                                 onClick={() => {
                                   if (!isSelectable) return;
                                   triggerHaptic('light');
+                                  setSelectedDeviceId(dev.id);
                                   setInputDeviceName(dev.name);
+                                  try {
+                                    localStorage.setItem('qa_selected_device_id', dev.id);
+                                    sessionStorage.setItem('qa_selected_device_id', dev.id);
+                                  } catch {}
                                   if (primaryQuota && primaryQuota.planId !== currentPlan?.id) {
                                     onSelectPlan(primaryQuota.planId);
                                   }

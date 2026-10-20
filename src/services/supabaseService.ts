@@ -1,8 +1,19 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { TestPlan, TestRun, BugLog, DeviceProfile, TesterProfile, BundleSuggestion, BundleSuggestionSet } from '../types';
+import { extractDeviceIdFromRunId } from '../utils/runUtils';
+
+export { extractDeviceIdFromRunId };
+
+export const GLOBAL_DEVICES_CONFIG_PREFIX = '__GLOBAL_DEVICES_CONFIG__:';
+export const GLOBAL_TESTERS_CONFIG_PREFIX = '__GLOBAL_TESTERS_CONFIG__:';
+export const GLOBAL_DELETED_DEVICES_PREFIX = '__GLOBAL_DELETED_DEVICES__:';
+export const GLOBAL_DELETED_TESTERS_PREFIX = '__GLOBAL_DELETED_TESTERS__:';
+export const GLOBAL_DELETED_BUGS_PREFIX = '__GLOBAL_DELETED_BUGS__:';
+export const GLOBAL_DELETED_RUNS_PREFIX = '__GLOBAL_DELETED_RUNS__:';
 
 let cloudSyncOk = false;
 let cloudSyncListeners: Array<(ok: boolean) => void> = [];
+let cloudTombstoneListeners: Array<() => void> = [];
 
 export const getCloudSyncStatus = (): boolean => cloudSyncOk;
 
@@ -24,136 +35,336 @@ export const onCloudSyncStatusChange = (listener: (ok: boolean) => void) => {
   };
 };
 
+export const onCloudTombstonesUpdated = (listener: () => void) => {
+  cloudTombstoneListeners.push(listener);
+  return () => {
+    cloudTombstoneListeners = cloudTombstoneListeners.filter(l => l !== listener);
+  };
+};
+
+const notifyCloudTombstonesUpdated = () => {
+  cloudTombstoneListeners.forEach(l => {
+    try { l(); } catch (e) {}
+  });
+};
+
+let lastLocalStorageInstance: Storage | undefined;
 const deletedTestRunIdsMemory = new Set<string>();
 const deletedArchivedRunIdsMemory = new Set<string>();
+const cloudDeletedRunIdsMemory = new Set<string>();
+const deletedBugIdsMemory = new Set<string>();
+const cloudDeletedBugIdsMemory = new Set<string>();
+const deletedDeviceIdsMemory = new Set<string>();
+const cloudDeletedDeviceIdsMemory = new Set<string>();
+const deletedTesterIdsMemory = new Set<string>();
+const cloudDeletedTesterIdsMemory = new Set<string>();
 
-export const getDeletedTestRunIds = (): Set<string> => {
-  const result = new Set<string>(deletedTestRunIdsMemory);
+const syncMemoryWithStorageInstance = () => {
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage !== lastLocalStorageInstance) {
+      lastLocalStorageInstance = localStorage;
+      deletedTestRunIdsMemory.clear();
+      deletedArchivedRunIdsMemory.clear();
+      cloudDeletedRunIdsMemory.clear();
+      deletedBugIdsMemory.clear();
+      cloudDeletedBugIdsMemory.clear();
+      deletedDeviceIdsMemory.clear();
+      cloudDeletedDeviceIdsMemory.clear();
+      deletedTesterIdsMemory.clear();
+      cloudDeletedTesterIdsMemory.clear();
+    }
+  } catch {}
+};
+
+const readStorageSet = (key: string, memoryFallback: Set<string>): Set<string> => {
+  syncMemoryWithStorageInstance();
+  const result = new Set<string>();
   try {
     if (typeof localStorage !== 'undefined') {
-      const raw = localStorage.getItem('qa_deleted_test_run_ids');
+      const raw = localStorage.getItem(key);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
           parsed.forEach(id => {
-            if (typeof id === 'string') result.add(id);
+            if (typeof id === 'string' && id) result.add(id);
           });
         }
+      } else {
+        memoryFallback.clear();
       }
+      memoryFallback.forEach(id => result.add(id));
+      return result;
     }
   } catch (e) {}
+  memoryFallback.forEach(id => result.add(id));
   return result;
 };
 
-export const getDeletedArchivedRunIds = (): Set<string> => {
-  const result = new Set<string>(deletedArchivedRunIdsMemory);
+const writeStorageSet = (key: string, values: Iterable<string>, memoryFallback: Set<string>): void => {
+  syncMemoryWithStorageInstance();
+  const trimmed = Array.from(new Set(Array.from(values).filter(Boolean))).slice(-500);
+  memoryFallback.clear();
+  trimmed.forEach(id => memoryFallback.add(id));
   try {
     if (typeof localStorage !== 'undefined') {
-      const raw = localStorage.getItem('qa_deleted_archived_run_ids');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          parsed.forEach(id => {
-            if (typeof id === 'string') result.add(id);
-          });
-        }
-      }
+      localStorage.setItem(key, JSON.stringify(trimmed));
     }
   } catch (e) {}
-  return result;
+};
+
+const unionSets = (...sets: Set<string>[]): Set<string> => {
+  const out = new Set<string>();
+  sets.forEach(s => s.forEach(v => out.add(v)));
+  return out;
+};
+
+const setsEqual = (a: Set<string>, b: Set<string>): boolean => {
+  if (a.size !== b.size) return false;
+  for (const v of a) {
+    if (!b.has(v)) return false;
+  }
+  return true;
+};
+
+let tombstoneWriteChain: Promise<any> = Promise.resolve();
+
+const writeSingletonPopulatedFeatureRow = async (prefix: string, fullValue: string) => {
+  if (!supabase || !isSupabaseConfigured) return;
+  const { data: updatedData, error: updateError } = await supabase
+    .from('populated_features')
+    .update({ feature_name: fullValue })
+    .like('feature_name', `${prefix}%`)
+    .select();
+
+  if (updateError) throw updateError;
+
+  if (!updatedData || updatedData.length === 0) {
+    const { error: upsertError } = await supabase.from('populated_features').upsert({
+      feature_name: fullValue,
+    });
+    if (upsertError) throw upsertError;
+  } else if (updatedData.length > 1) {
+    for (let i = 1; i < updatedData.length; i++) {
+      await supabase.from('populated_features').delete().eq('feature_name', updatedData[i].feature_name);
+    }
+  }
+};
+
+const parseIdArrayFromFeaturePrefix = (rows: Array<{ feature_name?: string }>, prefix: string): string[] => {
+  const collected: string[] = [];
+  for (const item of rows || []) {
+    const name = item?.feature_name || '';
+    if (name.startsWith(prefix)) {
+      try {
+        const parsed = JSON.parse(name.slice(prefix.length));
+        if (Array.isArray(parsed)) {
+          parsed.forEach(id => {
+            if (typeof id === 'string' && id) collected.push(id);
+          });
+        }
+      } catch {}
+    }
+  }
+  return Array.from(new Set(collected));
+};
+
+export const updateCloudTombstoneSet = (
+  prefix: string,
+  addIds: string[],
+  removeIds: string[] = []
+): Promise<void> => {
+  if (!supabase || !isSupabaseConfigured) return Promise.resolve();
+  const cleanAdd = addIds.filter(Boolean);
+  const cleanRemove = new Set(removeIds.filter(Boolean));
+  if (cleanAdd.length === 0 && cleanRemove.size === 0) return Promise.resolve();
+
+  const nextOp = tombstoneWriteChain.then(async () => {
+    if (!supabase || !isSupabaseConfigured) return;
+    try {
+      const { data } = await supabase
+        .from('populated_features')
+        .select('feature_name')
+        .like('feature_name', `${prefix}%`);
+      const existing = parseIdArrayFromFeaturePrefix(data || [], prefix);
+      const merged = Array.from(new Set([...existing, ...cleanAdd]))
+        .filter(id => !cleanRemove.has(id))
+        .slice(-500);
+      await writeSingletonPopulatedFeatureRow(prefix, `${prefix}${JSON.stringify(merged)}`);
+    } catch (err) {
+      console.error(`updateCloudTombstoneSet (${prefix}) error:`, err);
+    }
+  });
+  tombstoneWriteChain = nextOp.catch(() => {});
+  return nextOp;
+};
+
+const ingestCloudTombstoneRows = (rows: Array<{ feature_name?: string }>): boolean => {
+  let sawDevices = false;
+  let sawTesters = false;
+  let sawBugs = false;
+  let sawRuns = false;
+  const devIds = new Set<string>();
+  const testerIds = new Set<string>();
+  const bugIds = new Set<string>();
+  const runIds = new Set<string>();
+
+  for (const item of rows || []) {
+    const name = item?.feature_name || '';
+    if (name.startsWith(GLOBAL_DELETED_DEVICES_PREFIX)) {
+      sawDevices = true;
+      parseIdArrayFromFeaturePrefix([item], GLOBAL_DELETED_DEVICES_PREFIX).forEach(id => devIds.add(id));
+    } else if (name.startsWith(GLOBAL_DELETED_TESTERS_PREFIX)) {
+      sawTesters = true;
+      parseIdArrayFromFeaturePrefix([item], GLOBAL_DELETED_TESTERS_PREFIX).forEach(id => testerIds.add(id));
+    } else if (name.startsWith(GLOBAL_DELETED_BUGS_PREFIX)) {
+      sawBugs = true;
+      parseIdArrayFromFeaturePrefix([item], GLOBAL_DELETED_BUGS_PREFIX).forEach(id => bugIds.add(id));
+    } else if (name.startsWith(GLOBAL_DELETED_RUNS_PREFIX)) {
+      sawRuns = true;
+      parseIdArrayFromFeaturePrefix([item], GLOBAL_DELETED_RUNS_PREFIX).forEach(id => runIds.add(id));
+    }
+  }
+
+  let changed = false;
+  if (sawDevices) {
+    const prev = readStorageSet('qa_cloud_deleted_device_ids', cloudDeletedDeviceIdsMemory);
+    if (!setsEqual(prev, devIds)) {
+      writeStorageSet('qa_cloud_deleted_device_ids', devIds, cloudDeletedDeviceIdsMemory);
+      changed = true;
+    }
+  }
+  if (sawTesters) {
+    const prev = readStorageSet('qa_cloud_deleted_tester_ids', cloudDeletedTesterIdsMemory);
+    if (!setsEqual(prev, testerIds)) {
+      writeStorageSet('qa_cloud_deleted_tester_ids', testerIds, cloudDeletedTesterIdsMemory);
+      changed = true;
+    }
+  }
+  if (sawBugs) {
+    const prev = readStorageSet('qa_cloud_deleted_bug_ids', cloudDeletedBugIdsMemory);
+    if (!setsEqual(prev, bugIds)) {
+      writeStorageSet('qa_cloud_deleted_bug_ids', bugIds, cloudDeletedBugIdsMemory);
+      changed = true;
+    }
+  }
+  if (sawRuns) {
+    const prev = readStorageSet('qa_cloud_deleted_run_ids', cloudDeletedRunIdsMemory);
+    if (!setsEqual(prev, runIds)) {
+      writeStorageSet('qa_cloud_deleted_run_ids', runIds, cloudDeletedRunIdsMemory);
+      changed = true;
+    }
+  }
+  if (changed) {
+    notifyCloudTombstonesUpdated();
+  }
+  return changed;
+};
+
+export const refreshCloudTombstones = async (): Promise<void> => {
+  if (!supabase || !isSupabaseConfigured) return;
+  try {
+    const { data, error } = await supabase
+      .from('populated_features')
+      .select('feature_name')
+      .like('feature_name', '__GLOBAL_DELETED_%');
+    if (!error && Array.isArray(data)) {
+      ingestCloudTombstoneRows(data);
+    }
+  } catch {}
+};
+
+export const getDeletedArchivedRunIds = (): Set<string> => {
+  return unionSets(
+    readStorageSet('qa_deleted_archived_run_ids', deletedArchivedRunIdsMemory),
+    readStorageSet('qa_cloud_deleted_run_ids', cloudDeletedRunIdsMemory)
+  );
+};
+
+export const getDeletedTestRunIds = (): Set<string> => {
+  return unionSets(
+    readStorageSet('qa_deleted_test_run_ids', deletedTestRunIdsMemory),
+    getDeletedArchivedRunIds()
+  );
 };
 
 export const isTestRunDeleted = (runId?: string | null): boolean => {
   if (!runId) return false;
-  if (deletedTestRunIdsMemory.has(runId)) return true;
   return getDeletedTestRunIds().has(runId);
 };
 
 export const isArchivedRunDeleted = (runId?: string | null): boolean => {
   if (!runId) return false;
-  if (deletedArchivedRunIdsMemory.has(runId)) return true;
   return getDeletedArchivedRunIds().has(runId);
 };
 
 export const markTestRunDeleted = (runId: string) => {
   if (!runId) return;
-  deletedTestRunIdsMemory.add(runId);
-  try {
-    if (typeof localStorage !== 'undefined') {
-      const current = Array.from(getDeletedTestRunIds());
-      const trimmed = current.slice(-500);
-      localStorage.setItem('qa_deleted_test_run_ids', JSON.stringify(trimmed));
-    }
-  } catch (e) {}
+  const current = readStorageSet('qa_deleted_test_run_ids', deletedTestRunIdsMemory);
+  current.add(runId);
+  writeStorageSet('qa_deleted_test_run_ids', current, deletedTestRunIdsMemory);
 };
 
 export const markArchivedRunDeleted = (runId: string) => {
   if (!runId) return;
-  deletedArchivedRunIdsMemory.add(runId);
-  try {
-    if (typeof localStorage !== 'undefined') {
-      const current = Array.from(getDeletedArchivedRunIds());
-      const trimmed = current.slice(-500);
-      localStorage.setItem('qa_deleted_archived_run_ids', JSON.stringify(trimmed));
-    }
-  } catch (e) {}
+  const current = readStorageSet('qa_deleted_archived_run_ids', deletedArchivedRunIdsMemory);
+  current.add(runId);
+  writeStorageSet('qa_deleted_archived_run_ids', current, deletedArchivedRunIdsMemory);
+  const cloudCurrent = readStorageSet('qa_cloud_deleted_run_ids', cloudDeletedRunIdsMemory);
+  cloudCurrent.add(runId);
+  writeStorageSet('qa_cloud_deleted_run_ids', cloudCurrent, cloudDeletedRunIdsMemory);
+  updateCloudTombstoneSet(GLOBAL_DELETED_RUNS_PREFIX, [runId]);
 };
 
 export const unmarkTestRunDeleted = (runId: string) => {
   if (!runId) return;
-  deletedTestRunIdsMemory.delete(runId);
-  try {
-    if (typeof localStorage !== 'undefined') {
-      const current = getDeletedTestRunIds();
-      current.delete(runId);
-      localStorage.setItem('qa_deleted_test_run_ids', JSON.stringify(Array.from(current)));
-    }
-  } catch (e) {}
+  const current = readStorageSet('qa_deleted_test_run_ids', deletedTestRunIdsMemory);
+  current.delete(runId);
+  writeStorageSet('qa_deleted_test_run_ids', current, deletedTestRunIdsMemory);
 };
 
 export const unmarkArchivedRunDeleted = (runId: string) => {
   if (!runId) return;
-  deletedArchivedRunIdsMemory.delete(runId);
-  try {
-    if (typeof localStorage !== 'undefined') {
-      const current = getDeletedArchivedRunIds();
-      current.delete(runId);
-      localStorage.setItem('qa_deleted_archived_run_ids', JSON.stringify(Array.from(current)));
-    }
-  } catch (e) {}
+  const current = readStorageSet('qa_deleted_archived_run_ids', deletedArchivedRunIdsMemory);
+  current.delete(runId);
+  writeStorageSet('qa_deleted_archived_run_ids', current, deletedArchivedRunIdsMemory);
+  const cloudCurrent = readStorageSet('qa_cloud_deleted_run_ids', cloudDeletedRunIdsMemory);
+  cloudCurrent.delete(runId);
+  writeStorageSet('qa_cloud_deleted_run_ids', cloudCurrent, cloudDeletedRunIdsMemory);
+  updateCloudTombstoneSet(GLOBAL_DELETED_RUNS_PREFIX, [], [runId]);
 };
 
-/**
- * Extracts the canonical device ID (e.g. "dev-1790876661069") from a run ID
- * such as "run-plan-1791908761906-dev-1790876661069-mvb5nn18" or "run-plan-1-dev-1790876661069",
- * stripping the trailing per-run timestamp suffix when present.
- */
-export const extractDeviceIdFromRunId = (runId: string, knownDeviceIds?: Iterable<string>): string | undefined => {
-  if (!runId || typeof runId !== 'string' || !runId.includes('-dev-')) return undefined;
-  if (knownDeviceIds) {
-    const sortedKnown = Array.from(knownDeviceIds)
-      .filter(Boolean)
-      .sort((a, b) => b.length - a.length);
-    for (const devId of sortedKnown) {
-      if (runId.endsWith(`-${devId}`) || runId.includes(`-${devId}-`)) {
-        return devId;
-      }
-    }
-  }
-  const afterDev = runId.split('-dev-').slice(1).join('-dev-');
-  if (!afterDev) return undefined;
-  // Standard numeric device ID + base36/numeric run timestamp suffix: dev-1790876661069-mvb5nn18
-  const numericMatch = afterDev.match(/^(\d{10,})-[a-z0-9]{6,13}$/i);
-  if (numericMatch) return `dev-${numericMatch[1]}`;
-  // Two-segment device ID + base36/numeric run timestamp suffix: dev-abc1234-xyz5678-mvb5nn18
-  const twoSegMatch = afterDev.match(/^([a-z0-9]+-[a-z0-9]+)-[a-z0-9]{6,13}$/i);
-  if (twoSegMatch) return `dev-${twoSegMatch[1]}`;
-  // Fallback: if there are multiple segments and the last looks like a base36 run timestamp
-  const parts = afterDev.split('-');
-  if (parts.length >= 2 && /^[a-z0-9]{6,13}$/i.test(parts[parts.length - 1])) {
-    return `dev-${parts.slice(0, -1).join('-')}`;
-  }
-  return `dev-${afterDev}`;
+export const getDeletedBugIds = (): Set<string> => {
+  return unionSets(
+    readStorageSet('qa_deleted_bug_ids', deletedBugIdsMemory),
+    readStorageSet('qa_cloud_deleted_bug_ids', cloudDeletedBugIdsMemory)
+  );
+};
+
+export const isBugDeleted = (bugId?: string | null): boolean => {
+  if (!bugId) return false;
+  return getDeletedBugIds().has(bugId);
+};
+
+export const markBugDeleted = (bugId: string) => {
+  if (!bugId) return;
+  const current = readStorageSet('qa_deleted_bug_ids', deletedBugIdsMemory);
+  current.add(bugId);
+  writeStorageSet('qa_deleted_bug_ids', current, deletedBugIdsMemory);
+  const cloudCurrent = readStorageSet('qa_cloud_deleted_bug_ids', cloudDeletedBugIdsMemory);
+  cloudCurrent.add(bugId);
+  writeStorageSet('qa_cloud_deleted_bug_ids', cloudCurrent, cloudDeletedBugIdsMemory);
+  updateCloudTombstoneSet(GLOBAL_DELETED_BUGS_PREFIX, [bugId]);
+};
+
+export const unmarkBugDeleted = (bugId: string) => {
+  if (!bugId) return;
+  const current = readStorageSet('qa_deleted_bug_ids', deletedBugIdsMemory);
+  current.delete(bugId);
+  writeStorageSet('qa_deleted_bug_ids', current, deletedBugIdsMemory);
+  const cloudCurrent = readStorageSet('qa_cloud_deleted_bug_ids', cloudDeletedBugIdsMemory);
+  cloudCurrent.delete(bugId);
+  writeStorageSet('qa_cloud_deleted_bug_ids', cloudCurrent, cloudDeletedBugIdsMemory);
+  updateCloudTombstoneSet(GLOBAL_DELETED_BUGS_PREFIX, [], [bugId]);
 };
 
 export const fetchAllSupabaseData = async () => {
@@ -206,6 +417,8 @@ export const fetchAllSupabaseData = async () => {
     };
 
     const rawFeaturesData = featuresRes.data || [];
+    ingestCloudTombstoneRows(rawFeaturesData);
+
     let populatedFeatures: string[] = [];
     let devices: DeviceProfile[] = [];
     let testers: TesterProfile[] = [];
@@ -228,6 +441,13 @@ export const fetchAllSupabaseData = async () => {
           const parsed = JSON.parse(jsonStr);
           if (Array.isArray(parsed)) testers = parsed;
         } catch (e) {}
+      } else if (
+        name.startsWith(GLOBAL_DELETED_DEVICES_PREFIX) ||
+        name.startsWith(GLOBAL_DELETED_TESTERS_PREFIX) ||
+        name.startsWith(GLOBAL_DELETED_BUGS_PREFIX) ||
+        name.startsWith(GLOBAL_DELETED_RUNS_PREFIX)
+      ) {
+        // Handled by ingestCloudTombstoneRows; never expose as CUJ features
       } else {
         populatedFeatures.push(name);
       }
@@ -235,11 +455,13 @@ export const fetchAllSupabaseData = async () => {
 
     const knownDeviceIds = new Set(devices.map(d => d.id).filter(Boolean));
     const deletedArchivedIds = getDeletedArchivedRunIds();
+    const deletedBugIds = getDeletedBugIds();
 
     const archivedRuns: TestRun[] = (archivedRes.data || [])
       .filter((item: any) => item && typeof item.id === 'string' && !deletedArchivedIds.has(item.id))
       .map((item: any) => {
         const devIdFromId = extractDeviceIdFromRunId(item.id, knownDeviceIds);
+        const rawBugs = Array.isArray(item.bug_logs) ? item.bug_logs : [];
         return {
           id: item.id,
           planId: item.plan_id,
@@ -250,7 +472,7 @@ export const fetchAllSupabaseData = async () => {
           status: item.status || 'completed',
           currentStepIndex: item.current_step_index || 0,
           results: item.results || {},
-          bugLogs: item.bug_logs || [],
+          bugLogs: rawBugs.filter((b: any) => b && b.id && !deletedBugIds.has(b.id)),
           startedAt: getStartedAtFromItem(item) || new Date().toISOString(),
           completedAt: item.completed_at,
           durationMs: item.duration_ms || item.durationMs,
@@ -273,6 +495,7 @@ export const fetchAllSupabaseData = async () => {
       })
       .map((item: any) => {
         const devIdFromId = extractDeviceIdFromRunId(item.id, knownDeviceIds);
+        const rawBugs = Array.isArray(item.bug_logs) ? item.bug_logs : [];
         return {
           id: item.id,
           planId: item.plan_id,
@@ -283,7 +506,7 @@ export const fetchAllSupabaseData = async () => {
           status: item.status || 'not_started',
           currentStepIndex: item.current_step_index || 0,
           results: item.results || {},
-          bugLogs: item.bug_logs || [],
+          bugLogs: rawBugs.filter((b: any) => b && b.id && !deletedBugIds.has(b.id)),
           startedAt: getStartedAtFromItem(item) || new Date().toISOString(),
           completedAt: item.completed_at,
           durationMs: item.duration_ms || item.durationMs,
@@ -303,7 +526,8 @@ export const fetchAllSupabaseData = async () => {
     // Worker-owned columns present on each bug_logs row (even when null): the row value wins over the run JSON.
     const rowOwned = new Map<string, Set<string>>();
     (bugsRes.data || []).forEach((item: any) => {
-      if (item && item.id) rowOwned.set(item.id, new Set(['filed', 'file_pending', 'bundle', 'repro_matches', 'refined', 'reviewed'].filter(k => k in item)));
+      if (!item || !item.id || deletedBugIds.has(item.id)) return;
+      rowOwned.set(item.id, new Set(['filed', 'file_pending', 'bundle', 'repro_matches', 'refined', 'reviewed'].filter(k => k in item)));
       const itemTs = item.timestamp ? new Date(item.timestamp).getTime() : 0;
       if (bugsWipedAt > 0 && itemTs > 0 && itemTs <= bugsWipedAt) {
         return;
@@ -337,10 +561,10 @@ export const fetchAllSupabaseData = async () => {
       });
     });
 
-    // Ingest embedded bugs from runs so bugs logged during testing are permanently resilient (respecting bugsWipedAt)
+    // Ingest embedded bugs from runs so bugs logged during testing are permanently resilient (respecting bugsWipedAt & deletedBugIds)
     [...testRuns, ...archivedRuns].forEach(run => {
       (run.bugLogs || []).forEach(b => {
-        if (b && b.id) {
+        if (b && b.id && !deletedBugIds.has(b.id)) {
           const bTs = b.timestamp ? new Date(b.timestamp).getTime() : 0;
           if (bugsWipedAt > 0 && bTs > 0 && bTs <= bugsWipedAt) return;
           if (!bugMap.has(b.id)) {
@@ -422,9 +646,18 @@ export const deleteTestPlanFromSupabase = async (planId: string) => {
 };
 
 export const syncTestRunToSupabase = async (run: TestRun) => {
-  if (!run?.id || isTestRunDeleted(run.id) || run.status === 'completed') return;
+  if (!run?.id || isTestRunDeleted(run.id) || isArchivedRunDeleted(run.id) || run.status === 'completed') return;
   if (!supabase || !isSupabaseConfigured) return;
   try {
+    await refreshCloudTombstones();
+    if (isTestRunDeleted(run.id) || isArchivedRunDeleted(run.id)) {
+      await supabase.from('test_runs').delete().eq('id', run.id);
+      return;
+    }
+    const deletedBugIds = getDeletedBugIds();
+    const cleanBugLogs = Array.isArray(run.bugLogs)
+      ? run.bugLogs.filter(b => b && b.id && !deletedBugIds.has(b.id))
+      : [];
     const basePayload: any = {
       id: run.id,
       plan_id: run.planId,
@@ -434,7 +667,7 @@ export const syncTestRunToSupabase = async (run: TestRun) => {
       status: run.status,
       current_step_index: run.currentStepIndex,
       results: run.results,
-      bug_logs: run.bugLogs,
+      bug_logs: cleanBugLogs,
       started_at: run.startedAt,
       completed_at: run.completedAt,
     };
@@ -448,7 +681,7 @@ export const syncTestRunToSupabase = async (run: TestRun) => {
       const retry = await supabase.from('test_runs').upsert(basePayload);
       error = retry.error;
     }
-    if (isTestRunDeleted(run.id)) {
+    if (isTestRunDeleted(run.id) || isArchivedRunDeleted(run.id)) {
       await supabase.from('test_runs').delete().eq('id', run.id);
       return;
     }
@@ -467,6 +700,15 @@ export const syncArchivedRunToSupabase = async (run: TestRun) => {
   markTestRunDeleted(run.id);
   if (!supabase || !isSupabaseConfigured) return;
   try {
+    await refreshCloudTombstones();
+    if (isArchivedRunDeleted(run.id)) {
+      await supabase.from('archived_runs').delete().eq('id', run.id);
+      return;
+    }
+    const deletedBugIds = getDeletedBugIds();
+    const cleanBugLogs = Array.isArray(run.bugLogs)
+      ? run.bugLogs.filter(b => b && b.id && !deletedBugIds.has(b.id))
+      : [];
     const basePayload: any = {
       id: run.id,
       plan_id: run.planId,
@@ -476,7 +718,7 @@ export const syncArchivedRunToSupabase = async (run: TestRun) => {
       status: run.status,
       current_step_index: run.currentStepIndex,
       results: run.results,
-      bug_logs: run.bugLogs,
+      bug_logs: cleanBugLogs,
       started_at: run.startedAt,
       completed_at: run.completedAt,
     };
@@ -531,8 +773,11 @@ export const deleteArchivedRunFromSupabase = async (runId: string) => {
 const optionalBugColumns = { environment: true, title: true, refined: true, original_timestamp: true, status: true, bug_type: true, priority: true, filed: true, repro_matches: true, file_pending: true, bundle: true, reviewed: true };
 
 export const syncBugLogToSupabase = async (bug: BugLog) => {
+  if (!bug?.id || isBugDeleted(bug.id)) return;
   if (!supabase || !isSupabaseConfigured) return;
   try {
+    await refreshCloudTombstones();
+    if (isBugDeleted(bug.id)) return;
     const wipedAtStr = typeof localStorage !== 'undefined' ? localStorage.getItem('qa_bugs_wiped_at') : null;
     if (wipedAtStr) {
       const wipedAt = parseInt(wipedAtStr, 10);
@@ -581,6 +826,10 @@ export const syncBugLogToSupabase = async (bug: BugLog) => {
       delete row[missing];
       ({ error } = await supabase.from('bug_logs').upsert(row));
     }
+    if (isBugDeleted(bug.id)) {
+      await supabase.from('bug_logs').delete().eq('id', bug.id);
+      return;
+    }
     if (error) {
       console.error('syncBugLogToSupabase error:', error);
       throw error;
@@ -601,7 +850,7 @@ export type BugWorkerField = keyof typeof BUG_WORKER_FIELDS;
  * Missing columns are dropped (the values still travel in the run's bug_logs JSON).
  */
 export const patchBugWorkerColumns = async (bug: BugLog, fields: BugWorkerField[]) => {
-  if (!supabase || !isSupabaseConfigured || !bug?.id || !fields.length) return;
+  if (!supabase || !isSupabaseConfigured || !bug?.id || isBugDeleted(bug.id) || !fields.length) return;
   const wipedAtStr = typeof localStorage !== 'undefined' ? localStorage.getItem('qa_bugs_wiped_at') : null;
   if (wipedAtStr) {
     const wipedAt = parseInt(wipedAtStr, 10);
@@ -636,8 +885,28 @@ export const patchBugWorkerColumns = async (bug: BugLog, fields: BugWorkerField[
 };
 
 export const deleteBugLogFromSupabase = async (bugId: string) => {
+  if (bugId) markBugDeleted(bugId);
   if (!supabase || !isSupabaseConfigured) return;
   await supabase.from('bug_logs').delete().eq('id', bugId);
+  // Also strip the deleted bug from any test_runs or archived_runs rows that still embed it
+  try {
+    const [runsRes, archRes] = await Promise.all([
+      supabase.from('test_runs').select('id,bug_logs'),
+      supabase.from('archived_runs').select('id,bug_logs'),
+    ]);
+    for (const row of runsRes.data || []) {
+      if (Array.isArray(row?.bug_logs) && row.bug_logs.some((b: any) => b?.id === bugId)) {
+        const cleaned = row.bug_logs.filter((b: any) => b?.id !== bugId);
+        await supabase.from('test_runs').update({ bug_logs: cleaned }).eq('id', row.id);
+      }
+    }
+    for (const row of archRes.data || []) {
+      if (Array.isArray(row?.bug_logs) && row.bug_logs.some((b: any) => b?.id === bugId)) {
+        const cleaned = row.bug_logs.filter((b: any) => b?.id !== bugId);
+        await supabase.from('archived_runs').update({ bug_logs: cleaned }).eq('id', row.id);
+      }
+    }
+  } catch (e) {}
 };
 
 export const wipeAllBugsFromSupabase = async () => {
@@ -696,64 +965,435 @@ export const deletePopulatedFeatureFromSupabase = async (featureName: string) =>
 };
 
 export const getDeletedDeviceIds = (): Set<string> => {
-  try {
-    const raw = localStorage.getItem('qa_deleted_device_ids');
-    if (raw) return new Set(JSON.parse(raw));
-  } catch (e) {}
-  return new Set();
+  return unionSets(
+    readStorageSet('qa_deleted_device_ids', deletedDeviceIdsMemory),
+    readStorageSet('qa_cloud_deleted_device_ids', cloudDeletedDeviceIdsMemory)
+  );
+};
+
+export const isDeviceDeleted = (deviceId?: string | null): boolean => {
+  if (!deviceId) return false;
+  return getDeletedDeviceIds().has(deviceId);
 };
 
 export const markDeviceAsDeleted = (deviceId: string) => {
-  try {
-    const current = getDeletedDeviceIds();
-    current.add(deviceId);
-    localStorage.setItem('qa_deleted_device_ids', JSON.stringify(Array.from(current)));
-  } catch (e) {}
+  if (!deviceId) return;
+  const current = readStorageSet('qa_deleted_device_ids', deletedDeviceIdsMemory);
+  current.add(deviceId);
+  writeStorageSet('qa_deleted_device_ids', current, deletedDeviceIdsMemory);
+  const cloudCurrent = readStorageSet('qa_cloud_deleted_device_ids', cloudDeletedDeviceIdsMemory);
+  cloudCurrent.add(deviceId);
+  writeStorageSet('qa_cloud_deleted_device_ids', cloudCurrent, cloudDeletedDeviceIdsMemory);
+  updateCloudTombstoneSet(GLOBAL_DELETED_DEVICES_PREFIX, [deviceId]);
 };
 
 export const unmarkDeviceAsDeleted = (deviceId: string) => {
-  try {
-    const current = getDeletedDeviceIds();
-    current.delete(deviceId);
-    localStorage.setItem('qa_deleted_device_ids', JSON.stringify(Array.from(current)));
-  } catch (e) {}
+  if (!deviceId) return;
+  const current = readStorageSet('qa_deleted_device_ids', deletedDeviceIdsMemory);
+  current.delete(deviceId);
+  writeStorageSet('qa_deleted_device_ids', current, deletedDeviceIdsMemory);
+  const cloudCurrent = readStorageSet('qa_cloud_deleted_device_ids', cloudDeletedDeviceIdsMemory);
+  cloudCurrent.delete(deviceId);
+  writeStorageSet('qa_cloud_deleted_device_ids', cloudCurrent, cloudDeletedDeviceIdsMemory);
+  updateCloudTombstoneSet(GLOBAL_DELETED_DEVICES_PREFIX, [], [deviceId]);
 };
 
 export const getDeletedTesterIds = (): Set<string> => {
-  try {
-    const raw = localStorage.getItem('qa_deleted_tester_ids');
-    if (raw) return new Set(JSON.parse(raw));
-  } catch (e) {}
-  return new Set();
+  return unionSets(
+    readStorageSet('qa_deleted_tester_ids', deletedTesterIdsMemory),
+    readStorageSet('qa_cloud_deleted_tester_ids', cloudDeletedTesterIdsMemory)
+  );
+};
+
+export const isTesterDeleted = (testerId?: string | null): boolean => {
+  if (!testerId) return false;
+  return getDeletedTesterIds().has(testerId);
 };
 
 export const markTesterAsDeleted = (testerId: string) => {
-  try {
-    const current = getDeletedTesterIds();
-    current.add(testerId);
-    localStorage.setItem('qa_deleted_tester_ids', JSON.stringify(Array.from(current)));
-  } catch (e) {}
+  if (!testerId) return;
+  const current = readStorageSet('qa_deleted_tester_ids', deletedTesterIdsMemory);
+  current.add(testerId);
+  writeStorageSet('qa_deleted_tester_ids', current, deletedTesterIdsMemory);
+  const cloudCurrent = readStorageSet('qa_cloud_deleted_tester_ids', cloudDeletedTesterIdsMemory);
+  cloudCurrent.add(testerId);
+  writeStorageSet('qa_cloud_deleted_tester_ids', cloudCurrent, cloudDeletedTesterIdsMemory);
+  updateCloudTombstoneSet(GLOBAL_DELETED_TESTERS_PREFIX, [testerId]);
 };
 
 export const unmarkTesterAsDeleted = (testerId: string) => {
-  try {
-    const current = getDeletedTesterIds();
-    current.delete(testerId);
-    localStorage.setItem('qa_deleted_tester_ids', JSON.stringify(Array.from(current)));
-  } catch (e) {}
+  if (!testerId) return;
+  const current = readStorageSet('qa_deleted_tester_ids', deletedTesterIdsMemory);
+  current.delete(testerId);
+  writeStorageSet('qa_deleted_tester_ids', current, deletedTesterIdsMemory);
+  const cloudCurrent = readStorageSet('qa_cloud_deleted_tester_ids', cloudDeletedTesterIdsMemory);
+  cloudCurrent.delete(testerId);
+  writeStorageSet('qa_cloud_deleted_tester_ids', cloudCurrent, cloudDeletedTesterIdsMemory);
+  updateCloudTombstoneSet(GLOBAL_DELETED_TESTERS_PREFIX, [], [testerId]);
+};
+
+export const markDeviceDeleted = markDeviceAsDeleted;
+export const unmarkDeviceDeleted = unmarkDeviceAsDeleted;
+export const markTesterDeleted = markTesterAsDeleted;
+export const unmarkTesterDeleted = unmarkTesterAsDeleted;
+
+export interface DevicePatch {
+  id: string;
+  changes: Partial<DeviceProfile>;
+  updatedAt?: string;
+  lockOnly?: boolean;
+}
+
+export interface TesterPatch {
+  id: string;
+  changes: Partial<TesterProfile>;
+  updatedAt?: string;
+}
+
+/**
+ * Compares two optional ISO timestamps:
+ * - Returns > 0 if `a` is strictly newer than `b` (or `a` is valid and `b` is missing/invalid).
+ * - Returns < 0 if `b` is strictly newer than `a` (or `b` is valid and `a` is missing/invalid).
+ * - Returns 0 if both are missing/invalid or represent the same epoch ms.
+ */
+export const compareUpdatedAt = (a?: string, b?: string): number => {
+  const msA = a ? Date.parse(a) : NaN;
+  const msB = b ? Date.parse(b) : NaN;
+  const validA = Number.isFinite(msA);
+  const validB = Number.isFinite(msB);
+  if (validA && validB) return msA - msB;
+  if (validA) return 1;
+  if (validB) return -1;
+  return 0;
+};
+
+/**
+ * Applies per-device patches onto the current cloud device list:
+ * - Honors `deletedIds` tombstones (never re-inserts a tombstoned device).
+ * - For `lockOnly: true` patches: only updates `activeRunId` and `activeTesterName` on an existing device;
+ *   never creates a missing device and never touches `name`, `isReady`, `quotas`, or `updatedAt`.
+ * - For user-edit patches: if the cloud copy has a strictly newer `updatedAt` than the patch, the cloud
+ *   copy wins (stale writer loses). Otherwise only `patch.changes` are merged onto that device.
+ */
+export const applyDevicePatches = (
+  cloudDevices: DeviceProfile[],
+  patches: DevicePatch[],
+  deletedIds: Set<string> = getDeletedDeviceIds()
+): DeviceProfile[] => {
+  const list: DeviceProfile[] = [];
+  const byId = new Map<string, DeviceProfile>();
+
+  for (const d of cloudDevices || []) {
+    if (!d || !d.id || deletedIds.has(d.id) || byId.has(d.id)) continue;
+    const copy: DeviceProfile = { ...d };
+    list.push(copy);
+    byId.set(copy.id, copy);
+  }
+
+  for (const patch of patches || []) {
+    if (!patch || !patch.id || deletedIds.has(patch.id)) continue;
+    const existing = byId.get(patch.id);
+
+    if (patch.lockOnly) {
+      if (existing) {
+        if ('activeRunId' in patch.changes) existing.activeRunId = patch.changes.activeRunId;
+        if ('activeTesterName' in patch.changes) existing.activeTesterName = patch.changes.activeTesterName;
+      }
+      continue;
+    }
+
+    const patchTs = patch.updatedAt ?? patch.changes.updatedAt;
+    if (existing) {
+      if (existing.updatedAt && patchTs && compareUpdatedAt(existing.updatedAt, patchTs) > 0) {
+        // Stale writer loses against newer updatedAt in cloud
+        continue;
+      }
+      const next: DeviceProfile = {
+        ...existing,
+        ...patch.changes,
+        id: existing.id,
+        ...(patchTs || existing.updatedAt ? { updatedAt: patchTs || existing.updatedAt } : {}),
+      };
+      Object.assign(existing, next);
+      if (next.activeRunId === undefined) delete existing.activeRunId;
+      if (next.activeTesterName === undefined) delete existing.activeTesterName;
+    } else if (typeof patch.changes.name === 'string' && patch.changes.name.trim() !== '') {
+      const created: DeviceProfile = {
+        id: patch.id,
+        name: patch.changes.name,
+        isReady: typeof patch.changes.isReady === 'boolean' ? patch.changes.isReady : true,
+        quotas: Array.isArray(patch.changes.quotas) ? patch.changes.quotas : [],
+        activeRunId: patch.changes.activeRunId,
+        activeTesterName: patch.changes.activeTesterName,
+        ...(patchTs ? { updatedAt: patchTs } : {}),
+      };
+      list.push(created);
+      byId.set(created.id, created);
+    }
+  }
+
+  return list.filter(d => !deletedIds.has(d.id));
+};
+
+/**
+ * Merges `cloudDevices` and `localDevices` per device ID using `updatedAt` (newest wins) and honoring `deletedIds`.
+ */
+export const mergeDevicesLists = (
+  cloudDevices: DeviceProfile[],
+  localDevices: DeviceProfile[],
+  deletedIds: Set<string> = getDeletedDeviceIds(),
+  preferCloudOnTie: boolean = true
+): DeviceProfile[] => {
+  const validCloud = (cloudDevices || []).filter(d => d && d.id && !deletedIds.has(d.id));
+  const validLocal = (localDevices || []).filter(d => d && d.id && !deletedIds.has(d.id));
+  const localById = new Map(validLocal.map(d => [d.id, d]));
+  const seenIds = new Set<string>();
+  const result: DeviceProfile[] = [];
+
+  for (const cloudDev of validCloud) {
+    seenIds.add(cloudDev.id);
+    const localDev = localById.get(cloudDev.id);
+    if (!localDev) {
+      result.push({ ...cloudDev });
+      continue;
+    }
+    const cmp = compareUpdatedAt(cloudDev.updatedAt, localDev.updatedAt);
+    if (cmp > 0) {
+      result.push({ ...cloudDev });
+    } else if (cmp < 0) {
+      result.push({ ...localDev });
+    } else {
+      result.push({ ...(preferCloudOnTie ? cloudDev : localDev) });
+    }
+  }
+
+  for (const localDev of validLocal) {
+    if (seenIds.has(localDev.id)) continue;
+    // Include local-only device if it has an updatedAt stamp, or if cloud was empty, or if local is preferred on tie
+    if (!preferCloudOnTie || Boolean(localDev.updatedAt) || validCloud.length === 0) {
+      seenIds.add(localDev.id);
+      result.push({ ...localDev });
+    }
+  }
+
+  return result;
+};
+
+/**
+ * Applies per-tester patches onto the current cloud tester list, honoring `deletedIds` and `updatedAt`.
+ */
+export const applyTesterPatches = (
+  cloudTesters: TesterProfile[],
+  patches: TesterPatch[],
+  deletedIds: Set<string> = getDeletedTesterIds()
+): TesterProfile[] => {
+  const list: TesterProfile[] = [];
+  const byId = new Map<string, TesterProfile>();
+
+  for (const t of cloudTesters || []) {
+    if (!t || !t.id || deletedIds.has(t.id) || byId.has(t.id)) continue;
+    const copy: TesterProfile = { ...t };
+    list.push(copy);
+    byId.set(copy.id, copy);
+  }
+
+  for (const patch of patches || []) {
+    if (!patch || !patch.id || deletedIds.has(patch.id)) continue;
+    const existing = byId.get(patch.id);
+    const patchTs = patch.updatedAt ?? patch.changes.updatedAt;
+
+    if (existing) {
+      if (existing.updatedAt && patchTs && compareUpdatedAt(existing.updatedAt, patchTs) > 0) {
+        continue;
+      }
+      const next: TesterProfile = {
+        ...existing,
+        ...patch.changes,
+        id: existing.id,
+        ...(patchTs || existing.updatedAt ? { updatedAt: patchTs || existing.updatedAt } : {}),
+      };
+      Object.assign(existing, next);
+    } else if (typeof patch.changes.name === 'string' && patch.changes.name.trim() !== '') {
+      const normName = patch.changes.name.trim().toLowerCase();
+      const byName = list.find(t => t.name.trim().toLowerCase() === normName);
+      if (byName) {
+        if (!byName.updatedAt || !patchTs || compareUpdatedAt(byName.updatedAt, patchTs) <= 0) {
+          Object.assign(byName, {
+            ...byName,
+            ...patch.changes,
+            id: byName.id,
+            ...(patchTs || byName.updatedAt ? { updatedAt: patchTs || byName.updatedAt } : {}),
+          });
+        }
+      } else {
+        const created: TesterProfile = {
+          id: patch.id,
+          name: patch.changes.name.trim(),
+          role: patch.changes.role,
+          ...(patchTs ? { updatedAt: patchTs } : {}),
+        };
+        list.push(created);
+        byId.set(created.id, created);
+      }
+    }
+  }
+
+  return list.filter(t => !deletedIds.has(t.id));
+};
+
+/**
+ * Merges `cloudTesters` and `localTesters` per tester ID using `updatedAt` (newest wins) and honoring `deletedIds`.
+ */
+export const mergeTestersLists = (
+  cloudTesters: TesterProfile[],
+  localTesters: TesterProfile[],
+  deletedIds: Set<string> = getDeletedTesterIds(),
+  preferCloudOnTie: boolean = true
+): TesterProfile[] => {
+  const validCloud = (cloudTesters || []).filter(t => t && t.id && !deletedIds.has(t.id));
+  const validLocal = (localTesters || []).filter(t => t && t.id && !deletedIds.has(t.id));
+  const localById = new Map(validLocal.map(t => [t.id, t]));
+  const seenIds = new Set<string>();
+  const seenNames = new Set<string>();
+  const result: TesterProfile[] = [];
+
+  for (const cloudTester of validCloud) {
+    seenIds.add(cloudTester.id);
+    const localTester = localById.get(cloudTester.id);
+    let chosen: TesterProfile;
+    if (!localTester) {
+      chosen = { ...cloudTester };
+    } else {
+      const cmp = compareUpdatedAt(cloudTester.updatedAt, localTester.updatedAt);
+      chosen = cmp > 0 ? { ...cloudTester } : cmp < 0 ? { ...localTester } : { ...(preferCloudOnTie ? cloudTester : localTester) };
+    }
+    seenNames.add((chosen.name || '').trim().toLowerCase());
+    result.push(chosen);
+  }
+
+  for (const localTester of validLocal) {
+    const normName = (localTester.name || '').trim().toLowerCase();
+    if (seenIds.has(localTester.id) || (normName && seenNames.has(normName))) continue;
+    if (!preferCloudOnTie || Boolean(localTester.updatedAt) || validCloud.length === 0) {
+      seenIds.add(localTester.id);
+      if (normName) seenNames.add(normName);
+      result.push({ ...localTester });
+    }
+  }
+
+  return result;
+};
+
+let deviceConfigWriteChain: Promise<any> = Promise.resolve();
+let testerConfigWriteChain: Promise<any> = Promise.resolve();
+
+const readCurrentCloudDevicesAndTombstones = async (): Promise<{
+  cloudDevices: DeviceProfile[];
+  deletedDeviceIds: Set<string>;
+}> => {
+  if (!supabase || !isSupabaseConfigured) {
+    return { cloudDevices: [], deletedDeviceIds: getDeletedDeviceIds() };
+  }
+  const { data } = await supabase
+    .from('populated_features')
+    .select('feature_name')
+    .or('feature_name.like.__GLOBAL_DEVICES_CONFIG__:%,feature_name.like.__GLOBAL_DELETED_DEVICES__:%');
+
+  ingestCloudTombstoneRows(data || []);
+  let cloudDevices: DeviceProfile[] = [];
+  for (const row of data || []) {
+    const name = row?.feature_name || '';
+    if (name.startsWith(GLOBAL_DEVICES_CONFIG_PREFIX)) {
+      try {
+        const parsed = JSON.parse(name.slice(GLOBAL_DEVICES_CONFIG_PREFIX.length));
+        if (Array.isArray(parsed)) cloudDevices = parsed;
+      } catch {}
+    }
+  }
+  return { cloudDevices, deletedDeviceIds: getDeletedDeviceIds() };
+};
+
+const readCurrentCloudTestersAndTombstones = async (): Promise<{
+  cloudTesters: TesterProfile[];
+  deletedTesterIds: Set<string>;
+}> => {
+  if (!supabase || !isSupabaseConfigured) {
+    return { cloudTesters: [], deletedTesterIds: getDeletedTesterIds() };
+  }
+  const { data } = await supabase
+    .from('populated_features')
+    .select('feature_name')
+    .or('feature_name.like.__GLOBAL_TESTERS_CONFIG__:%,feature_name.like.__GLOBAL_DELETED_TESTERS__:%');
+
+  ingestCloudTombstoneRows(data || []);
+  let cloudTesters: TesterProfile[] = [];
+  for (const row of data || []) {
+    const name = row?.feature_name || '';
+    if (name.startsWith(GLOBAL_TESTERS_CONFIG_PREFIX)) {
+      try {
+        const parsed = JSON.parse(name.slice(GLOBAL_TESTERS_CONFIG_PREFIX.length));
+        if (Array.isArray(parsed)) cloudTesters = parsed;
+      } catch {}
+    }
+  }
+  return { cloudTesters, deletedTesterIds: getDeletedTesterIds() };
+};
+
+export const patchDevicesToCloud = (patchesInput: DevicePatch | DevicePatch[]): Promise<DeviceProfile[]> => {
+  const patches = Array.isArray(patchesInput) ? patchesInput : [patchesInput];
+  for (const p of patches) {
+    if (p && p.id && !p.lockOnly) {
+      unmarkDeviceAsDeleted(p.id);
+    }
+  }
+  if (!supabase || !isSupabaseConfigured || patches.length === 0) {
+    return Promise.resolve([]);
+  }
+  const nextOp = deviceConfigWriteChain.then(async () => {
+    const { cloudDevices, deletedDeviceIds } = await readCurrentCloudDevicesAndTombstones();
+    const nextDevices = applyDevicePatches(cloudDevices, patches, deletedDeviceIds);
+    await writeSingletonPopulatedFeatureRow(
+      GLOBAL_DEVICES_CONFIG_PREFIX,
+      `${GLOBAL_DEVICES_CONFIG_PREFIX}${JSON.stringify(nextDevices)}`
+    );
+    return nextDevices;
+  });
+  deviceConfigWriteChain = nextOp.catch(() => {});
+  return nextOp;
+};
+
+export const patchTestersToCloud = (patchesInput: TesterPatch | TesterPatch[]): Promise<TesterProfile[]> => {
+  const patches = Array.isArray(patchesInput) ? patchesInput : [patchesInput];
+  for (const p of patches) {
+    if (p && p.id) {
+      unmarkTesterAsDeleted(p.id);
+    }
+  }
+  if (!supabase || !isSupabaseConfigured || patches.length === 0) {
+    return Promise.resolve([]);
+  }
+  const nextOp = testerConfigWriteChain.then(async () => {
+    const { cloudTesters, deletedTesterIds } = await readCurrentCloudTestersAndTombstones();
+    const nextTesters = applyTesterPatches(cloudTesters, patches, deletedTesterIds);
+    await writeSingletonPopulatedFeatureRow(
+      GLOBAL_TESTERS_CONFIG_PREFIX,
+      `${GLOBAL_TESTERS_CONFIG_PREFIX}${JSON.stringify(nextTesters)}`
+    );
+    return nextTesters;
+  });
+  testerConfigWriteChain = nextOp.catch(() => {});
+  return nextOp;
 };
 
 export const syncDeviceToSupabase = async (device: DeviceProfile) => {
+  if (!device || !device.id) return;
   unmarkDeviceAsDeleted(device.id);
   if (!supabase || !isSupabaseConfigured) return;
   try {
-    await supabase.from('devices').upsert({
+    await patchDevicesToCloud({
       id: device.id,
-      name: device.name,
-      is_ready: device.isReady,
-      quotas: device.quotas,
-      active_run_id: device.activeRunId || null,
-      active_tester_name: device.activeTesterName || null,
+      changes: device,
+      updatedAt: device.updatedAt,
     });
   } catch (err) {
     console.error('syncDeviceToSupabase error:', err);
@@ -761,23 +1401,36 @@ export const syncDeviceToSupabase = async (device: DeviceProfile) => {
 };
 
 export const deleteDeviceFromSupabase = async (deviceId: string) => {
+  if (!deviceId) return;
   markDeviceAsDeleted(deviceId);
   if (!supabase || !isSupabaseConfigured) return;
   try {
-    await supabase.from('devices').delete().eq('id', deviceId);
+    await updateCloudTombstoneSet(GLOBAL_DELETED_DEVICES_PREFIX, [deviceId]);
+    const nextOp = deviceConfigWriteChain.then(async () => {
+      const { cloudDevices, deletedDeviceIds } = await readCurrentCloudDevicesAndTombstones();
+      deletedDeviceIds.add(deviceId);
+      const filtered = cloudDevices.filter(d => d && d.id && !deletedDeviceIds.has(d.id));
+      await writeSingletonPopulatedFeatureRow(
+        GLOBAL_DEVICES_CONFIG_PREFIX,
+        `${GLOBAL_DEVICES_CONFIG_PREFIX}${JSON.stringify(filtered)}`
+      );
+    });
+    deviceConfigWriteChain = nextOp.catch(() => {});
+    await nextOp;
   } catch (err) {
     console.error('deleteDeviceFromSupabase error:', err);
   }
 };
 
 export const syncTesterToSupabase = async (tester: TesterProfile) => {
+  if (!tester || !tester.id) return;
   unmarkTesterAsDeleted(tester.id);
   if (!supabase || !isSupabaseConfigured) return;
   try {
-    await supabase.from('testers').upsert({
+    await patchTestersToCloud({
       id: tester.id,
-      name: tester.name,
-      role: tester.role || '',
+      changes: tester,
+      updatedAt: tester.updatedAt,
     });
   } catch (err) {
     console.error('syncTesterToSupabase error:', err);
@@ -785,10 +1438,22 @@ export const syncTesterToSupabase = async (tester: TesterProfile) => {
 };
 
 export const deleteTesterFromSupabase = async (testerId: string) => {
+  if (!testerId) return;
   markTesterAsDeleted(testerId);
   if (!supabase || !isSupabaseConfigured) return;
   try {
-    await supabase.from('testers').delete().eq('id', testerId);
+    await updateCloudTombstoneSet(GLOBAL_DELETED_TESTERS_PREFIX, [testerId]);
+    const nextOp = testerConfigWriteChain.then(async () => {
+      const { cloudTesters, deletedTesterIds } = await readCurrentCloudTestersAndTombstones();
+      deletedTesterIds.add(testerId);
+      const filtered = cloudTesters.filter(t => t && t.id && !deletedTesterIds.has(t.id));
+      await writeSingletonPopulatedFeatureRow(
+        GLOBAL_TESTERS_CONFIG_PREFIX,
+        `${GLOBAL_TESTERS_CONFIG_PREFIX}${JSON.stringify(filtered)}`
+      );
+    });
+    testerConfigWriteChain = nextOp.catch(() => {});
+    await nextOp;
   } catch (err) {
     console.error('deleteTesterFromSupabase error:', err);
   }
@@ -796,101 +1461,39 @@ export const deleteTesterFromSupabase = async (testerId: string) => {
 
 export const syncDevicesListToCloud = async (devices: DeviceProfile[]) => {
   if (!supabase || !isSupabaseConfigured) return;
-  try {
-    const deletedDeviceIds = getDeletedDeviceIds();
-    // 1. Fetch current cloud devices to safely merge concurrent updates from other testers
-    const { data } = await supabase
-      .from('populated_features')
-      .select('feature_name')
-      .like('feature_name', '__GLOBAL_DEVICES_CONFIG__:%')
-      .limit(1);
-
-    let mergedDevices = devices.filter(d => !deletedDeviceIds.has(d.id));
-    if (data && data[0]?.feature_name) {
-      try {
-        const cloudDevices: DeviceProfile[] = JSON.parse(
-          data[0].feature_name.replace('__GLOBAL_DEVICES_CONFIG__:', '')
-        );
-        const localMap = new Map(mergedDevices.map(d => [d.id, d]));
-        cloudDevices.forEach(cloudDev => {
-          if (!deletedDeviceIds.has(cloudDev.id) && !localMap.has(cloudDev.id)) {
-            mergedDevices.push(cloudDev);
-          }
-        });
-      } catch (e) {}
+  const nextOp = deviceConfigWriteChain.then(async () => {
+    try {
+      const { cloudDevices, deletedDeviceIds } = await readCurrentCloudDevicesAndTombstones();
+      const mergedDevices = mergeDevicesLists(cloudDevices, devices || [], deletedDeviceIds, false);
+      await writeSingletonPopulatedFeatureRow(
+        GLOBAL_DEVICES_CONFIG_PREFIX,
+        `${GLOBAL_DEVICES_CONFIG_PREFIX}${JSON.stringify(mergedDevices)}`
+      );
+    } catch (err) {
+      console.error('syncDevicesListToCloud error:', err);
+      throw err;
     }
-
-    const newFeatureKey = '__GLOBAL_DEVICES_CONFIG__:' + JSON.stringify(mergedDevices);
-    const { data: updatedData, error: updateError } = await supabase
-      .from('populated_features')
-      .update({ feature_name: newFeatureKey })
-      .like('feature_name', '__GLOBAL_DEVICES_CONFIG__%')
-      .select();
-
-    if (updateError) throw updateError;
-
-    if (!updatedData || updatedData.length === 0) {
-      const { error: upsertError } = await supabase.from('populated_features').upsert({
-        feature_name: newFeatureKey
-      });
-      if (upsertError) throw upsertError;
-    } else if (updatedData.length > 1) {
-      for (let i = 1; i < updatedData.length; i++) {
-        await supabase.from('populated_features').delete().eq('feature_name', updatedData[i].feature_name);
-      }
-    }
-  } catch (err) {
-    console.error('syncDevicesListToCloud error:', err);
-    throw err;
-  }
+  });
+  deviceConfigWriteChain = nextOp.catch(() => {});
+  return nextOp;
 };
 
 export const syncTestersListToCloud = async (testers: TesterProfile[]) => {
   if (!supabase || !isSupabaseConfigured) return;
-  try {
-    const deletedTesterIds = getDeletedTesterIds();
-    // 1. Fetch current cloud testers to safely merge concurrent additions
-    const { data } = await supabase
-      .from('populated_features')
-      .select('feature_name')
-      .like('feature_name', '__GLOBAL_TESTERS_CONFIG__:%')
-      .limit(1);
-
-    let mergedTesters = testers.filter(t => !deletedTesterIds.has(t.id));
-    if (data && data[0]?.feature_name) {
-      try {
-        const cloudTesters: TesterProfile[] = JSON.parse(
-          data[0].feature_name.replace('__GLOBAL_TESTERS_CONFIG__:', '')
-        );
-        const localNames = new Set(mergedTesters.map(t => t.name.toLowerCase().trim()));
-        cloudTesters.forEach(cloudT => {
-          if (!deletedTesterIds.has(cloudT.id) && !localNames.has(cloudT.name.toLowerCase().trim())) {
-            mergedTesters.push(cloudT);
-            localNames.add(cloudT.name.toLowerCase().trim());
-          }
-        });
-      } catch (e) {}
+  const nextOp = testerConfigWriteChain.then(async () => {
+    try {
+      const { cloudTesters, deletedTesterIds } = await readCurrentCloudTestersAndTombstones();
+      const mergedTesters = mergeTestersLists(cloudTesters, testers || [], deletedTesterIds, false);
+      await writeSingletonPopulatedFeatureRow(
+        GLOBAL_TESTERS_CONFIG_PREFIX,
+        `${GLOBAL_TESTERS_CONFIG_PREFIX}${JSON.stringify(mergedTesters)}`
+      );
+    } catch (err) {
+      console.error('syncTestersListToCloud error:', err);
     }
-
-    const newFeatureKey = '__GLOBAL_TESTERS_CONFIG__:' + JSON.stringify(mergedTesters);
-    const { data: updatedData } = await supabase
-      .from('populated_features')
-      .update({ feature_name: newFeatureKey })
-      .like('feature_name', '__GLOBAL_TESTERS_CONFIG__%')
-      .select();
-
-    if (!updatedData || updatedData.length === 0) {
-      await supabase.from('populated_features').upsert({
-        feature_name: newFeatureKey
-      });
-    } else if (updatedData.length > 1) {
-      for (let i = 1; i < updatedData.length; i++) {
-        await supabase.from('populated_features').delete().eq('feature_name', updatedData[i].feature_name);
-      }
-    }
-  } catch (err) {
-    console.error('syncTestersListToCloud error:', err);
-  }
+  });
+  testerConfigWriteChain = nextOp.catch(() => {});
+  return nextOp;
 };
 
 export const subscribeToSupabaseRealtime = (onChangeCallback: () => void) => {
